@@ -6,3 +6,7 @@ __pycache__/
 .charge_schedule_state.json
 charge_schedule.log
 charge_schedule.err
+
+# web server config -- contains the API token and session secret
+web.json
+web.log

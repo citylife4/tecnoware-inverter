@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tecnoware Inverter</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9889;</text></svg>">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="bolt">&#9889;</span>
+    <div>
+      <h1>Tecnoware Inverter</h1>
+      <p class="muted small" id="device-line">loading device info&hellip;</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span class="badge" id="mode-badge">&mdash;</span>
+    <span class="conn" id="conn"><i class="dot"></i><span id="conn-text">connecting</span></span>
+    <button class="ghost" id="refresh-btn" title="Force a live read">Refresh</button>
+    <a class="ghost" href="{{ url_for('logout') }}">Sign out</a>
+  </div>
+</header>
+
+<main>
+  <p class="error-banner" id="global-error" hidden></p>
+
+  {% if not allow_writes %}
+  <p class="notice">This server is running <strong>read-only</strong>. Set commands are refused.</p>
+  {% endif %}
+
+  <!-- Live values -->
+  <section aria-labelledby="h-live">
+    <h2 id="h-live">Live status</h2>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <!-- Trends: three single-series small multiples, each with its own scale.
+       Deliberately NOT one dual-axis chart -- volts and watts don't share a scale. -->
+  <section aria-labelledby="h-trend">
+    <h2 id="h-trend">Trend <span class="muted small" id="trend-range"></span></h2>
+    <div class="charts" id="charts">
+      <figure class="chart-card"><figcaption>Battery voltage <span class="unit">V</span><b id="lbl-batt"></b></figcaption><div class="chart" id="chart-batt"></div></figure>
+      <figure class="chart-card"><figcaption>PV charging power <span class="unit">W</span><b id="lbl-pv"></b></figcaption><div class="chart" id="chart-pv"></div></figure>
+      <figure class="chart-card"><figcaption>Output load <span class="unit">W</span><b id="lbl-load"></b></figcaption><div class="chart" id="chart-load"></div></figure>
+    </div>
+    <details class="table-view">
+      <summary>Table view</summary>
+      <div class="scroll-x"><table id="history-table"><thead><tr>
+        <th>Time</th><th>Battery V</th><th>SOC %</th><th>PV W</th><th>Load W</th><th>Grid V</th>
+      </tr></thead><tbody></tbody></table></div>
+    </details>
+  </section>
+
+  {% if allow_writes %}
+  <!-- Controls -->
+  <section aria-labelledby="h-ctl">
+    <h2 id="h-ctl">Controls</h2>
+    <div class="control-grid">
+      <div class="control-card">
+        <h3>Charger source priority <code>PCP</code></h3>
+        <p class="muted small">Where charge current comes from.</p>
+        <div class="btnrow" id="pcp-row">
+          {% for value, label in pcp_values.items() %}
+          <button class="opt" data-kind="charger-priority" data-value="{{ value }}">
+            <span class="code">{{ value }}</span>{{ label }}</button>
+          {% endfor %}
+        </div>
+        <p class="muted small" id="note-charger-priority"></p>
+        <p class="warn small"><strong>03 is solar-only.</strong> With no sun the pack
+          will drain. The server refuses it below the battery safety floor.</p>
+      </div>
+
+      <div class="control-card">
+        <h3>Output source priority <code>POP</code></h3>
+        <p class="muted small">Which source feeds the loads.</p>
+        <div class="btnrow" id="pop-row">
+          {% for value, label in pop_values.items() %}
+          <button class="opt" data-kind="output-priority" data-value="{{ value }}">
+            <span class="code">{{ value }}</span>{{ label }}</button>
+          {% endfor %}
+        </div>
+        <p class="muted small" id="note-output-priority"></p>
+      </div>
+
+      <div class="control-card">
+        <h3>Quick actions</h3>
+        <div class="btnrow">
+          <button class="opt" data-cmd="BZON">Buzzer on</button>
+          <button class="opt" data-cmd="BZOFF">Buzzer off</button>
+          <button class="opt danger" data-cmd="SOFF" data-confirm="1">Output OFF</button>
+          <button class="opt danger" data-cmd="SON" data-confirm="1">Output ON</button>
+        </div>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- Raw console -->
+  <section aria-labelledby="h-console">
+    <h2 id="h-console">Command console</h2>
+    <form class="console" id="console-form" autocomplete="off">
+      <input id="console-input" name="command" placeholder="QPIGS, QMOD, PCP01 &hellip;"
+             spellcheck="false" required>
+      <label class="chk"><input type="checkbox" id="console-confirm"> confirm</label>
+      <button type="submit">Send</button>
+    </form>
+    <p class="muted small">Queries run immediately. Set commands are policy-checked;
+      dangerous ones need <em>confirm</em>. <a href="/api/commands">Full command list &rarr;</a></p>
+    <pre id="console-out" class="console-out" aria-live="polite"></pre>
+  </section>
+
+  <!-- Ratings -->
+  <section aria-labelledby="h-rate">
+    <h2 id="h-rate">Configuration <code>QPIRI</code></h2>
+    <p class="muted small">Static rated values. These <strong>never</strong> reflect a
+      setting change &mdash; confirm writes from live status instead.</p>
+    <details><summary>Show rated configuration</summary>
+      <div class="scroll-x"><table id="ratings-table"><tbody></tbody></table></div>
+    </details>
+  </section>
+
+  <!-- Audit -->
+  <section aria-labelledby="h-audit">
+    <h2 id="h-audit">Write log</h2>
+    <div class="scroll-x"><table id="audit-table"><thead><tr>
+      <th>Time</th><th>Command</th><th>Response</th></tr></thead><tbody></tbody></table></div>
+  </section>
+</main>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "port": "/dev/ttyUSB0",
+  "host": "0.0.0.0",
+  "http_port": 8080,
+  "poll_interval": 10.0,
+  "min_battery_voltage": 24.0,
+  "history_size": 720,
+  "allow_writes": true,
+  "serial_timeout": 3.0,
+  "token": "",
+  "secret_key": ""
+}

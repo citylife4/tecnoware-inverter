@@ -16,11 +16,18 @@ the bundled Windows app does NOT support this inverter" sections.
 
 ## Hardware topology — CHECK THIS, it may have changed
 
-As of the last session, the USB-serial adapter (shows up as
-`/dev/cu.usbserial-XXXX` on macOS, `/dev/ttyUSB0`-ish on Linux) was
-physically plugged into **the Mac**, not either Pi. Neither
-`palacoulo-inverter` nor `palacoulo-rasp` had a `/dev/ttyUSB*` device when
-last checked. Before assuming you can talk to the inverter from a Pi:
+**Changed on 2026-08-23:** the USB-serial adapter now lives on
+**`palacoulo-inverter`** (`valverde@192.168.188.20`, also reachable over
+Tailscale) as `/dev/ttyUSB0` — confirmed by a live `QPIGS`. It is no longer
+on the Mac. `valverde` is already in the `dialout` group there.
+
+That machine is 32-bit armv7 running Python 3.9.2 with Flask 1.1.2 and
+pyserial 3.5b0 from the distro packages — **keep everything Python 3.9
+compatible** (`from __future__ import annotations` in every module; no
+`match`, no `X | Y` at runtime). Claude Code does not run on that host, so
+work on it over SSH from `palacoulo-rasp`.
+
+Before assuming you can talk to the inverter from whichever Pi you're on:
 
 ```bash
 ls /dev/ttyUSB* /dev/serial/by-id/* 2>&1
@@ -34,7 +41,7 @@ or ask the user to move it.
 | Host | Arch | Role |
 |---|---|---|
 | Mac (this session originated here) | — | original dev machine, has the adapter historically |
-| `palacoulo-inverter.platy-cliff.ts.net` (user `valverde`) | **armv7 (32-bit)** | Raspberry Pi, named for this project — Claude Code does NOT run here |
+| `palacoulo-inverter.platy-cliff.ts.net` / `192.168.188.20` (user `valverde`) | **armv7 (32-bit)** | Raspberry Pi, named for this project — **holds the USB adapter and runs the web server**; Claude Code does NOT run here |
 | `palacoulo-rasp.platy-cliff.ts.net` (user `greenv`) | aarch64 (64-bit) | **this machine** — general dev Pi, Claude Code works here |
 
 All three should now have the repo. GitHub is the source of truth:
@@ -86,13 +93,34 @@ in README's capability matrix. Set commands `PE`/`PD`/`PCP`/`POP`/`PBT`/
 `PSDV`/`PBCV`/`PGR` are recognised and DO apply (proven via `PCP03`→`PCP01`
 round-trip changing real charging current, not just via ACK).
 
+## Web interface (added 2026-08-23)
+
+`serve.py` + `webapp/` is a Flask dashboard and REST API over the same
+protocol code. Deployed to `palacoulo-inverter`. Two things to know:
+
+1. **The serial port is exclusive.** While `serve.py` runs it owns
+   `/dev/ttyUSB0`, so `charge_schedule.py` and `inverter_ctl.py` cannot
+   open it. Scheduling is meant to move to cron hitting
+   `/api/charger-priority` instead. Stop the service before using the CLI
+   on that host.
+2. **`QPIRI` does not reflect priority writes either** — verified live on
+   2026-08-23: `PCP02` → `(ACK`, yet `QPIRI` field 17
+   (`charger_source_priority`) still read `1` afterwards, before and after
+   restoring `PCP01`. So gotcha #1 is broader than the battery setpoints:
+   there is **no way to read the current priority back off this unit**. The
+   web UI highlights priority buttons from its own audit log and shows
+   "unknown" otherwise — don't "fix" it to read QPIRI.
+3. **Write policy lives in `webapp/safety.py`**, not in the routes. The
+   `PCP03` low-battery interlock and the "dangerous commands need
+   `confirm: true`" rule are both there, and both are unit-tested in
+   `test_webapp.py` (30 tests, no hardware needed). `mock_inverter.py`
+   fakes the unit on a pty for development away from the hardware.
+
 ## What's not done / open questions
 
 - No scheduler is currently installed/running anywhere (the macOS
-  `launchd` plist exists but per the last session was NOT loaded).
-- Whether `palacoulo-inverter` (32-bit) is meant to be the permanent host
-  for the physical adapter + scheduler, with `palacoulo-rasp` used only
-  for development via SSH, hasn't been decided.
+  `launchd` plist exists but per the last session was NOT loaded). The
+  cron-over-API approach in README is documented but not installed.
 - `QPIRI` field 14 (`max_charging_current`) reads as malformed (`06P`) —
   never resolved, don't trust it.
 - `battery_redischarge_voltage` (field 22, reads `52.0`) doesn't fit either

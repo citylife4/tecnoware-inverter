@@ -236,6 +236,185 @@ launchctl load ~/Library/LaunchAgents/com.tecnoware.chargeschedule.plist
 
 Stop it with `launchctl unload ~/Library/LaunchAgents/com.tecnoware.chargeschedule.plist`.
 
+> **If the web server is running, use the API instead.** `serve.py` holds the
+> serial port exclusively, so `charge_schedule.py` cannot open it at the same
+> time. The same schedule becomes two cron lines hitting
+> `/api/charger-priority` — see [Automating from another
+> machine](#automating-from-another-machine). The low-battery interlock is
+> enforced server-side either way.
+
+## Web interface and REST API
+
+`serve.py` runs a dashboard and a JSON API on top of the same protocol code
+the CLI uses. It is meant to live on whichever machine physically holds the
+USB-serial adapter, so other hosts can read and control the inverter over
+the network.
+
+```bash
+python3 serve.py --config web.json
+#  -> writes web.json on first run and prints the API token
+#  -> http://<host>:8080
+```
+
+Open that URL, paste the token once, and the browser keeps a session cookie.
+Recover the token later with `python3 serve.py --show-token`.
+
+### The port is exclusive — this matters
+
+Only one process can hold `/dev/ttyUSB0`. While `serve.py` is running,
+`charge_schedule.py` and `inverter_ctl.py` **cannot open the port**. Pick one
+of these:
+
+- run the web server and drive scheduling through the API (below), or
+- stop the web server while running the CLI/scheduler.
+
+The server polls in the background (default every 10s) and serves the browser
+from that cached snapshot, so extra tabs and API clients cost nothing on the
+wire. At 2400 baud a `QPIGS` exchange takes roughly half a second, which is
+why per-request reads would queue up.
+
+### What the dashboard shows
+
+- live tiles: battery volts and state of charge, PV power, load, grid, AC out,
+  heatsink temperature, DC bus
+- three trend charts (battery voltage, PV power, load) with a table view
+- controls for charger priority (`PCP`) and output priority (`POP`), buzzer,
+  and output on/off
+- a raw command console, the rated `QPIRI` configuration, and a log of every
+  set command the server has sent
+
+**The inverter never reports its current priority back.** Confirmed live on
+this unit: `PCP02` returns `(ACK`, and `QPIRI`'s `charger_source_priority`
+still reads the old value afterwards — the "static rated values" trap applies
+to the priority code fields too, not just the battery setpoints. The dashboard
+therefore highlights a priority button from **this server's own write log**,
+and says "current setting unknown" when it has not set one since starting.
+Nothing in the UI claims a current setting the hardware did not confirm.
+
+### API
+
+Every endpoint except `/api/health` needs the token, as either header:
+
+```
+X-API-Key: <token>
+Authorization: Bearer <token>
+```
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/health` | liveness; no auth |
+| GET | `/api/status` | latest polled snapshot (`?live=1` forces a fresh read) |
+| GET | `/api/history?limit=N` | recent samples for charting |
+| GET | `/api/device` | model / firmware / serial number |
+| GET | `/api/ratings` | parsed `QPIRI`, with 12V-block setpoints scaled |
+| GET | `/api/commands` | full command catalogue and write policy |
+| GET | `/api/audit` | set commands sent by this process |
+| POST | `/api/command` | send any command |
+| POST | `/api/charger-priority` | set `PCP` |
+| POST | `/api/output-priority` | set `POP` |
+
+Reading:
+
+```bash
+TOKEN=$(python3 serve.py --show-token)
+curl -s -H "X-API-Key: $TOKEN" http://inverter.local:8080/api/status \
+  | python3 -c 'import json,sys; s=json.load(sys.stdin)["status"]; \
+      print(s["battery_voltage"], "V", s["battery_capacity"], "%", s["pv_charging_power"], "W")'
+```
+
+Writing (writes must be `Content-Type: application/json`):
+
+```bash
+curl -s -X POST -H "X-API-Key: $TOKEN" -H "Content-Type: application/json" \
+     -d '{"value":"01"}' http://inverter.local:8080/api/charger-priority
+
+curl -s -X POST -H "X-API-Key: $TOKEN" -H "Content-Type: application/json" \
+     -d '{"command":"QPIGS"}' http://inverter.local:8080/api/command
+```
+
+Every response carries `"ok": true|false`; failures add a machine-readable
+`code` and usually a `hint`.
+
+### Write policy
+
+The CLI protects you with a `y/N` prompt. An API has no prompt, so the same
+protection is expressed as policy in [`webapp/safety.py`](webapp/safety.py):
+
+- **Queries** pass straight through.
+- **Routine set commands** (`PCP`, `POP`, `PBCV`, `PGR`, buzzer, charge
+  currents) go through on a plain authenticated request.
+- **Dangerous ones** (`REEP`, `EPO`, `SOFF`/`SON`, `F50`/`F60`, `CLR`, `PF`,
+  `ID`, `SNRM`) are refused with `409 confirmation_required` unless the body
+  carries `"confirm": true`. So does any set command whose effect on this
+  model was only inferred from the decompiled table rather than verified.
+- **`PCP03` (solar-only) is refused below `min_battery_voltage`** — the same
+  interlock `charge_schedule.py` has, for the same reason: solar-only with no
+  sun drained this pack from 100% to 80% once already. If the battery voltage
+  cannot be read at all, the command is refused rather than allowed.
+- `--read-only` refuses every set command regardless of config.
+
+Codes you can branch on: `unauthorized`, `read_only`, `unknown_command`,
+`confirmation_required`, `battery_too_low`, `battery_unknown`,
+`invalid_value`, `bad_content_type`, `nak`, `io_error`.
+
+### Automating from another machine
+
+This replaces running `charge_schedule.py` beside the server. A cron entry on
+any host on the network:
+
+```bash
+# 07:00 — allow utility charging overnight rules to end
+0 7 * * * curl -fsS -X POST -H "X-API-Key: $TOKEN" -H "Content-Type: application/json" \
+    -d '{"value":"01"}' http://inverter.local:8080/api/charger-priority
+
+# 09:00 — solar-only during the day (server refuses it if the pack is low)
+0 9 * * * curl -fsS -X POST -H "X-API-Key: $TOKEN" -H "Content-Type: application/json" \
+    -d '{"value":"03"}' http://inverter.local:8080/api/charger-priority
+```
+
+Because the low-battery interlock lives in the server, the cron job stays a
+one-liner and still cannot flatten the battery.
+
+### Running it as a service
+
+`inverter-web.service` is a systemd unit for the Pi that holds the adapter:
+
+```bash
+sudo cp inverter-web.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now inverter-web
+journalctl -u inverter-web -f
+```
+
+The service user must be in the `dialout` group for serial access.
+
+### Security
+
+The token is a bearer credential and `web.json` is written `0600` and
+gitignored. Traffic is plain HTTP, so keep this on a trusted LAN or behind a
+VPN (Tailscale) rather than port-forwarding it to the internet. Session
+cookies are `SameSite=Lax` and writes require a JSON content type, so a
+cross-origin page cannot forge one against a logged-in browser.
+
+### Developing without the hardware
+
+`mock_inverter.py` puts a fake PI30 inverter on a pseudo-terminal, imitating
+this unit's quirks deliberately: no CRC on query replies but a CRC on `(ACK`,
+silence for unsupported commands, the `QPI` prefix-matching false positives,
+a `QPIRI` that never reflects a write, and (with `--glitch`) the occasional
+truncated `QPIGS` frame.
+
+```bash
+python3 mock_inverter.py            # prints e.g. /dev/pts/7
+python3 serve.py --port /dev/pts/7 --http-port 8080
+```
+
+Tests need no hardware at all:
+
+```bash
+python3 -m unittest test_webapp -v
+```
+
 ## Safety
 
 `SET_COMMANDS` in `commands.py` (things like `SON`/`SOFF`, `POP`, `PCP`,
@@ -253,3 +432,10 @@ commands with real caution before using them on a live system.
 - `commands.py` — full command table (extracted from `Command.class`)
 - `parsers.py` — named field layouts for `QPIGS`/`QPIRI` (public PI30 protocol)
 - `inverter_ctl.py` — the CLI
+- `charge_schedule.py` — time-of-day charger-priority scheduler
+- `serve.py` — web interface + REST API entry point
+- `webapp/service.py` — thread-safe serial owner and background poller
+- `webapp/safety.py` — write policy (what needs confirming, what is refused)
+- `webapp/app.py` — Flask routes, auth, JSON API
+- `mock_inverter.py` — fake inverter on a pty, for development without hardware
+- `test_webapp.py` — tests for the API, parsers, and write policy

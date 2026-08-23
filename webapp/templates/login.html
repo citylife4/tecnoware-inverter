@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inverter — sign in</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9889;</text></svg>">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-body">
+  <form class="login-card" method="post">
+    <h1>&#9889; Inverter</h1>
+    <p class="muted">Enter the API token to continue.</p>
+    {% if error %}<p class="error-banner">{{ error }}</p>{% endif %}
+    <input type="password" name="token" placeholder="API token" autofocus
+           autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+    <p class="muted small">The token is in <code>web.json</code>, or run
+      <code>python3 serve.py --show-token</code>.</p>
+  </form>
+</body>
+</html>

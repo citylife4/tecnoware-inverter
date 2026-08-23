@@ -1,0 +1,21 @@
+[Unit]
+Description=Tecnoware inverter web interface and API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=valverde
+# Serial access needs the dialout group; check with `groups valverde`.
+WorkingDirectory=/home/valverde/tecnoware-inverter
+ExecStart=/usr/bin/python3 /home/valverde/tecnoware-inverter/serve.py --config /home/valverde/tecnoware-inverter/web.json
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# The serial port is exclusive: nothing else may hold /dev/ttyUSB0 while
+# this runs. Drive scheduling through the HTTP API instead.
+
+[Install]
+WantedBy=multi-user.target
