@@ -48,6 +48,13 @@ def create_app(service, scheduler=None, grid_charge=None, *,
         SESSION_COOKIE_HTTPONLY=True,
         JSON_SORT_KEYS=False,
         MAX_CONTENT_LENGTH=64 * 1024,
+        # Flask's default is a 12-hour Cache-Control on static files. On a
+        # small single-instance dashboard like this, that means every UI
+        # deploy is invisible to an already-open browser tab for up to half
+        # a day -- hit in practice while iterating on the grid-charge panel.
+        # 0 keeps ETag/Last-Modified (still cheap, 304s on repeat loads)
+        # but forces revalidation every time instead of trusting a stale copy.
+        SEND_FILE_MAX_AGE_DEFAULT=0,
     )
     app.service = service
     app.scheduler = scheduler
