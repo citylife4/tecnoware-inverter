@@ -77,6 +77,32 @@ OUTPUT_PRIORITY_VALUES = {
 SOLAR_ONLY_PCP = "03"
 
 
+def apply_low_battery_floor(service, target: str):
+    """If `target` is the solar-only PCP and the battery is at/under
+    `service.min_battery_voltage` (or unreadable), force utility-fallback
+    ("01") instead and return why. Returns (effective_target, reason_or_None).
+
+    Shared by webapp/scheduler.py and webapp/grid_charge.py so every
+    automation that can land on PCP03 enforces the identical interlock a
+    manual write gets from check_policy() below -- solar-only with no
+    charging source drains the pack, and it already happened once on this
+    hardware (see CLAUDE.md gotcha #2).
+    """
+    if target != SOLAR_ONLY_PCP:
+        return target, None
+    floor = service.min_battery_voltage
+    if floor is None:
+        return target, None
+    v = service.battery_voltage()
+    if v is None:
+        return "01", ("OVERRIDE: battery voltage could not be read -- "
+                      "forcing utility charging rather than risk solar-only")
+    if v < floor:
+        return "01", (f"OVERRIDE: battery {v:.2f}V below {floor:.2f}V floor "
+                      f"-- forcing utility charging")
+    return target, None
+
+
 class CommandRejected(Exception):
     """Raised when policy refuses to send a command to the inverter."""
 

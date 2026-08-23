@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from webapp.app import create_app, generate_token          # noqa: E402
 from webapp.atomic_write import write_json_atomic          # noqa: E402
+from webapp.grid_charge import GridChargeController         # noqa: E402
 from webapp.scheduler import Scheduler                     # noqa: E402
 from webapp.service import InverterService                 # noqa: E402
 
@@ -45,6 +46,9 @@ DEFAULTS = {
     # as a separate process -- it can't open the port while this does).
     "schedule_config": "web_schedule.json",
     "schedule_poll_interval": 60.0,
+    # Grid-export-following charge control (see webapp/grid_charge.py).
+    # Mutually exclusive with the scheduler above -- app.py enforces that.
+    "gridcharge_config": "web_gridcharge.json",
 }
 
 
@@ -135,11 +139,15 @@ def main() -> int:
                           poll_interval=float(cfg["schedule_poll_interval"]))
     scheduler.start()
 
-    app = create_app(service, scheduler, token=cfg["token"],
+    grid_charge = GridChargeController(service, path=cfg["gridcharge_config"])
+    grid_charge.start()
+
+    app = create_app(service, scheduler, grid_charge, token=cfg["token"],
                      secret_key=cfg["secret_key"])
 
     def _shutdown(signum, frame):
         scheduler.stop()
+        grid_charge.stop()
         service.stop()
         sys.exit(0)
 
@@ -155,6 +163,7 @@ def main() -> int:
                 threaded=True, use_reloader=False)
     finally:
         scheduler.stop()
+        grid_charge.stop()
         service.stop()
     return 0
 

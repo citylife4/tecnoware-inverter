@@ -224,6 +224,7 @@ async function tick() {
   }
   loadAudit();
   loadSchedule();
+  loadGridCharge();
 }
 
 async function loadAudit() {
@@ -445,7 +446,10 @@ async function saveSchedule(enabled, rules) {
     method: "PUT", body: JSON.stringify({ enabled, rules }),
   });
   if (d.ok) { scheduleState = d; renderSchedule(d); }
-  else logConsole(`schedule save failed: ${d.error}`, "err");
+  else {
+    logConsole(`schedule save failed: ${d.error}`, "err");
+    renderSchedule(scheduleState);   // revert the enabled checkbox etc. to the last-saved state
+  }
   return d;
 }
 
@@ -486,6 +490,104 @@ function wireSchedule() {
   });
 }
 
+/* ---------- grid-export charging ----------
+   Mirrors the schedule panel's shape (see webapp/grid_charge.py), but the
+   trigger is the auto-energy dashboard's grid-meter reading instead of a
+   time window. Config has many fields, so unlike the schedule table
+   (which auto-saves every edit) this uses an explicit "Save settings"
+   button -- only the enabled toggle and "Apply now" act immediately. */
+
+let gridChargeState = null;
+
+const GC_FIELDS = [
+  ["gc-source-url", "source_url", "str"],
+  ["gc-poll-interval", "poll_interval", "num"],
+  ["gc-export-threshold", "export_threshold_w", "num"],
+  ["gc-import-threshold", "import_threshold_w", "num"],
+  ["gc-min-switch", "min_switch_interval", "num"],
+  ["gc-stale-after", "stale_after", "num"],
+  ["gc-charge-pcp", "charge_pcp", "str"],
+  ["gc-idle-pcp", "idle_pcp", "str"],
+];
+
+function renderGridCharge(state) {
+  if (!document.querySelector("#gc-enabled")) return;   // section not rendered
+  $("#gc-enabled").checked = state.enabled;
+  $("#gc-status").textContent = state.enabled ? "enabled" : "disabled";
+  $("#gc-status").className = `badge ${state.enabled ? "" : "muted"}`;
+  if (!state.allow_writes) $("#gc-status").textContent += " (server read-only — not applied)";
+
+  GC_FIELDS.forEach(([id, key]) => {
+    const el = document.querySelector(`#${id}`);
+    if (el && document.activeElement !== el) el.value = state[key];
+  });
+
+  const c = state.current || {};
+  let cur = c.net_balance_w === null || c.net_balance_w === undefined
+    ? `<span class="muted">No reading yet.</span>`
+    : `<span class="muted">Grid:</span> ${c.net_balance_w > 0 ? "importing" : "exporting"} `
+      + `${Math.abs(c.net_balance_w).toFixed(0)} W`
+      + (c.age_s !== null ? ` <span class="muted">(${c.age_s.toFixed(0)}s ago)</span>` : "");
+  if (state.last_run) {
+    const t = new Date(state.last_run.at).toLocaleTimeString();
+    const cls = state.last_run.applied ? "ok" : (state.last_run.note.startsWith("error") ? "err" : "");
+    cur += `<br><span class="muted">Last check ${t}:</span> <span class="${cls}">${state.last_run.note}</span>`;
+    if (state.last_run.why) cur += `<br><span class="warn small">${state.last_run.why}</span>`;
+  }
+  $("#gc-current").innerHTML = cur;
+}
+
+async function loadGridCharge() {
+  const d = await api("/api/grid-charge");
+  if (!d.ok) return;
+  gridChargeState = d;
+  renderGridCharge(d);
+}
+
+function readGridChargeForm() {
+  const out = { enabled: gridChargeState.enabled };
+  GC_FIELDS.forEach(([id, key, type]) => {
+    const el = document.querySelector(`#${id}`);
+    out[key] = type === "num" ? Number(el.value) : el.value;
+  });
+  return out;
+}
+
+async function saveGridCharge(overrides) {
+  const body = { ...readGridChargeForm(), ...overrides };
+  const d = await api("/api/grid-charge", { method: "PUT", body: JSON.stringify(body) });
+  if (d.ok) { gridChargeState = d; renderGridCharge(d); }
+  else {
+    logConsole(`grid-charge save failed: ${d.error}`, "err");
+    renderGridCharge(gridChargeState);
+  }
+  return d;
+}
+
+function wireGridCharge() {
+  const enabledBox = $("#gc-enabled");
+  if (!enabledBox) return;   // grid_charge_available was false
+
+  enabledBox.addEventListener("change", () => {
+    saveGridCharge({ enabled: enabledBox.checked });
+  });
+
+  $("#gc-save").addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try { await saveGridCharge({}); }
+    finally { e.target.disabled = false; }
+  });
+
+  $("#gc-apply-now").addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      const d = await api("/api/grid-charge/apply-now", { method: "POST", body: JSON.stringify({ force: true }) });
+      if (d.ok) logConsole(`grid-charge apply-now: ${d.result.note}`, d.result.applied ? "ok" : "err");
+      await loadGridCharge();
+    } finally { e.target.disabled = false; }
+  });
+}
+
 /* ---------- boot ---------- */
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -511,6 +613,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   wireControls();
   wireSchedule();
+  wireGridCharge();
   await tick();
   loadDevice();
   loadRatings();

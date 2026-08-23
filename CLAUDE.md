@@ -120,19 +120,68 @@ protocol code. Deployed to `palacoulo-inverter`. Two things to know:
    fakes the unit on a pty for development away from the hardware.
 4. **`web.json` was found zero-length after an unclean reboot** (a plain
    open/write/close isn't durable) — fixed via `webapp/atomic_write.py`
-   (temp file + fsync + rename + fsync dir), shared by `web.json` and
-   `web_schedule.json`. If you ever add another on-disk config/state file
-   to this project, write it through that helper, not a bare `open(...,
-   "w")` — this bit us for real, not hypothetically.
+   (temp file + fsync + rename + fsync dir), shared by `web.json`,
+   `web_schedule.json`, and `web_gridcharge.json`. If you ever add another
+   on-disk config/state file to this project, write it through that
+   helper, not a bare `open(..., "w")` — this bit us for real, not
+   hypothetically.
+5. **The inverter's own PV/DC input is unconnected** — confirmed by every
+   `QPIGS` sample taken across this whole project, at any time of day,
+   reading `pv_input_voltage: 0.0V` / `pv_charging_power: 0W`, cross-checked
+   against `auto-energy` (a separate project on this network, see below)
+   showing real nonzero solar production at the same moments. The panels
+   are on a separate AC-coupled system feeding the house wiring directly —
+   this inverter only ever sees "utility." **This means the time-of-day
+   scheduler's original "daytime = PCP03 solar-only" assumption
+   (inherited from `charge_schedule.py`'s pre-existing example config) does
+   not track reality on this hardware** — PCP03 during daylight just stops
+   charging on a timer, unrelated to whether the sun is out. Don't "fix"
+   this by changing the scheduler; the correct tool is the grid-export
+   automation added to address it directly, below.
+6. **Grid-export-following charge control** (added 2026-08-23,
+   `webapp/grid_charge.py`) — enables charging only while the house is
+   exporting surplus solar, using `auto-energy`'s grid-meter reading
+   (`net_balance` from its `/api/live`, at `http://192.168.188.11:8000` in
+   this deployment) instead of a clock. Same low-battery floor as the
+   scheduler, via a helper (`apply_low_battery_floor`) now shared by both
+   in `webapp/safety.py` — don't duplicate that logic if you touch either
+   automation. **Mutually exclusive with the time-of-day scheduler** by
+   explicit design choice (the user picked "export-following only,
+   replace the time rules" when asked) — `webapp/app.py` refuses to enable
+   one via the API while the other is enabled (`409
+   conflicting_automation`), rather than silently disabling the other.
+   Config is `web_gridcharge.json` (gitignored, atomic-written).
+
+## Related project on this network: `auto-energy`
+
+`~/dev/auto-energy` on `palacoulo-rasp` (this machine) — a Flask dashboard
++ Docker container (`ecopi-dashboard`, port 8000) that reads two Shelly
+energy meters (`SHELLY_SOLAR_IP=192.168.188.25` on the panels,
+`SHELLY_GRID_IP=192.168.188.5` on the house's grid connection) and logs
+telemetry to a database. `/api/live` is what `webapp/grid_charge.py` polls;
+its `latest.net_balance` field is **positive = importing/buying, negative =
+exporting/selling** (see `src/shelly_service.py` and `src/routes.py`
+`/weather` handler for where that sign convention comes from — it's the
+Shelly EM's raw reading, not derived). Direct Shelly HTTP access
+(`http://192.168.188.5/status`) did **not** work when tried from either Pi
+during this session (empty response) — the dashboard's own `/api/live` was
+the only integration point that worked, which is why `grid_charge.py` goes
+through it rather than querying the meter directly.
 
 ## What's not done / open questions
 
 - The macOS `launchd` plist for the old standalone `charge_schedule.py`
   still exists but was never loaded — moot now that scheduling lives in
   the web server; probably delete it next time this is touched.
-- No schedule rules are currently configured/enabled on the deployed
-  server — the feature works (unit- and live-tested) but nobody has told
-  it what times/PCP values to actually use yet.
+- Neither automation (time-of-day scheduler nor grid-export charging) is
+  currently enabled on the deployed server — both work (unit- and
+  live-tested against the real inverter) but nobody has turned one on for
+  real use yet. Per the user's explicit choice, grid-export is the
+  intended one; the scheduler is available but not the recommended path.
+- Grid-export charging's `source_url` defaults to
+  `http://192.168.188.11:8000/api/live` (this machine, `palacoulo-rasp`) —
+  if `auto-energy` ever moves hosts, that default (and the deployed
+  `web_gridcharge.json` if already configured) needs updating.
 - `QPIRI` field 14 (`max_charging_current`) reads as malformed (`06P`) —
   never resolved, don't trust it.
 - `battery_redischarge_voltage` (field 22, reads `52.0`) doesn't fit either

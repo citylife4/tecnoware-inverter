@@ -141,6 +141,67 @@
       <p class="muted small">The inverter cannot report its current priority back
         (verified on hardware &mdash; see README), so "current" below reflects what
         this server has applied, not a reading from the device.</p>
+      {% if grid_charge_available %}
+      <p class="muted small" id="sched-conflict-note">Mutually exclusive with
+        grid-export charging below &mdash; only one may be enabled at a time.</p>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if grid_charge_available %}
+  <!-- Grid-export charging -->
+  <section aria-labelledby="h-gridcharge">
+    <h2 id="h-gridcharge">Grid-export charging</h2>
+    <p class="muted small">Enables charging only while the house is exporting surplus
+      solar to the grid (via the <code>auto-energy</code> dashboard's grid meter),
+      instead of assuming a time window means the sun is out &mdash; this inverter's
+      own PV input reads 0V, so it has no other way to know.
+      {% if scheduler_available %}Mutually exclusive with the schedule above.{% endif %}</p>
+    <div class="control-card">
+      <div class="sched-toolbar">
+        <label class="chk"><input type="checkbox" id="gc-enabled"> Enabled</label>
+        <span class="badge" id="gc-status">&mdash;</span>
+      </div>
+      <p class="small" id="gc-current"></p>
+
+      <div class="control-grid">
+        <label class="field">Source URL
+          <input type="text" id="gc-source-url" spellcheck="false"></label>
+        <label class="field">Poll every (s)
+          <input type="number" id="gc-poll-interval" min="5" step="1"></label>
+        <label class="field">Start charging below (W, negative = exporting)
+          <input type="number" id="gc-export-threshold" step="1"></label>
+        <label class="field">Stop charging above (W)
+          <input type="number" id="gc-import-threshold" step="1"></label>
+        <label class="field">Min. seconds between switches
+          <input type="number" id="gc-min-switch" min="0" step="1"></label>
+        <label class="field">Treat as stale after (s)
+          <input type="number" id="gc-stale-after" min="0" step="1"></label>
+        <label class="field">PCP while exporting
+          <select id="gc-charge-pcp">
+            {% for value, label in pcp_values.items() %}
+            <option value="{{ value }}">{{ value }} &mdash; {{ label }}</option>
+            {% endfor %}
+          </select></label>
+        <label class="field">PCP otherwise
+          <select id="gc-idle-pcp">
+            {% for value, label in pcp_values.items() %}
+            <option value="{{ value }}">{{ value }} &mdash; {{ label }}</option>
+            {% endfor %}
+          </select></label>
+      </div>
+
+      <div class="btnrow sched-actions">
+        <button id="gc-save">Save settings</button>
+        <button class="ghost" id="gc-apply-now">Apply now</button>
+      </div>
+      <p class="warn small">The "otherwise" PCP is downgraded to <code>01</code>
+        automatically if the battery is below the safety floor &mdash; same
+        interlock as the schedule above, applied regardless of grid export state.</p>
+      <p class="muted small">If the dashboard can't be reached, or its last reading
+        is older than "treat as stale after", this assumes <strong>not exporting</strong>
+        and stops charging rather than guessing.</p>
     </div>
   </section>
   {% endif %}

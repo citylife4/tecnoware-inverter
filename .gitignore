@@ -14,3 +14,7 @@ web.log
 # built-in scheduler's rule storage -- instance-specific runtime config
 web_schedule.json
 web_schedule.json.tmp
+
+# grid-export charge controller's config -- instance-specific runtime config
+web_gridcharge.json
+web_gridcharge.json.tmp

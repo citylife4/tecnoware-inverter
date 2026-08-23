@@ -2,3 +2,4 @@ pyserial>=3.5
 # Web interface + REST API (serve.py). Flask 1.1+ is enough -- the Raspberry
 # Pi OS package (python3-flask) works, no pip install needed there.
 Flask>=1.1
+requests>=2.25

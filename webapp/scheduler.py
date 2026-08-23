@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from charge_schedule import VALID_PCP, parse_hhmm, pick_rule  # noqa: F401  (re-exported)
 from transport import InverterError
 from webapp.atomic_write import write_json_atomic
+from webapp.safety import apply_low_battery_floor
 
 DEFAULT_STATE = {"enabled": False, "rules": []}
 
@@ -145,21 +146,8 @@ class Scheduler:
         rule = pick_rule(self._state["rules"], now.time())
         if rule is None:
             return None, None, None, None
-        target = rule["pcp"]
         why = rule.get("why", "")
-        override = None
-        if target == "03":
-            floor = self.service.min_battery_voltage
-            if floor is not None:
-                v = self.service.battery_voltage()
-                if v is None:
-                    target = "01"
-                    override = ("OVERRIDE: battery voltage could not be read -- "
-                               "forcing utility charging rather than risk solar-only")
-                elif v < floor:
-                    target = "01"
-                    override = (f"OVERRIDE: battery {v:.2f}V below {floor:.2f}V floor "
-                                f"-- forcing utility charging")
+        target, override = apply_low_battery_floor(self.service, rule["pcp"])
         return rule, target, why, override
 
     def tick(self, force: bool = False, now=None) -> dict:

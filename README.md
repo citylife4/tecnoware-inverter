@@ -236,12 +236,13 @@ launchctl load ~/Library/LaunchAgents/com.tecnoware.chargeschedule.plist
 
 Stop it with `launchctl unload ~/Library/LaunchAgents/com.tecnoware.chargeschedule.plist`.
 
-> **If the web server is running, use the API instead.** `serve.py` holds the
-> serial port exclusively, so `charge_schedule.py` cannot open it at the same
-> time. The same schedule becomes two cron lines hitting
-> `/api/charger-priority` — see [Automating from another
-> machine](#automating-from-another-machine). The low-battery interlock is
-> enforced server-side either way.
+> **If the web server is running, use its built-in automation instead.**
+> `serve.py` holds the serial port exclusively, so `charge_schedule.py`
+> cannot open it at the same time. See [Built-in
+> schedule](#built-in-schedule-recommended-over-external-cron) — and, for
+> why the time-of-day approach doesn't actually track solar production on
+> this hardware, [Grid-export charging](#grid-export-charging). The
+> low-battery interlock is enforced server-side either way.
 
 ## Web interface and REST API
 
@@ -406,23 +407,94 @@ below for why that matters on this hardware.
 preview of what would apply right now even if the scheduler is disabled or
 you're mid-edit -- useful for checking a new rule before turning it on.
 
-### Automating from another machine (external cron, if you'd rather)
+**Superseded by grid-export charging below for the original "solar hours"
+use case.** This time-of-day scheduler predates a discovery made while
+building the next feature: this inverter's own PV input reads 0V in every
+sample taken so far, including at midday with real solar production showing
+elsewhere -- see [Grid-export charging](#grid-export-charging). A `pcp: "03"`
+rule during "daytime" doesn't select a solar source on this hardware, it
+just stops charging outright, on a timer that has nothing to do with
+whether the sun is actually out. The scheduler still works exactly as
+documented above and is unit-tested; it's kept for other uses (e.g. a fixed
+off-peak-tariff charging window) and because deleting a working, tested
+feature to fix a documentation-level assumption felt like the wrong trade.
+The two automations are **mutually exclusive** -- enabling one while the
+other is enabled is refused with `409 conflicting_automation`.
 
-Only needed if you don't want the built-in scheduler above running inside
-the server. A cron entry on any host on the network:
+Driving it from external cron instead of the built-in thread above still
+works (`PUT /api/schedule` or plain `POST /api/charger-priority` calls), but
+isn't documented further here -- the built-in scheduler does the same job
+without a second process to keep running, and the low-battery interlock
+lives in the server either way.
+
+### Grid-export charging
+
+*(see [`webapp/grid_charge.py`](webapp/grid_charge.py) for the full
+rationale, restated briefly here.)*
+
+This Tecnoware unit's own DC/PV input is unconnected -- confirmed by every
+`QPIGS` sample taken this session reading `pv_input_voltage: 0.0V`,
+`pv_charging_power: 0W`, including at midday while a separate energy
+monitor on the same network (`auto-energy`, a different project on this Pi)
+showed real solar production. The actual panels are on a separate,
+AC-coupled system feeding the house wiring directly; from this inverter's
+point of view there is no "solar" input, only "utility" -- which is really
+the same shared AC bus the panels are already feeding.
+
+Given that, "charge only during daylight hours" (the time-of-day
+scheduler's original assumption) doesn't track reality. What does: whether
+the house is currently *exporting* surplus solar to the grid. `auto-energy`
+already computes that from a Shelly EM on the grid connection
+(`net_balance` in its `/api/live` response -- positive means buying,
+negative means selling). This feature polls that endpoint and enables
+charging only while there's a surplus being exported anyway, so the battery
+soaks up power that would otherwise be sold at the (usually much lower)
+feed-in tariff, and never causes the inverter to draw *additional* grid
+power beyond what was already flowing out.
 
 ```bash
-# 07:00 — allow utility charging overnight rules to end
-0 7 * * * curl -fsS -X POST -H "X-API-Key: $TOKEN" -H "Content-Type: application/json" \
-    -d '{"value":"01"}' http://inverter.local:8080/api/charger-priority
-
-# 09:00 — solar-only during the day (server refuses it if the pack is low)
-0 9 * * * curl -fsS -X POST -H "X-API-Key: $TOKEN" -H "Content-Type: application/json" \
-    -d '{"value":"03"}' http://inverter.local:8080/api/charger-priority
+curl -X PUT -H "X-API-Key: $TOKEN" -H "Content-Type: application/json" -d '{
+      "enabled": true,
+      "source_url": "http://<host-running-auto-energy>:8000/api/live",
+      "export_threshold_w": -50,
+      "import_threshold_w": 20,
+      "charge_pcp": "01",
+      "idle_pcp": "03"
+    }' http://inverter.local:8080/api/grid-charge
 ```
 
-Because the low-battery interlock lives in the server, the cron job stays a
-one-liner and still cannot flatten the battery.
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/grid-charge` | current config, live reading, last-run result |
+| PUT | `/api/grid-charge` | replace the whole config (same store-vs-apply split as `/api/schedule`) |
+| POST | `/api/grid-charge/apply-now` | force an immediate poll + decision, bypassing the anti-flap timer |
+
+Behaviour, all configurable, defaults shown:
+
+- **Hysteresis, not a single threshold.** Charging starts once `net_balance`
+  drops below `export_threshold_w` (default -50W) and stops once it rises
+  above `import_threshold_w` (default +20W); inside that band the previous
+  state holds. Without a gap between the two, ordinary load noise (a fridge
+  cycling) would flip the state constantly.
+- **Anti-flap timer** (`min_switch_interval`, default 120s): even past the
+  hysteresis band, won't switch again this soon after the last switch --
+  PCP writes take up to ~10s on this hardware, so there's no reason to spam
+  them. The low-battery safety override below is the one thing allowed to
+  bypass this.
+- **Fails to "not exporting," never fails open.** If the `auto-energy`
+  dashboard can't be reached, or its last reading is older than
+  `stale_after` (default 120s), this assumes the house is *not* exporting
+  and stops charging -- it never guesses "probably fine, keep charging"
+  from missing data.
+- **Same low-battery floor as the scheduler**, via the same code
+  (`apply_low_battery_floor` in `webapp/safety.py`): `idle_pcp` (default
+  `03`) is upgraded to `01` if the battery is at/under
+  `min_battery_voltage`, including when it can't be read at all -- this
+  interlock is what the anti-flap timer is allowed to skip.
+- **Mutually exclusive with the time-of-day schedule** -- both drive PCP;
+  running both would have them fight. Enabling either while the other is
+  on is refused (`409 conflicting_automation`); disabling one is never
+  blocked by the other being on.
 
 ### Running it as a service
 
@@ -447,8 +519,9 @@ cross-origin page cannot forge one against a logged-in browser.
 
 ### Config durability
 
-`web.json` (the token) and `web_schedule.json` (schedule rules) are both
-written through `webapp/atomic_write.py`: temp file, `fsync`, rename, then
+`web.json` (the token), `web_schedule.json` (schedule rules), and
+`web_gridcharge.json` (grid-export config) are all written through
+`webapp/atomic_write.py`: temp file, `fsync`, rename, then
 `fsync` the directory. This isn't defensive boilerplate -- it's a fix for an
 incident hit while building this. `palacoulo-inverter` rebooted uncleanly
 mid-session and a plain open/write/close had left `web.json` zero-length,
@@ -497,9 +570,10 @@ commands with real caution before using them on a live system.
 - `charge_schedule.py` — time-of-day charger-priority scheduler
 - `serve.py` — web interface + REST API entry point
 - `webapp/service.py` — thread-safe serial owner and background poller
-- `webapp/safety.py` — write policy (what needs confirming, what is refused)
+- `webapp/safety.py` — write policy (what needs confirming, what is refused) and the shared low-battery floor both automations use
 - `webapp/scheduler.py` — built-in time-of-day PCP scheduler (runs inside the server)
-- `webapp/atomic_write.py` — crash-safe JSON writes, shared by `web.json` and the schedule
+- `webapp/grid_charge.py` — built-in grid-export-following PCP control (runs inside the server)
+- `webapp/atomic_write.py` — crash-safe JSON writes, shared by `web.json` and both automations' config
 - `webapp/app.py` — Flask routes, auth, JSON API
 - `mock_inverter.py` — fake inverter on a pty, for development without hardware
-- `test_webapp.py` — tests for the API, parsers, scheduler, and write policy
+- `test_webapp.py` — tests for the API, parsers, both automations, and write policy

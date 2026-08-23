@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 import serve
 from webapp import safety
 from webapp.app import create_app
+from webapp.grid_charge import GridChargeController, validate_config
 from webapp.safety import CommandRejected
 from webapp.scheduler import Scheduler, validate_rules
 from webapp.service import parse_qpigs, parse_qpiri
@@ -85,10 +86,29 @@ class FakeService:
         return parse_qpigs(SAMPLE_QPIGS)
 
 
-def client_for(service, scheduler=None):
-    app = create_app(service, scheduler, token=TOKEN, secret_key="unit-test-secret")
+def client_for(service, scheduler=None, grid_charge=None):
+    app = create_app(service, scheduler, grid_charge, token=TOKEN,
+                     secret_key="unit-test-secret")
     app.config["TESTING"] = True
     return app.test_client()
+
+
+class FetchStub:
+    """Stands in for GridChargeController's real HTTP poll of the
+    auto-energy dashboard. `net_balance = None` simulates the dashboard
+    being unreachable; mutate `.net_balance` between ticks to simulate the
+    reading changing over time without needing a real server or sleeps."""
+
+    def __init__(self, net_balance=None, timestamp="2026-01-01 00:00:00"):
+        self.net_balance = net_balance
+        self.timestamp = timestamp
+        self.calls = 0
+
+    def __call__(self):
+        self.calls += 1
+        if self.net_balance is None:
+            return None, None
+        return self.net_balance, self.timestamp
 
 
 def window_around_now(pad_minutes=3):
@@ -489,6 +509,234 @@ class TestScheduleApi(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.get_json()["enabled"])   # stored
         self.assertEqual(service.sent, [])          # not applied
+
+
+class TestGridChargeValidation(unittest.TestCase):
+    def test_defaults_are_valid(self):
+        cfg = validate_config({})
+        self.assertFalse(cfg["enabled"])
+        self.assertEqual(cfg["charge_pcp"], "01")
+
+    def test_rejects_non_dict(self):
+        with self.assertRaises(ValueError):
+            validate_config([1, 2, 3])
+
+    def test_rejects_unknown_key(self):
+        with self.assertRaises(ValueError):
+            validate_config({"totally_made_up": 1})
+
+    def test_rejects_non_http_url(self):
+        with self.assertRaises(ValueError):
+            validate_config({"source_url": "ftp://example/live"})
+
+    def test_rejects_inverted_thresholds(self):
+        with self.assertRaises(ValueError):
+            validate_config({"export_threshold_w": 10, "import_threshold_w": -10})
+
+    def test_rejects_bad_pcp(self):
+        with self.assertRaises(ValueError):
+            validate_config({"charge_pcp": "07"})
+
+    def test_rejects_too_fast_polling(self):
+        with self.assertRaises(ValueError):
+            validate_config({"poll_interval": 1})
+
+
+class TestGridChargeController(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "web_gridcharge.json")
+
+    def make(self, net_balance=None, **service_kwargs):
+        service = FakeService(**service_kwargs)
+        stub = FetchStub(net_balance)
+        gc = GridChargeController(service, self.path, fetch_fn=stub)
+        return service, stub, gc
+
+    def test_fresh_state_is_disabled(self):
+        _, _, gc = self.make()
+        self.assertFalse(gc.get_state()["enabled"])
+
+    def test_exporting_enables_charging(self):
+        service, _, gc = self.make(net_balance=-100)
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        self.assertEqual(service.sent, ["PCP01"])
+        self.assertEqual(service.sent_sources, ["grid_export"])
+
+    def test_importing_keeps_idle(self):
+        service, _, gc = self.make(net_balance=100)
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        self.assertEqual(service.sent, ["PCP03"])
+
+    def test_deadband_holds_previous_state(self):
+        service, stub, gc = self.make(net_balance=-100)   # exporting
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        self.assertEqual(service.sent, ["PCP01"])
+        stub.net_balance = -10   # inside the -50..20 dead-band
+        gc.tick()
+        # Desired state carries over ("charging"), so target is unchanged
+        # and nothing new is sent -- this is the hysteresis, not a bug.
+        self.assertEqual(service.sent, ["PCP01"])
+
+    def test_low_battery_overrides_import_state(self):
+        service, _, gc = self.make(net_balance=100,   # importing -> would be idle
+                                   battery_voltage=20.0, min_battery_voltage=24.0)
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        self.assertEqual(service.sent, ["PCP01"])
+        self.assertIn("OVERRIDE", gc.get_state()["last_run"]["why"])
+
+    def test_unreachable_dashboard_falls_back_to_idle(self):
+        service, _, gc = self.make(net_balance=None)   # fetch always fails
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        self.assertEqual(service.sent, ["PCP03"])
+
+    def test_stale_reading_falls_back_to_idle(self):
+        service, stub, gc = self.make(net_balance=-100)
+        gc.set_config({"enabled": True, "min_switch_interval": 0, "stale_after": 0})
+        self.assertEqual(service.sent, ["PCP01"])
+        stub.net_balance = None   # dashboard now unreachable
+        gc.tick()
+        self.assertEqual(service.sent, ["PCP01", "PCP03"])
+
+    def test_read_only_service_blocks_apply(self):
+        service, _, gc = self.make(net_balance=-100, allow_writes=False)
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        self.assertEqual(service.sent, [])
+        self.assertIn("read-only", gc.get_state()["last_run"]["note"])
+
+    def test_config_persists_to_disk(self):
+        _, _, gc = self.make()
+        gc.set_config({"export_threshold_w": -77})
+        reloaded = GridChargeController(FakeService(), self.path, fetch_fn=FetchStub())
+        self.assertEqual(reloaded.get_state()["export_threshold_w"], -77)
+
+    def test_set_enabled_preserves_other_settings(self):
+        service, stub, gc = self.make(net_balance=-100)
+        gc.set_config({"export_threshold_w": -77, "min_switch_interval": 0})
+        stub.net_balance = -80   # below the custom -77 threshold
+        gc.set_enabled(True)
+        self.assertEqual(gc.get_state()["export_threshold_w"], -77)
+        self.assertEqual(service.sent, ["PCP01"])
+
+    def test_force_bypasses_dwell_time(self):
+        service, stub, gc = self.make(net_balance=-100)
+        gc.set_config({"enabled": True, "min_switch_interval": 99999})
+        self.assertEqual(service.sent, ["PCP01"])
+        stub.net_balance = 100   # now importing
+        gc.tick(force=True)
+        self.assertEqual(service.sent, ["PCP01", "PCP03"])
+
+    def test_dwell_time_blocks_without_force(self):
+        service, stub, gc = self.make(net_balance=-100)
+        gc.set_config({"enabled": True, "min_switch_interval": 99999})
+        self.assertEqual(service.sent, ["PCP01"])
+        stub.net_balance = 100
+        gc.tick()
+        self.assertEqual(service.sent, ["PCP01"])   # held, not resent
+        self.assertIn("anti-flap", gc.get_state()["last_run"]["note"])
+
+
+class TestGridChargeApi(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "web_gridcharge.json")
+
+    def test_get_without_configured(self):
+        client = client_for(FakeService(), grid_charge=None)
+        r = client.get("/api/grid-charge", headers=AUTH)
+        self.assertEqual(r.status_code, 501)
+        self.assertEqual(r.get_json()["code"], "no_grid_charge")
+
+    def test_put_via_put_method_applies_immediately(self):
+        service = FakeService()
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-100))
+        client = client_for(service, grid_charge=gc)
+        r = client.put("/api/grid-charge", data=json.dumps(
+            {"enabled": True, "min_switch_interval": 0}),
+            content_type="application/json", headers=AUTH)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(service.sent, ["PCP01"])
+
+    def test_put_rejects_invalid_config(self):
+        service = FakeService()
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-100))
+        client = client_for(service, grid_charge=gc)
+        r = client.put("/api/grid-charge", data=json.dumps({"charge_pcp": "09"}),
+                       content_type="application/json", headers=AUTH)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["code"], "invalid_config")
+        self.assertEqual(service.sent, [])
+
+    def test_put_requires_auth(self):
+        gc = GridChargeController(FakeService(), self.path, fetch_fn=FetchStub())
+        client = client_for(FakeService(), grid_charge=gc)
+        r = client.put("/api/grid-charge", data=json.dumps({"enabled": False}),
+                       content_type="application/json")
+        self.assertEqual(r.status_code, 401)
+
+    def test_apply_now_forces_a_tick(self):
+        service = FakeService()
+        stub = FetchStub(-100)
+        gc = GridChargeController(service, self.path, fetch_fn=stub)
+        client = client_for(service, grid_charge=gc)
+        client.put("/api/grid-charge", data=json.dumps(
+            {"enabled": True, "min_switch_interval": 0}),
+            content_type="application/json", headers=AUTH)
+        service.sent.clear()
+        stub.net_balance = 100
+        r = post(client, "/api/grid-charge/apply-now", {"force": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(service.sent, ["PCP03"])
+
+    def test_read_only_server_stores_but_does_not_apply(self):
+        service = FakeService(allow_writes=False)
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-100))
+        client = client_for(service, grid_charge=gc)
+        r = client.put("/api/grid-charge", data=json.dumps(
+            {"enabled": True, "min_switch_interval": 0}),
+            content_type="application/json", headers=AUTH)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["enabled"])
+        self.assertEqual(service.sent, [])
+
+    def test_enabling_grid_charge_is_refused_while_schedule_enabled(self):
+        service = FakeService()
+        frm, to = window_around_now()
+        scheduler = Scheduler(service, os.path.join(self.dir, "web_schedule.json"))
+        scheduler.set_state(True, [{"from": frm, "to": to, "pcp": "01", "why": "t"}])
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-100))
+        client = client_for(service, scheduler, gc)
+        r = client.put("/api/grid-charge", data=json.dumps(
+            {"enabled": True}), content_type="application/json", headers=AUTH)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.get_json()["code"], "conflicting_automation")
+        self.assertFalse(gc.get_state()["enabled"])
+
+    def test_enabling_schedule_is_refused_while_grid_charge_enabled(self):
+        service = FakeService()
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-100))
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        scheduler = Scheduler(service, os.path.join(self.dir, "web_schedule.json"))
+        client = client_for(service, scheduler, gc)
+        frm, to = window_around_now()
+        r = client.put("/api/schedule", data=json.dumps(
+            {"enabled": True, "rules": [{"from": frm, "to": to, "pcp": "01", "why": "t"}]}),
+            content_type="application/json", headers=AUTH)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.get_json()["code"], "conflicting_automation")
+        self.assertFalse(scheduler.get_state()["enabled"])
+
+    def test_disabling_one_while_other_enabled_is_allowed(self):
+        # The conflict check only fires when *enabling* -- turning one off
+        # must never be blocked by the other being on.
+        service = FakeService()
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-100))
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        scheduler = Scheduler(service, os.path.join(self.dir, "web_schedule.json"))
+        client = client_for(service, scheduler, gc)
+        r = client.put("/api/schedule", data=json.dumps({"enabled": False, "rules": []}),
+                       content_type="application/json", headers=AUTH)
+        self.assertEqual(r.status_code, 200)
 
 
 class TestConfigDurability(unittest.TestCase):

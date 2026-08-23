@@ -39,7 +39,8 @@ def _fail(message, code="error", status=400, **extra):
     return jsonify(payload), status
 
 
-def create_app(service, scheduler=None, *, token: str, secret_key: str) -> Flask:
+def create_app(service, scheduler=None, grid_charge=None, *,
+               token: str, secret_key: str) -> Flask:
     app = Flask(__name__)
     app.config.update(
         SECRET_KEY=secret_key,
@@ -50,6 +51,7 @@ def create_app(service, scheduler=None, *, token: str, secret_key: str) -> Flask
     )
     app.service = service
     app.scheduler = scheduler
+    app.grid_charge = grid_charge
     app.api_token = token
 
     # ---- auth ----------------------------------------------------------
@@ -118,7 +120,8 @@ def create_app(service, scheduler=None, *, token: str, secret_key: str) -> Flask
                                pcp_values=safety.PCP_VALUES,
                                pop_values=safety.OUTPUT_PRIORITY_VALUES,
                                allow_writes=service.allow_writes,
-                               scheduler_available=scheduler is not None)
+                               scheduler_available=scheduler is not None,
+                               grid_charge_available=grid_charge is not None)
 
     # ---- API: read -----------------------------------------------------
 
@@ -194,11 +197,29 @@ def create_app(service, scheduler=None, *, token: str, secret_key: str) -> Flask
         """Every set command this process has sent, newest first."""
         return jsonify({"ok": True, "audit": service.audit_log()})
 
-    # ---- API: schedule ---------------------------------------------------
+    # ---- API: schedule + grid-export charging ----------------------------
+    #
+    # These two automations both drive PCP and must never run at once -- see
+    # webapp/grid_charge.py's module docstring for why the time-schedule's
+    # "solar hours" assumption doesn't hold on this hardware. Enabling one
+    # while the other is enabled is refused outright (409) rather than
+    # silently disabling the other, so nothing changes state as a surprising
+    # side effect of an unrelated request.
 
     def _no_scheduler():
         return _fail("scheduler not configured on this server",
                      code="no_scheduler", status=501)
+
+    def _no_grid_charge():
+        return _fail("grid-export charging not configured on this server",
+                     code="no_grid_charge", status=501)
+
+    def _reject_if_other_enabled(enabling: bool, other, other_name: str):
+        if enabling and other is not None and other.get_state()["enabled"]:
+            raise CommandRejected(
+                f"cannot enable this while {other_name} is enabled -- they both "
+                f"drive charger priority and would fight each other",
+                hint=f"disable {other_name} first", code="conflicting_automation")
 
     @app.route("/api/schedule")
     def api_schedule_get():
@@ -216,9 +237,12 @@ def create_app(service, scheduler=None, *, token: str, secret_key: str) -> Flask
         if scheduler is None:
             return _no_scheduler()
         body = request.get_json(silent=True) or {}
+        enabled = bool(body.get("enabled", False))
         try:
-            state = scheduler.set_state(bool(body.get("enabled", False)),
-                                        body.get("rules", []))
+            _reject_if_other_enabled(enabled, grid_charge, "grid-export charging")
+            state = scheduler.set_state(enabled, body.get("rules", []))
+        except CommandRejected as e:
+            return _fail(e.message, code=e.code, status=409, hint=e.hint)
         except ValueError as e:
             return _fail(str(e), code="invalid_rules", status=400)
         return jsonify({"ok": True, **state})
@@ -230,6 +254,39 @@ def create_app(service, scheduler=None, *, token: str, secret_key: str) -> Flask
             return _no_scheduler()
         body = request.get_json(silent=True) or {}
         result = scheduler.tick(force=bool(body.get("force", True)))
+        return jsonify({"ok": True, "result": result})
+
+    @app.route("/api/grid-charge")
+    def api_gridcharge_get():
+        if grid_charge is None:
+            return _no_grid_charge()
+        return jsonify({"ok": True, **grid_charge.get_state()})
+
+    @app.route("/api/grid-charge", methods=["PUT"])
+    @require_json_write
+    def api_gridcharge_put():
+        """Replace the whole config. Same read-only/store-vs-apply split as
+        the schedule endpoint above."""
+        if grid_charge is None:
+            return _no_grid_charge()
+        body = request.get_json(silent=True) or {}
+        try:
+            _reject_if_other_enabled(bool(body.get("enabled", False)),
+                                     scheduler, "the time-of-day schedule")
+            state = grid_charge.set_config(body)
+        except CommandRejected as e:
+            return _fail(e.message, code=e.code, status=409, hint=e.hint)
+        except ValueError as e:
+            return _fail(str(e), code="invalid_config", status=400)
+        return jsonify({"ok": True, **state})
+
+    @app.route("/api/grid-charge/apply-now", methods=["POST"])
+    @require_json_write
+    def api_gridcharge_apply_now():
+        if grid_charge is None:
+            return _no_grid_charge()
+        body = request.get_json(silent=True) or {}
+        result = grid_charge.tick(force=bool(body.get("force", True)))
         return jsonify({"ok": True, "result": result})
 
     # ---- API: write ----------------------------------------------------

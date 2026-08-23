@@ -164,12 +164,19 @@ section { margin-bottom: 1.9rem; }
               color: var(--accent); font-weight: 600; }
 .opt.danger:hover { border-color: var(--bad); color: var(--bad); }
 
-/* ---- schedule ---- */
+/* ---- schedule / grid-export charging ---- */
 .sched-toolbar { display: flex; justify-content: space-between; align-items: center;
                  margin-bottom: .4rem; }
 .sched-actions { margin-top: .6rem; }
 #sched-table td:last-child { text-align: right; }
 #sched-table button.ghost { font-size: .75rem; padding: .2rem .55rem; }
+
+.field { display: flex; flex-direction: column; gap: .25rem; font-size: .78rem;
+         color: var(--text-secondary); }
+.field input, .field select {
+  font: inherit; font-size: .85rem; padding: .4rem .55rem; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+}
 
 /* ---- console (also reused by the schedule "add rule" form) ---- */
 .console { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
