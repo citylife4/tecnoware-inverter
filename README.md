@@ -357,10 +357,59 @@ Codes you can branch on: `unauthorized`, `read_only`, `unknown_command`,
 `confirmation_required`, `battery_too_low`, `battery_unknown`,
 `invalid_value`, `bad_content_type`, `nak`, `io_error`.
 
-### Automating from another machine
+### Built-in schedule (recommended over external cron)
 
-This replaces running `charge_schedule.py` beside the server. A cron entry on
-any host on the network:
+The server can apply charger-priority rules by time of day itself, so you
+don't need `charge_schedule.py` or external cron at all -- and since the
+server already owns the serial port exclusively, an external scheduler
+process couldn't open it anyway. It's the "Automatic schedule" panel on the
+dashboard, or the API directly:
+
+```bash
+TOKEN=$(python3 serve.py --show-token)
+curl -s -X PUT -H "X-API-Key: $TOKEN" -H "Content-Type: application/json" \
+  -d '{"enabled": true, "rules": [
+        {"from": "09:00", "to": "17:00", "pcp": "03", "why": "daytime: solar only"},
+        {"from": "17:00", "to": "09:00", "pcp": "01", "why": "night: allow utility"}
+      ]}' \
+  http://inverter.local:8080/api/schedule
+```
+
+Rules are the same shape `charge_schedule.py`'s JSON config uses (`from`,
+`to`, `pcp`, `why`), checked once a minute by a background thread inside
+`serve.py` (`webapp/scheduler.py`) -- no cron, no second process. Behaviour
+matches `charge_schedule.py`'s documented safety rule exactly: a `pcp: "03"`
+rule is downgraded to `01` whenever the battery is below
+`min_battery_voltage` (including when the voltage can't be read at all), and
+the reason is recorded rather than the rule being silently skipped. Writes
+this makes are tagged `"source": "scheduler"` in `/api/audit`, so they're
+distinguishable from a person's writes.
+
+An edit takes effect immediately (no waiting for the next poll), and it's
+idempotent -- reapplying the same target doesn't resend the command. Storing
+a schedule always succeeds, even on a `--read-only` server; only *applying*
+it is gated, same as any other write, so a read-only instance can still be
+configured ahead of time.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/schedule` | current rules, whether enabled, last-run result |
+| PUT | `/api/schedule` | replace the whole rule set: `{"enabled": bool, "rules": [...]}` |
+| POST | `/api/schedule/apply-now` | force an immediate evaluation, bypassing idempotency |
+
+Rules and enabled state persist to `web_schedule.json` (gitignored,
+instance-specific). Writes go through the same atomic temp-file-then-rename
+helper as `web.json` (`webapp/atomic_write.py`) -- see the durability note
+below for why that matters on this hardware.
+
+`GET /api/schedule` also returns `current_rule`/`current_target`, a live
+preview of what would apply right now even if the scheduler is disabled or
+you're mid-edit -- useful for checking a new rule before turning it on.
+
+### Automating from another machine (external cron, if you'd rather)
+
+Only needed if you don't want the built-in scheduler above running inside
+the server. A cron entry on any host on the network:
 
 ```bash
 # 07:00 — allow utility charging overnight rules to end
@@ -395,6 +444,19 @@ gitignored. Traffic is plain HTTP, so keep this on a trusted LAN or behind a
 VPN (Tailscale) rather than port-forwarding it to the internet. Session
 cookies are `SameSite=Lax` and writes require a JSON content type, so a
 cross-origin page cannot forge one against a logged-in browser.
+
+### Config durability
+
+`web.json` (the token) and `web_schedule.json` (schedule rules) are both
+written through `webapp/atomic_write.py`: temp file, `fsync`, rename, then
+`fsync` the directory. This isn't defensive boilerplate -- it's a fix for an
+incident hit while building this. `palacoulo-inverter` rebooted uncleanly
+mid-session and a plain open/write/close had left `web.json` zero-length,
+losing the API token. A crash at any point during an atomic write now leaves
+either the old file intact or the new one complete, never an empty one, and
+`serve.py` refuses to start on a config file that exists but fails to
+parse (rather than silently minting a new token and locking out existing
+clients).
 
 ### Developing without the hardware
 
@@ -436,6 +498,8 @@ commands with real caution before using them on a live system.
 - `serve.py` — web interface + REST API entry point
 - `webapp/service.py` — thread-safe serial owner and background poller
 - `webapp/safety.py` — write policy (what needs confirming, what is refused)
+- `webapp/scheduler.py` — built-in time-of-day PCP scheduler (runs inside the server)
+- `webapp/atomic_write.py` — crash-safe JSON writes, shared by `web.json` and the schedule
 - `webapp/app.py` — Flask routes, auth, JSON API
 - `mock_inverter.py` — fake inverter on a pty, for development without hardware
-- `test_webapp.py` — tests for the API, parsers, and write policy
+- `test_webapp.py` — tests for the API, parsers, scheduler, and write policy

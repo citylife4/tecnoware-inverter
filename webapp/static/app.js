@@ -223,6 +223,7 @@ async function tick() {
     $("#trend-range").textContent = `${first} – ${last} (${hist.history.length} samples)`;
   }
   loadAudit();
+  loadSchedule();
 }
 
 async function loadAudit() {
@@ -231,9 +232,10 @@ async function loadAudit() {
   $("#audit-table tbody").innerHTML = data.audit.length
     ? data.audit.map((a) => `<tr>
         <td>${new Date(a.at).toLocaleString()}</td>
+        <td class="muted">${a.source || "manual"}</td>
         <td><code>${a.command}</code></td>
         <td class="${a.ok ? "" : "err"}">${a.response || "—"}</td></tr>`).join("")
-    : `<tr><td colspan="3" class="muted">No set commands sent yet.</td></tr>`;
+    : `<tr><td colspan="4" class="muted">No set commands sent yet.</td></tr>`;
 }
 
 /* ---------- device + ratings (static, fetched once) ---------- */
@@ -383,6 +385,107 @@ async function markCurrentPriorities() {
   });
 }
 
+/* ---------- schedule ----------
+   Time-of-day PCP scheduling, running inside the server (see
+   webapp/scheduler.py) instead of a separate cron job -- the server
+   already owns the serial port exclusively, so nothing else could hold it
+   at the same time anyway. This panel edits the rule list and shows what
+   the scheduler most recently did; it never claims a "current setting"
+   read back from the inverter, because the hardware doesn't report one
+   (same reason markCurrentPriorities() above uses the audit log). */
+
+function fmtRule(r) {
+  if (!r) return "no rule matches the current time";
+  return `${r.from}–${r.to} → PCP${r.pcp}${r.why ? ` (${r.why})` : ""}`;
+}
+
+function renderSchedule(state) {
+  if (!document.querySelector("#sched-enabled")) return;   // section not rendered
+  $("#sched-poll").textContent = state.poll_interval;
+  $("#sched-enabled").checked = state.enabled;
+  $("#sched-status").textContent = state.enabled ? "enabled" : "disabled";
+  $("#sched-status").className = `badge ${state.enabled ? "" : "muted"}`;
+  if (!state.allow_writes) {
+    $("#sched-status").textContent += " (server read-only — not applied)";
+  }
+
+  const body = $("#sched-table tbody");
+  body.innerHTML = state.rules.length
+    ? state.rules.map((r, i) => `<tr>
+        <td>${r.from}</td><td>${r.to}</td>
+        <td><span class="code">PCP${r.pcp}</span></td>
+        <td class="name">${r.why || ""}</td>
+        <td><button class="ghost" data-del="${i}">Remove</button></td></tr>`).join("")
+    : `<tr><td colspan="5" class="muted">No rules yet — add one below.</td></tr>`;
+  body.querySelectorAll("[data-del]").forEach((b) => {
+    b.addEventListener("click", () => deleteRule(+b.dataset.del));
+  });
+
+  let cur = `<span class="muted">Matches now:</span> ${fmtRule(state.current_rule)}`;
+  if (state.override_reason) cur += `<br><span class="warn small">OVERRIDE: ${state.override_reason}</span>`;
+  if (state.last_run) {
+    const t = new Date(state.last_run.at).toLocaleTimeString();
+    const cls = state.last_run.applied ? "ok" : (state.last_run.note.startsWith("error") ? "err" : "");
+    cur += `<br><span class="muted">Last check ${t}:</span> <span class="${cls}">${state.last_run.note}</span>`;
+  }
+  $("#sched-current").innerHTML = cur;
+}
+
+let scheduleState = { enabled: false, rules: [] };
+
+async function loadSchedule() {
+  const d = await api("/api/schedule");
+  if (!d.ok) return;
+  scheduleState = d;
+  renderSchedule(d);
+}
+
+async function saveSchedule(enabled, rules) {
+  const d = await api("/api/schedule", {
+    method: "PUT", body: JSON.stringify({ enabled, rules }),
+  });
+  if (d.ok) { scheduleState = d; renderSchedule(d); }
+  else logConsole(`schedule save failed: ${d.error}`, "err");
+  return d;
+}
+
+function deleteRule(index) {
+  const rules = scheduleState.rules.slice();
+  rules.splice(index, 1);
+  saveSchedule(scheduleState.enabled, rules);
+}
+
+function wireSchedule() {
+  const enabledBox = $("#sched-enabled");
+  if (!enabledBox) return;   // scheduler_available was false; section not rendered
+
+  enabledBox.addEventListener("change", () => {
+    saveSchedule(enabledBox.checked, scheduleState.rules);
+  });
+
+  $("#sched-add-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const rule = {
+      from: $("#sched-from").value, to: $("#sched-to").value,
+      pcp: $("#sched-pcp").value, why: $("#sched-why").value.trim(),
+    };
+    if (!rule.from || !rule.to) return;
+    const rules = scheduleState.rules.concat([rule]);
+    saveSchedule(scheduleState.enabled, rules).then((d) => {
+      if (d.ok) { $("#sched-from").value = ""; $("#sched-to").value = ""; $("#sched-why").value = ""; }
+    });
+  });
+
+  $("#sched-apply-now").addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      const d = await api("/api/schedule/apply-now", { method: "POST", body: JSON.stringify({ force: true }) });
+      if (d.ok) { logConsole(`schedule apply-now: ${d.result.note}`, d.result.applied ? "ok" : "err"); }
+      await loadSchedule();
+    } finally { e.target.disabled = false; }
+  });
+}
+
 /* ---------- boot ---------- */
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -407,6 +510,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   wireControls();
+  wireSchedule();
   await tick();
   loadDevice();
   loadRatings();

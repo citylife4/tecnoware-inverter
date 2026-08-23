@@ -19,7 +19,6 @@ import argparse
 import json
 import os
 import signal
-import stat
 import sys
 
 # Repo root on sys.path so the existing top-level modules (transport,
@@ -27,6 +26,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from webapp.app import create_app, generate_token          # noqa: E402
+from webapp.atomic_write import write_json_atomic          # noqa: E402
+from webapp.scheduler import Scheduler                     # noqa: E402
 from webapp.service import InverterService                 # noqa: E402
 
 DEFAULTS = {
@@ -40,6 +41,10 @@ DEFAULTS = {
     "history_size": 720,
     "allow_writes": True,
     "serial_timeout": 3.0,
+    # Built-in time-of-day scheduler (replaces running charge_schedule.py
+    # as a separate process -- it can't open the port while this does).
+    "schedule_config": "web_schedule.json",
+    "schedule_poll_interval": 60.0,
 }
 
 
@@ -80,34 +85,9 @@ def load_config(path: str) -> dict:
 
 
 def save_config(path: str, cfg: dict) -> None:
-    """Write the config atomically and durably.
-
-    A plain open/write/close is NOT enough here. This actually bit us: the
-    Pi rebooted uncleanly and ext4 replayed the metadata but not the data,
-    leaving a zero-length web.json and losing the API token. Writing to a
-    temp file, fsyncing it, then renaming means a crash leaves either the
-    old file or the new one -- never an empty one.
-    """
-    tmp = f"{path}.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-                 stat.S_IRUSR | stat.S_IWUSR)   # 0600: it holds a bearer token
-    try:
-        with os.fdopen(fd, "w") as fh:
-            json.dump(cfg, fh, indent=2)
-            fh.write("\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-    except Exception:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
-    os.replace(tmp, path)
-    # Also fsync the directory, so the rename itself survives a power cut.
-    dir_fd = os.open(os.path.dirname(os.path.abspath(path)), os.O_RDONLY)
-    try:
-        os.fsync(dir_fd)
-    finally:
-        os.close(dir_fd)
+    # 0600: web.json holds a bearer token. See webapp/atomic_write.py for
+    # why this can't be a plain open/write/close.
+    write_json_atomic(path, cfg)
 
 
 def main() -> int:
@@ -151,9 +131,15 @@ def main() -> int:
     )
     service.start()
 
-    app = create_app(service, token=cfg["token"], secret_key=cfg["secret_key"])
+    scheduler = Scheduler(service, path=cfg["schedule_config"],
+                          poll_interval=float(cfg["schedule_poll_interval"]))
+    scheduler.start()
+
+    app = create_app(service, scheduler, token=cfg["token"],
+                     secret_key=cfg["secret_key"])
 
     def _shutdown(signum, frame):
+        scheduler.stop()
         service.stop()
         sys.exit(0)
 
@@ -168,6 +154,7 @@ def main() -> int:
         app.run(host=cfg["host"], port=int(cfg["http_port"]),
                 threaded=True, use_reloader=False)
     finally:
+        scheduler.stop()
         service.stop()
     return 0
 

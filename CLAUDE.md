@@ -100,9 +100,12 @@ protocol code. Deployed to `palacoulo-inverter`. Two things to know:
 
 1. **The serial port is exclusive.** While `serve.py` runs it owns
    `/dev/ttyUSB0`, so `charge_schedule.py` and `inverter_ctl.py` cannot
-   open it. Scheduling is meant to move to cron hitting
-   `/api/charger-priority` instead. Stop the service before using the CLI
-   on that host.
+   open it. **Scheduling now lives inside the server itself**
+   (`webapp/scheduler.py`, added 2026-08-23) rather than as cron hitting
+   `/api/charger-priority` — same low-battery override behaviour as
+   `charge_schedule.py`, but no second process fighting for the port.
+   Config is `web_schedule.json` (gitignored, atomic-written). Stop the
+   service before using the CLI/`charge_schedule.py` on that host.
 2. **`QPIRI` does not reflect priority writes either** — verified live on
    2026-08-23: `PCP02` → `(ACK`, yet `QPIRI` field 17
    (`charger_source_priority`) still read `1` afterwards, before and after
@@ -113,14 +116,23 @@ protocol code. Deployed to `palacoulo-inverter`. Two things to know:
 3. **Write policy lives in `webapp/safety.py`**, not in the routes. The
    `PCP03` low-battery interlock and the "dangerous commands need
    `confirm: true`" rule are both there, and both are unit-tested in
-   `test_webapp.py` (30 tests, no hardware needed). `mock_inverter.py`
+   `test_webapp.py` (63 tests, no hardware needed). `mock_inverter.py`
    fakes the unit on a pty for development away from the hardware.
+4. **`web.json` was found zero-length after an unclean reboot** (a plain
+   open/write/close isn't durable) — fixed via `webapp/atomic_write.py`
+   (temp file + fsync + rename + fsync dir), shared by `web.json` and
+   `web_schedule.json`. If you ever add another on-disk config/state file
+   to this project, write it through that helper, not a bare `open(...,
+   "w")` — this bit us for real, not hypothetically.
 
 ## What's not done / open questions
 
-- No scheduler is currently installed/running anywhere (the macOS
-  `launchd` plist exists but per the last session was NOT loaded). The
-  cron-over-API approach in README is documented but not installed.
+- The macOS `launchd` plist for the old standalone `charge_schedule.py`
+  still exists but was never loaded — moot now that scheduling lives in
+  the web server; probably delete it next time this is touched.
+- No schedule rules are currently configured/enabled on the deployed
+  server — the feature works (unit- and live-tested) but nobody has told
+  it what times/PCP values to actually use yet.
 - `QPIRI` field 14 (`max_charging_current`) reads as malformed (`06P`) —
   never resolved, don't trust it.
 - `battery_redischarge_voltage` (field 22, reads `52.0`) doesn't fit either

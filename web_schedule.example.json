@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "rules": [
+    {"from": "09:00", "to": "17:00", "pcp": "03", "why": "daytime: solar only, don't buy grid power"},
+    {"from": "17:00", "to": "09:00", "pcp": "01", "why": "night: allow utility charging"}
+  ]
+}

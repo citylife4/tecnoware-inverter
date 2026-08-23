@@ -98,6 +98,53 @@
   </section>
   {% endif %}
 
+  {% if scheduler_available %}
+  <!-- Schedule -->
+  <section aria-labelledby="h-sched">
+    <h2 id="h-sched">Automatic schedule</h2>
+    <p class="muted small">Applies charger source priority (<code>PCP</code>) by time of
+      day, checked every <span id="sched-poll">&mdash;</span>s inside this server &mdash;
+      no separate cron job needed, and nothing else can hold the port at the same time anyway.</p>
+    <div class="control-card">
+      <div class="sched-toolbar">
+        <label class="chk"><input type="checkbox" id="sched-enabled"> Enabled</label>
+        <span class="badge" id="sched-status">&mdash;</span>
+      </div>
+      <p class="small" id="sched-current"></p>
+
+      <div class="scroll-x">
+        <table id="sched-table"><thead><tr>
+          <th>From</th><th>To</th><th>PCP</th><th>Why</th><th></th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+
+      <form class="console sched-add" id="sched-add-form" autocomplete="off">
+        <input type="time" id="sched-from" required>
+        <span class="muted small">&rarr;</span>
+        <input type="time" id="sched-to" required>
+        <select id="sched-pcp">
+          {% for value, label in pcp_values.items() %}
+          <option value="{{ value }}">{{ value }} &mdash; {{ label }}</option>
+          {% endfor %}
+        </select>
+        <input type="text" id="sched-why" placeholder="why (optional)">
+        <button type="submit">Add rule</button>
+      </form>
+
+      <div class="btnrow sched-actions">
+        <button class="ghost" id="sched-apply-now">Apply now</button>
+      </div>
+      <p class="warn small">A <code>03</code> rule is downgraded to <code>01</code>
+        automatically if the battery is below the safety floor when it would apply
+        &mdash; same protection as a manual write, and the same rule
+        <code>charge_schedule.py</code> uses.</p>
+      <p class="muted small">The inverter cannot report its current priority back
+        (verified on hardware &mdash; see README), so "current" below reflects what
+        this server has applied, not a reading from the device.</p>
+    </div>
+  </section>
+  {% endif %}
+
   <!-- Raw console -->
   <section aria-labelledby="h-console">
     <h2 id="h-console">Command console</h2>
@@ -126,7 +173,7 @@
   <section aria-labelledby="h-audit">
     <h2 id="h-audit">Write log</h2>
     <div class="scroll-x"><table id="audit-table"><thead><tr>
-      <th>Time</th><th>Command</th><th>Response</th></tr></thead><tbody></tbody></table></div>
+      <th>Time</th><th>Source</th><th>Command</th><th>Response</th></tr></thead><tbody></tbody></table></div>
   </section>
 </main>
 

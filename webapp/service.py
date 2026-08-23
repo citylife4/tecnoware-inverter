@@ -220,8 +220,13 @@ class InverterService:
             self._consecutive_failures += 1
             raise InverterError(f"{command} failed: {last}")
 
-    def send_set(self, command: str) -> str:
-        """Send a state-changing command (CRC appended, longer timeout)."""
+    def send_set(self, command: str, source: str = "manual") -> str:
+        """Send a state-changing command (CRC appended, longer timeout).
+
+        `source` is purely descriptive -- it lands in the audit log so the
+        dashboard can distinguish a command a person sent from one the
+        built-in scheduler applied.
+        """
         with self._lock:
             try:
                 conn = self._ensure()
@@ -229,15 +234,16 @@ class InverterService:
             except (serial.SerialException, OSError) as e:
                 self._drop()
                 raise InverterError(f"{command} failed: {e}")
-            self._record_audit(command, resp)
+            self._record_audit(command, resp, source)
             return resp
 
-    def _record_audit(self, command: str, response: str):
+    def _record_audit(self, command: str, response: str, source: str = "manual"):
         self._audit.appendleft({
             "at": _utcnow(),
             "command": command,
             "response": response,
             "ok": response.startswith("(ACK"),
+            "source": source,
         })
 
     def audit_log(self) -> list:

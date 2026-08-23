@@ -39,7 +39,7 @@ def _fail(message, code="error", status=400, **extra):
     return jsonify(payload), status
 
 
-def create_app(service, token: str, secret_key: str) -> Flask:
+def create_app(service, scheduler=None, *, token: str, secret_key: str) -> Flask:
     app = Flask(__name__)
     app.config.update(
         SECRET_KEY=secret_key,
@@ -49,6 +49,7 @@ def create_app(service, token: str, secret_key: str) -> Flask:
         MAX_CONTENT_LENGTH=64 * 1024,
     )
     app.service = service
+    app.scheduler = scheduler
     app.api_token = token
 
     # ---- auth ----------------------------------------------------------
@@ -116,7 +117,8 @@ def create_app(service, token: str, secret_key: str) -> Flask:
         return render_template("index.html",
                                pcp_values=safety.PCP_VALUES,
                                pop_values=safety.OUTPUT_PRIORITY_VALUES,
-                               allow_writes=service.allow_writes)
+                               allow_writes=service.allow_writes,
+                               scheduler_available=scheduler is not None)
 
     # ---- API: read -----------------------------------------------------
 
@@ -191,6 +193,44 @@ def create_app(service, token: str, secret_key: str) -> Flask:
     def api_audit():
         """Every set command this process has sent, newest first."""
         return jsonify({"ok": True, "audit": service.audit_log()})
+
+    # ---- API: schedule ---------------------------------------------------
+
+    def _no_scheduler():
+        return _fail("scheduler not configured on this server",
+                     code="no_scheduler", status=501)
+
+    @app.route("/api/schedule")
+    def api_schedule_get():
+        if scheduler is None:
+            return _no_scheduler()
+        return jsonify({"ok": True, **scheduler.get_state()})
+
+    @app.route("/api/schedule", methods=["PUT"])
+    @require_json_write
+    def api_schedule_put():
+        """Replace the whole rule set. Storing rules always succeeds even on
+        a read-only server -- only *applying* them is gated, same as any
+        other write, so a read-only instance can still be configured ahead
+        of time."""
+        if scheduler is None:
+            return _no_scheduler()
+        body = request.get_json(silent=True) or {}
+        try:
+            state = scheduler.set_state(bool(body.get("enabled", False)),
+                                        body.get("rules", []))
+        except ValueError as e:
+            return _fail(str(e), code="invalid_rules", status=400)
+        return jsonify({"ok": True, **state})
+
+    @app.route("/api/schedule/apply-now", methods=["POST"])
+    @require_json_write
+    def api_schedule_apply_now():
+        if scheduler is None:
+            return _no_scheduler()
+        body = request.get_json(silent=True) or {}
+        result = scheduler.tick(force=bool(body.get("force", True)))
+        return jsonify({"ok": True, "result": result})
 
     # ---- API: write ----------------------------------------------------
 

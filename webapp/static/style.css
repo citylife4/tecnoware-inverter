@@ -164,13 +164,22 @@ section { margin-bottom: 1.9rem; }
               color: var(--accent); font-weight: 600; }
 .opt.danger:hover { border-color: var(--bad); color: var(--bad); }
 
-/* ---- console ---- */
+/* ---- schedule ---- */
+.sched-toolbar { display: flex; justify-content: space-between; align-items: center;
+                 margin-bottom: .4rem; }
+.sched-actions { margin-top: .6rem; }
+#sched-table td:last-child { text-align: right; }
+#sched-table button.ghost { font-size: .75rem; padding: .2rem .55rem; }
+
+/* ---- console (also reused by the schedule "add rule" form) ---- */
 .console { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
-.console input[type=text], #console-input {
-  flex: 1 1 260px; font: inherit; font-family: ui-monospace, Menlo, monospace;
+.console input, .console select {
+  font: inherit; font-family: ui-monospace, Menlo, monospace;
   font-size: .85rem; padding: .45rem .6rem; border-radius: 7px;
   border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
 }
+.console input[type=text], #console-input { flex: 1 1 260px; }
+.console.sched-add input[type=text] { flex: 1 1 140px; }
 .chk { display: inline-flex; gap: .3rem; align-items: center; font-size: .8rem;
        color: var(--text-secondary); }
 .console-out {

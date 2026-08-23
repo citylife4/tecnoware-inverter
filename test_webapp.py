@@ -14,11 +14,13 @@ import os
 import stat
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 
 import serve
 from webapp import safety
 from webapp.app import create_app
 from webapp.safety import CommandRejected
+from webapp.scheduler import Scheduler, validate_rules
 from webapp.service import parse_qpigs, parse_qpiri
 from transport import InverterError
 
@@ -41,6 +43,7 @@ class FakeService:
         self._battery_voltage = battery_voltage
         self._ack = ack
         self.sent = []
+        self.sent_sources = []
 
     def battery_voltage(self):
         return self._battery_voltage
@@ -54,8 +57,9 @@ class FakeService:
             return "(L"
         return "(PI30"
 
-    def send_set(self, command):
+    def send_set(self, command, source="manual"):
         self.sent.append(command)
+        self.sent_sources.append(source)
         return "(ACK" if self._ack else "(NAK"
 
     def latest(self):
@@ -81,10 +85,20 @@ class FakeService:
         return parse_qpigs(SAMPLE_QPIGS)
 
 
-def client_for(service):
-    app = create_app(service, token=TOKEN, secret_key="unit-test-secret")
+def client_for(service, scheduler=None):
+    app = create_app(service, scheduler, token=TOKEN, secret_key="unit-test-secret")
     app.config["TESTING"] = True
     return app.test_client()
+
+
+def window_around_now(pad_minutes=3):
+    """An HH:MM/HH:MM window guaranteed to contain "now" at the moment the
+    caller's tick() actually runs, however long test setup around it takes.
+    Handles midnight wraparound the same way pick_rule/rule_active do."""
+    now = datetime.now()
+    start = (now - timedelta(minutes=pad_minutes)).strftime("%H:%M")
+    end = (now + timedelta(minutes=pad_minutes)).strftime("%H:%M")
+    return start, end
 
 
 AUTH = {"X-API-Key": TOKEN}
@@ -270,6 +284,211 @@ class TestApi(unittest.TestCase):
         r = client.get("/")
         self.assertEqual(r.status_code, 200)
         self.assertIn(b"Live status", r.data)
+
+
+class TestScheduleValidation(unittest.TestCase):
+    def test_accepts_well_formed_rules(self):
+        rules = validate_rules([{"from": "09:00", "to": "17:00", "pcp": "03", "why": "day"}])
+        self.assertEqual(rules[0]["pcp"], "03")
+
+    def test_rejects_bad_pcp(self):
+        with self.assertRaises(ValueError):
+            validate_rules([{"from": "09:00", "to": "17:00", "pcp": "09"}])
+
+    def test_rejects_bad_time_format(self):
+        with self.assertRaises(ValueError):
+            validate_rules([{"from": "9am", "to": "17:00", "pcp": "01"}])
+
+    def test_rejects_missing_time(self):
+        with self.assertRaises(ValueError):
+            validate_rules([{"to": "17:00", "pcp": "01"}])
+
+    def test_rejects_non_list(self):
+        with self.assertRaises(ValueError):
+            validate_rules({"from": "09:00", "to": "17:00", "pcp": "01"})
+
+    def test_why_is_optional_and_truncated(self):
+        rules = validate_rules([{"from": "09:00", "to": "17:00", "pcp": "01",
+                                 "why": "x" * 500}])
+        self.assertEqual(len(rules[0]["why"]), 200)
+
+
+class TestScheduler(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "web_schedule.json")
+
+    def make(self, **kwargs):
+        service = FakeService(**kwargs)
+        sched = Scheduler(service, self.path, poll_interval=60.0)
+        return service, sched
+
+    def test_fresh_state_is_disabled_with_no_rules(self):
+        _, sched = self.make()
+        state = sched.get_state()
+        self.assertFalse(state["enabled"])
+        self.assertEqual(state["rules"], [])
+
+    def test_set_state_persists_to_disk(self):
+        _, sched = self.make()
+        frm, to = window_around_now()
+        sched.set_state(False, [{"from": frm, "to": to, "pcp": "01", "why": "x"}])
+        # A fresh Scheduler pointed at the same file must see it.
+        reloaded = Scheduler(FakeService(), self.path)
+        self.assertEqual(reloaded.get_state()["rules"][0]["pcp"], "01")
+
+    def test_set_state_rejects_invalid_rules_without_touching_stored_state(self):
+        service, sched = self.make()
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "01", "why": "keep me"}])
+        with self.assertRaises(ValueError):
+            sched.set_state(True, [{"from": "bad", "to": to, "pcp": "01"}])
+        # The good rule set from before the bad call must still be there.
+        self.assertEqual(sched.get_state()["rules"][0]["why"], "keep me")
+
+    def test_matching_rule_is_applied(self):
+        service, sched = self.make()
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "02", "why": "test"}])
+        self.assertEqual(service.sent, ["PCP02"])
+        self.assertEqual(service.sent_sources, ["scheduler"])
+
+    def test_idempotent_does_not_resend_unchanged_target(self):
+        service, sched = self.make()
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "02", "why": "t"}])
+        sched.tick()
+        sched.tick()
+        self.assertEqual(service.sent, ["PCP02"])   # only the first tick actually sent it
+
+    def test_force_resends_even_if_unchanged(self):
+        service, sched = self.make()
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "02", "why": "t"}])
+        result = sched.tick(force=True)
+        self.assertTrue(result["applied"])
+        self.assertEqual(service.sent, ["PCP02", "PCP02"])
+
+    def test_disabled_scheduler_sends_nothing(self):
+        service, sched = self.make()
+        frm, to = window_around_now()
+        sched.set_state(False, [{"from": frm, "to": to, "pcp": "02", "why": "t"}])
+        result = sched.tick()
+        self.assertEqual(result["note"], "scheduler disabled")
+        self.assertEqual(service.sent, [])
+
+    def test_no_matching_rule_sends_nothing(self):
+        service, sched = self.make()
+        # A window that (barring a midnight-crossing test run) excludes now.
+        far = (datetime.now() + timedelta(hours=6)).strftime("%H:%M")
+        far2 = (datetime.now() + timedelta(hours=7)).strftime("%H:%M")
+        sched.set_state(True, [{"from": far, "to": far2, "pcp": "02", "why": "t"}])
+        self.assertEqual(service.sent, [])
+
+    def test_read_only_service_blocks_apply(self):
+        service, sched = self.make(allow_writes=False)
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "02", "why": "t"}])
+        self.assertEqual(service.sent, [])
+        self.assertIn("read-only", sched.get_state()["last_run"]["note"])
+
+    def test_solar_only_downgraded_below_floor(self):
+        service, sched = self.make(battery_voltage=20.0, min_battery_voltage=24.0)
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "03", "why": "daytime"}])
+        self.assertEqual(service.sent, ["PCP01"])
+        self.assertIn("OVERRIDE", sched.get_state()["last_run"]["why"])
+
+    def test_solar_only_allowed_above_floor(self):
+        service, sched = self.make(battery_voltage=27.0, min_battery_voltage=24.0)
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "03", "why": "daytime"}])
+        self.assertEqual(service.sent, ["PCP03"])
+
+    def test_solar_only_downgraded_when_voltage_unknown(self):
+        service, sched = self.make(battery_voltage=None, min_battery_voltage=24.0)
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "03", "why": "daytime"}])
+        self.assertEqual(service.sent, ["PCP01"])
+
+    def test_corrupt_state_file_starts_disabled_rather_than_crashing(self):
+        with open(self.path, "w") as fh:
+            fh.write("{not json")
+        _, sched = self.make()
+        self.assertFalse(sched.get_state()["enabled"])
+
+
+class TestScheduleApi(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "web_schedule.json")
+
+    def test_get_without_scheduler_configured(self):
+        client = client_for(FakeService(), scheduler=None)
+        r = client.get("/api/schedule", headers=AUTH)
+        self.assertEqual(r.status_code, 501)
+        self.assertEqual(r.get_json()["code"], "no_scheduler")
+
+    def test_get_returns_current_state(self):
+        sched = Scheduler(FakeService(), self.path)
+        client = client_for(FakeService(), sched)
+        r = client.get("/api/schedule", headers=AUTH)
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.get_json()["enabled"])
+
+    def test_put_via_put_method(self):
+        service = FakeService()
+        sched = Scheduler(service, self.path)
+        client = client_for(service, sched)
+        frm, to = window_around_now()
+        r = client.put("/api/schedule", data=json.dumps(
+            {"enabled": True, "rules": [{"from": frm, "to": to, "pcp": "01", "why": "t"}]}),
+            content_type="application/json", headers=AUTH)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(service.sent, ["PCP01"])
+
+    def test_put_rejects_invalid_rules(self):
+        service = FakeService()
+        sched = Scheduler(service, self.path)
+        client = client_for(service, sched)
+        r = client.put("/api/schedule", data=json.dumps(
+            {"enabled": True, "rules": [{"from": "bad", "to": "17:00", "pcp": "01"}]}),
+            content_type="application/json", headers=AUTH)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["code"], "invalid_rules")
+        self.assertEqual(service.sent, [])
+
+    def test_put_requires_auth(self):
+        client = client_for(FakeService(), Scheduler(FakeService(), self.path))
+        r = client.put("/api/schedule", data=json.dumps({"enabled": False, "rules": []}),
+                       content_type="application/json")
+        self.assertEqual(r.status_code, 401)
+
+    def test_apply_now_forces_a_tick(self):
+        service = FakeService()
+        sched = Scheduler(service, self.path)
+        client = client_for(service, sched)
+        frm, to = window_around_now()
+        client.put("/api/schedule", data=json.dumps(
+            {"enabled": True, "rules": [{"from": frm, "to": to, "pcp": "02", "why": "t"}]}),
+            content_type="application/json", headers=AUTH)
+        service.sent.clear()
+        r = post(client, "/api/schedule/apply-now", {"force": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["result"]["applied"])
+        self.assertEqual(service.sent, ["PCP02"])
+
+    def test_read_only_server_stores_but_does_not_apply(self):
+        service = FakeService(allow_writes=False)
+        sched = Scheduler(service, self.path)
+        client = client_for(service, sched)
+        frm, to = window_around_now()
+        r = client.put("/api/schedule", data=json.dumps(
+            {"enabled": True, "rules": [{"from": frm, "to": to, "pcp": "02", "why": "t"}]}),
+            content_type="application/json", headers=AUTH)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["enabled"])   # stored
+        self.assertEqual(service.sent, [])          # not applied
 
 
 class TestConfigDurability(unittest.TestCase):

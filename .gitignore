@@ -10,3 +10,7 @@ charge_schedule.err
 # web server config -- contains the API token and session secret
 web.json
 web.log
+
+# built-in scheduler's rule storage -- instance-specific runtime config
+web_schedule.json
+web_schedule.json.tmp
