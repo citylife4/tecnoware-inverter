@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tecnoware.chargeschedule</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/jdvalverde/dev/tecnoware/inverter_ctl/charge_schedule.py</string>
+        <string>/Users/jdvalverde/dev/tecnoware/inverter_ctl/schedule.json</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jdvalverde/dev/tecnoware/inverter_ctl</string>
+
+    <!-- run every 10 minutes; the script is idempotent and no-ops when the
+         inverter is already on the right setting -->
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jdvalverde/dev/tecnoware/inverter_ctl/charge_schedule.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jdvalverde/dev/tecnoware/inverter_ctl/charge_schedule.err</string>
+</dict>
+</plist>

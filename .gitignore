@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# runtime state, not source
+.charge_schedule_state.json
+charge_schedule.log
+charge_schedule.err
