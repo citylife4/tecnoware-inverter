@@ -168,16 +168,44 @@ during this session (empty response) — the dashboard's own `/api/live` was
 the only integration point that worked, which is why `grid_charge.py` goes
 through it rather than querying the meter directly.
 
+**2026-08-23, same session:** the grid Shelly was found to be powered off.
+`fetch_shelly_solar()`/`fetch_shelly_grid()` used to return `0.0` on any
+failure — indistinguishable from a genuine zero reading. Fixed to return
+`None`, propagated through `routes.py`, `collector.py`, `metrics.py`, and
+`dashboard.html` (which needed two null-guards of its own:
+`formatPowerValue(null)` threw, and `null >= 0` is `true` in JS, so a
+missing reading was silently displaying as "importing"). Also fixed
+`.gitignore` — `wallet**/**` isn't the recursive glob it looks like (only a
+full path segment), so it missed `.wallet_unzipped/`, a real unzipped
+Oracle wallet with `cwallet.sso`/`ewallet.p12`/`ewallet.pem` in it, sitting
+untracked-but-not-ignored. Now `*[Ww]allet*`. Pushed to
+`citylife4/palacoulo-homedash`.
+
+**Once the Shelly came back with real data, grid-export charging flapped
+PCP01↔PCP03 every ~2 minutes for 5+ hours** (14:03–19:09) before anyone
+noticed — the original ±50W/+20W hysteresis band was a guess, and this
+house's `net_balance` swings by hundreds of watts routinely (confirmed via
+`auto-energy`'s own `/api/history`: 10-min averages 80W–1400W, one spike
+over 2500W). Cross-checked `battery_net_current` from the inverter's own
+history to rule out a charging-induced feedback loop — it stayed at 0A
+almost the whole time (pack was already above its recharge threshold), so
+this was pure wasted SET-command churn, not unsafe, just pointless.
+Widened to -150W/+150W and the anti-flap dwell from 120s to 300s, in both
+the live deployed config and `DEFAULT_CONFIG` in `webapp/grid_charge.py`.
+**The export side of that number is still unvalidated** — no real export
+data has been observed yet (fixed after sunset the same day). Worth
+checking `/api/audit` for `grid_export` entries the next time there's
+actually sun, to see whether -150W turns out to need tuning the same way.
+
 ## What's not done / open questions
 
 - The macOS `launchd` plist for the old standalone `charge_schedule.py`
   still exists but was never loaded — moot now that scheduling lives in
   the web server; probably delete it next time this is touched.
-- Neither automation (time-of-day scheduler nor grid-export charging) is
-  currently enabled on the deployed server — both work (unit- and
-  live-tested against the real inverter) but nobody has turned one on for
-  real use yet. Per the user's explicit choice, grid-export is the
-  intended one; the scheduler is available but not the recommended path.
+- **Grid-export charging is enabled on the deployed server** as of
+  2026-08-23 (thresholds -150W/+150W, 300s dwell — see the flapping
+  incident above). The time-of-day scheduler is available but disabled;
+  per the user's explicit choice grid-export is the intended automation.
 - Grid-export charging's `source_url` defaults to
   `http://192.168.188.11:8000/api/live` (this machine, `palacoulo-rasp`) —
   if `auto-energy` ever moves hosts, that default (and the deployed
