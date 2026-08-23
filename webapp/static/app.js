@@ -499,10 +499,15 @@ function wireSchedule() {
 
 let gridChargeState = null;
 
+/* export_threshold_w is stored negative internally (net_balance < 0 means
+   exporting) but shown to the user as a plain positive "watts exported"
+   number -- "start once exporting more than 50W" reads far better than
+   "start once net balance drops below -50W". Type "negnum" flips the sign
+   on the way in and out; everything else passes straight through. */
 const GC_FIELDS = [
   ["gc-source-url", "source_url", "str"],
   ["gc-poll-interval", "poll_interval", "num"],
-  ["gc-export-threshold", "export_threshold_w", "num"],
+  ["gc-export-threshold", "export_threshold_w", "negnum"],
   ["gc-import-threshold", "import_threshold_w", "num"],
   ["gc-min-switch", "min_switch_interval", "num"],
   ["gc-stale-after", "stale_after", "num"],
@@ -517,9 +522,10 @@ function renderGridCharge(state) {
   $("#gc-status").className = `badge ${state.enabled ? "" : "muted"}`;
   if (!state.allow_writes) $("#gc-status").textContent += " (server read-only — not applied)";
 
-  GC_FIELDS.forEach(([id, key]) => {
+  GC_FIELDS.forEach(([id, key, type]) => {
     const el = document.querySelector(`#${id}`);
-    if (el && document.activeElement !== el) el.value = state[key];
+    if (!el || document.activeElement === el) return;
+    el.value = type === "negnum" ? Math.abs(state[key]) : state[key];
   });
 
   const c = state.current || {};
@@ -548,7 +554,8 @@ function readGridChargeForm() {
   const out = { enabled: gridChargeState.enabled };
   GC_FIELDS.forEach(([id, key, type]) => {
     const el = document.querySelector(`#${id}`);
-    out[key] = type === "num" ? Number(el.value) : el.value;
+    if (type === "negnum") out[key] = -Math.abs(Number(el.value));
+    else out[key] = type === "num" ? Number(el.value) : el.value;
   });
   return out;
 }
