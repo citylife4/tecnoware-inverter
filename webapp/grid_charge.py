@@ -57,16 +57,26 @@ DEFAULT_CONFIG = {
     "http_timeout": 5.0,
     # Hysteresis band, in watts of net_balance (negative = exporting).
     # Must export past this to start charging...
-    "export_threshold_w": -50.0,
-    # ...and come back up to this (still allows a small export/self-use
-    # margin) before stopping. The gap between the two absorbs normal
-    # household load noise (a kettle, a fridge cycling) without flapping.
-    "import_threshold_w": 20.0,
+    #
+    # -50/+20 (a 70W band) was the original guess and it was wrong: live on
+    # this house, net_balance swings by hundreds of watts routinely (10-min
+    # averages from 80W up to 1400W import, one instantaneous spike over
+    # 2500W -- ordinary appliances cycling, not a fault) with battery
+    # charging current staying at 0A the whole time (the pack was already
+    # above its recharge threshold), so none of that flapping even charged
+    # anything. It re-triggered every ~120s for 5+ hours before anyone
+    # noticed. 150/150 (a 300W band) is sized off that real data.
+    "export_threshold_w": -150.0,
+    # ...and come back up to this before stopping. The gap between the two
+    # absorbs normal household load noise without flapping.
+    "import_threshold_w": 150.0,
     # Don't flip state more than once per this many seconds, even if the
     # hysteresis says to -- PCP writes take up to ~10s on this hardware and
     # rapid toggling serves no purpose. The low-battery safety override
-    # bypasses this deliberately (see _tick).
-    "min_switch_interval": 120.0,
+    # bypasses this deliberately (see _tick). Widened from 120s alongside
+    # the thresholds above, as a second line of defense against the same
+    # flapping incident.
+    "min_switch_interval": 300.0,
     # If no successful read in this long, treat the export state as
     # unknown rather than trusting a stale number.
     "stale_after": 120.0,

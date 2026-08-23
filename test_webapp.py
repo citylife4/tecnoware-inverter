@@ -558,21 +558,21 @@ class TestGridChargeController(unittest.TestCase):
         self.assertFalse(gc.get_state()["enabled"])
 
     def test_exporting_enables_charging(self):
-        service, _, gc = self.make(net_balance=-100)
+        service, _, gc = self.make(net_balance=-200)
         gc.set_config({"enabled": True, "min_switch_interval": 0})
         self.assertEqual(service.sent, ["PCP01"])
         self.assertEqual(service.sent_sources, ["grid_export"])
 
     def test_importing_keeps_idle(self):
-        service, _, gc = self.make(net_balance=100)
+        service, _, gc = self.make(net_balance=200)
         gc.set_config({"enabled": True, "min_switch_interval": 0})
         self.assertEqual(service.sent, ["PCP03"])
 
     def test_deadband_holds_previous_state(self):
-        service, stub, gc = self.make(net_balance=-100)   # exporting
+        service, stub, gc = self.make(net_balance=-200)   # exporting
         gc.set_config({"enabled": True, "min_switch_interval": 0})
         self.assertEqual(service.sent, ["PCP01"])
-        stub.net_balance = -10   # inside the -50..20 dead-band
+        stub.net_balance = -10   # inside the -150..150 dead-band
         gc.tick()
         # Desired state carries over ("charging"), so target is unchanged
         # and nothing new is sent -- this is the hysteresis, not a bug.
@@ -591,7 +591,7 @@ class TestGridChargeController(unittest.TestCase):
         self.assertEqual(service.sent, ["PCP03"])
 
     def test_stale_reading_falls_back_to_idle(self):
-        service, stub, gc = self.make(net_balance=-100)
+        service, stub, gc = self.make(net_balance=-200)
         gc.set_config({"enabled": True, "min_switch_interval": 0, "stale_after": 0})
         self.assertEqual(service.sent, ["PCP01"])
         stub.net_balance = None   # dashboard now unreachable
@@ -599,7 +599,7 @@ class TestGridChargeController(unittest.TestCase):
         self.assertEqual(service.sent, ["PCP01", "PCP03"])
 
     def test_read_only_service_blocks_apply(self):
-        service, _, gc = self.make(net_balance=-100, allow_writes=False)
+        service, _, gc = self.make(net_balance=-200, allow_writes=False)
         gc.set_config({"enabled": True, "min_switch_interval": 0})
         self.assertEqual(service.sent, [])
         self.assertIn("read-only", gc.get_state()["last_run"]["note"])
@@ -619,18 +619,18 @@ class TestGridChargeController(unittest.TestCase):
         self.assertEqual(service.sent, ["PCP01"])
 
     def test_force_bypasses_dwell_time(self):
-        service, stub, gc = self.make(net_balance=-100)
+        service, stub, gc = self.make(net_balance=-200)
         gc.set_config({"enabled": True, "min_switch_interval": 99999})
         self.assertEqual(service.sent, ["PCP01"])
-        stub.net_balance = 100   # now importing
+        stub.net_balance = 200   # now importing
         gc.tick(force=True)
         self.assertEqual(service.sent, ["PCP01", "PCP03"])
 
     def test_dwell_time_blocks_without_force(self):
-        service, stub, gc = self.make(net_balance=-100)
+        service, stub, gc = self.make(net_balance=-200)
         gc.set_config({"enabled": True, "min_switch_interval": 99999})
         self.assertEqual(service.sent, ["PCP01"])
-        stub.net_balance = 100
+        stub.net_balance = 200
         gc.tick()
         self.assertEqual(service.sent, ["PCP01"])   # held, not resent
         self.assertIn("anti-flap", gc.get_state()["last_run"]["note"])
@@ -649,7 +649,7 @@ class TestGridChargeApi(unittest.TestCase):
 
     def test_put_via_put_method_applies_immediately(self):
         service = FakeService()
-        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-100))
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200))
         client = client_for(service, grid_charge=gc)
         r = client.put("/api/grid-charge", data=json.dumps(
             {"enabled": True, "min_switch_interval": 0}),
