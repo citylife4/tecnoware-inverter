@@ -235,6 +235,52 @@ tapers to float and draws almost nothing, so there is no way to absorb
 export at that point via PCP. Genuinely fixing that needs a dump load or a
 controllable appliance, not this inverter.
 
+## Battery bank + a PBCV format asymmetry (2026-08-24)
+
+The pack is **2 x Xunzel SOLARX 30 (12 V 30 Ah deep-cycle lead-acid) in
+series = 24 V 30 Ah**, i.e. **720 Wh total, ~360 Wh usable** at the 50% DoD
+lead-acid wants. For scale that is ~10% of this house's ~3.5 kWh daily
+import, or 10-15 minutes at the water pump's ~1.5 kW. It is a small UPS,
+not an energy store -- worth remembering before anyone designs another
+"capture the surplus to save money" feature around it.
+
+That also explains the SOC readings: 24 V is the bank's *nominal* name, not
+its full voltage. A 24 V lead-acid rests at ~25.5 V when full and ~24.2 V
+at 50%, so the inverter reporting 50% at 24.1 V is roughly right. The 100%
+it shows at 28.2 V is *not* a real SOC -- that is charging voltage, and
+this unit has no coulomb counter, it just maps voltage to a percentage.
+
+**Charge rate is above spec and could not be fixed over the wire.** The
+charger pushes 18-20 A into a 30 Ah bank (~C/1.5) and barely tapers;
+deep-cycle lead-acid wants C/10-C/5, i.e. 3-6 A. `max_ac_charging_current`
+in QPIRI reads 60 A. But `QCHGC` and `QMCC` both NAK, and `CHGC`/`MCHGC`
+are not in this unit's verified-working set, so the limit likely has to be
+changed from the inverter's front panel. Left as-is, flagged to the user.
+
+**`PBCV` takes the PACK voltage, not the per-12V-block value** -- the
+opposite of how `QPIRI` reports the same setpoint (parsers.py scales the
+read by BATTERY_SETPOINT_SCALE=2). Determined by testing rather than
+assumed:
+
+    PBCV11.0  -> (NAK   <- the per-block value QPIRI currently reports!
+    PBCV12.0  -> (NAK
+    PBCV12.3  -> (NAK
+    PBCV22.0  -> (ACK   <- pack volts, matches the current setting
+    PBCV24.0  -> (ACK
+
+Since 11.0 is exactly what QPIRI reports and it is *rejected*, the
+per-block reading is ruled out. Read per-block, write pack volts. Assume
+the same asymmetry for the other `PBxx`/`PSDV` setpoint writes until
+someone tests them.
+
+**Unverified:** `PBCV24.0` ACKed (intent: recharge at 50% instead of the
+near-flat 22.0 V) but QPIRI still reports 22.0 V, and gotcha #1 says QPIRI
+never reflects a change -- so ACK-but-unconfirmed, exactly the trap that
+caused the original PCP incident. Confirming it needs the pack to actually
+sit near 24 V in battery mode and be seen to start recharging; it was at
+28.2 V on charge at the time, so that could not be tested. **Do not record
+this as "done" until it has been observed behaving.**
+
 ## Related project on this network: `auto-energy`
 
 `~/dev/auto-energy` on `palacoulo-rasp` (this machine) — a Flask dashboard
