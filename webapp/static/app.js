@@ -527,6 +527,7 @@ let gridChargeState = null;
    "start once net balance drops below -50W". Type "negnum" flips the sign
    on the way in and out; everything else passes straight through. */
 const GC_FIELDS = [
+  ["gc-mode", "mode", "str"],
   ["gc-source-url", "source_url", "str"],
   ["gc-poll-interval", "poll_interval", "num"],
   ["gc-export-threshold", "export_threshold_w", "negnum"],

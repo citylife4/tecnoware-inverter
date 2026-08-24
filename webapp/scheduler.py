@@ -70,10 +70,17 @@ class Scheduler:
     it. Writes go through InverterService, so they share its lock, retry
     behaviour, and audit log with every other write source."""
 
-    def __init__(self, service, path: str, poll_interval: float = 60.0):
+    def __init__(self, service, path: str, poll_interval: float = 60.0,
+                 override_check=None):
         self.service = service
         self.path = path
         self.poll_interval = poll_interval
+        # Callable devolvendo True quando outro controlador está a impor o
+        # PCP neste momento e o agendamento deve ficar de fora -- ver
+        # GridChargeController.is_overriding(). Sem isto, os dois escreviam
+        # PCP em cadências diferentes (60s vs 30s) e ficavam a lutar um com
+        # o outro. None = ninguém sobrepõe (comportamento de sempre).
+        self._override_check = override_check
 
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -150,6 +157,16 @@ class Scheduler:
         target, override = apply_low_battery_floor(self.service, rule["pcp"])
         return rule, target, why, override
 
+    def _is_overridden(self) -> bool:
+        if self._override_check is None:
+            return False
+        try:
+            return bool(self._override_check())
+        except Exception:
+            # Um erro a perguntar "estás a sobrepor?" não pode derrubar o
+            # agendamento; assume-se que não sobrepõe e segue-se em frente.
+            return False
+
     def tick(self, force: bool = False, now=None) -> dict:
         """Evaluate the schedule and apply it if enabled. Public so the
         dashboard's "apply now" button and tests can drive it directly.
@@ -167,6 +184,15 @@ class Scheduler:
 
         if not self._state["enabled"]:
             result["note"] = "scheduler disabled"
+        elif self._is_overridden():
+            # Limpa o último PCP aplicado pela mesma razão que
+            # grid_charge.py o faz ao ceder: assim que a sobreposição
+            # terminar, o agendamento volta mesmo a escrever a sua regra,
+            # em vez de concluir "já está em PCPxx" a partir de um valor
+            # que a sobreposição entretanto substituiu.
+            self._last_applied_pcp = None
+            result["note"] = ("carregamento por excedente está a impor o PCP "
+                              "— agendamento em espera")
         elif rule is None:
             result["note"] = "no rule matches the current time"
         elif not self.service.allow_writes:

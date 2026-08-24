@@ -183,6 +183,44 @@ protocol code. Deployed to `palacoulo-inverter`. Two things to know:
    web service both survived the reboot cleanly (systemd auto-restart,
    `web_gridcharge.json` persisted correctly) — no data or state was lost.
 
+## Zero-export requirement + the two automations (2026-08-24)
+
+**Exporting to the grid is not permitted at this installation** (user says
+it's illegal for them). That reframes the grid-export feature entirely: it
+is a *compliance* mechanism (dump load when export appears), not an
+economic optimisation. Do not "simplify" it away on efficiency grounds.
+
+Hard numbers measured this day, worth not re-deriving:
+
+- Panels: **193 W peak ever**, ~150 W typical, ~106 W peak on a cloudy day.
+- Charger draw: **350-560 W** (13-21 A x 24-28 V), and it does **not**
+  throttle below ~350 W. So the panels can never power the charger.
+- Actual export: **0.0-0.14 kWh/day** (avg 0.13). Solar is ~100%
+  self-consumed already. Whole-month exported 3.15 kWh vs 83 kWh imported.
+
+`webapp/grid_charge.py` now has a `mode`:
+
+- `"exclusive"` -- original behaviour, owns PCP outright, mutually
+  exclusive with the scheduler.
+- `"override"` -- **the mode this installation uses**. Only writes PCP
+  while exporting; otherwise writes nothing and lets the scheduler decide.
+  `is_overriding()` is handed to `Scheduler(override_check=...)` in
+  serve.py so the scheduler stands down instead of fighting it (they poll
+  at 30s vs 60s and would otherwise overwrite each other). Both sides clear
+  their cached `_last_applied_pcp` when they yield, so the other one's
+  write doesn't leave them thinking "already set".
+
+Deployed config: schedule `08:00-20:00 -> PCP03` (day: only charge from
+surplus, via the override) and `20:00-08:00 -> PCP01` (night: charge from
+grid so the pack isn't left partially charged); grid-charge in `override`
+with start at **0 W** export, stop at 400 W import, 60 s dwell.
+
+**Known limitation, not yet solved:** the override can only absorb export
+by *starting the charger*. If the battery is already full the charger
+tapers to float and draws almost nothing, so there is no way to absorb
+export at that point via PCP. Genuinely fixing that needs a dump load or a
+controllable appliance, not this inverter.
+
 ## Related project on this network: `auto-energy`
 
 `~/dev/auto-energy` on `palacoulo-rasp` (this machine) — a Flask dashboard

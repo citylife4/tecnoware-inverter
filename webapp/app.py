@@ -226,12 +226,33 @@ def create_app(service, scheduler=None, grid_charge=None, *,
         return _fail("grid-export charging not configured on this server",
                      code="no_grid_charge", status=501)
 
-    def _reject_if_other_enabled(enabling: bool, other, other_name: str):
-        if enabling and other is not None and other.get_state()["enabled"]:
-            raise CommandRejected(
-                f"cannot enable this while {other_name} is enabled -- they both "
-                f"drive charger priority and would fight each other",
-                hint=f"disable {other_name} first", code="conflicting_automation")
+    def _conflict(other_name: str):
+        raise CommandRejected(
+            f"cannot enable this while {other_name} is enabled -- they both "
+            f"drive charger priority and would fight each other",
+            hint=f'disable {other_name} first, or set grid-export charging to '
+                 f'mode "override" so they can work together',
+            code="conflicting_automation")
+
+    def _check_schedule_enable(enabling: bool):
+        """Ao ativar o agendamento: só há conflito se o carregamento por
+        excedente estiver ativo E em modo "exclusive". Em "override" foram
+        feitos para coexistir -- ver webapp/grid_charge.py MODES."""
+        if not enabling or grid_charge is None:
+            return
+        st = grid_charge.get_state()
+        if st["enabled"] and st.get("mode") == "exclusive":
+            _conflict("grid-export charging")
+
+    def _check_gridcharge_enable(enabling: bool, mode: str):
+        """Ao ativar o carregamento por excedente: só há conflito se estiver
+        a ser posto em modo "exclusive". `mode` é o modo PEDIDO, não o
+        guardado -- olhar para o guardado dava sempre "não exclusivo" quando
+        ainda está desativado, e deixava passar o conflito."""
+        if not enabling or scheduler is None or mode != "exclusive":
+            return
+        if scheduler.get_state()["enabled"]:
+            _conflict("the time-of-day schedule")
 
     @app.route("/api/schedule")
     def api_schedule_get():
@@ -251,7 +272,7 @@ def create_app(service, scheduler=None, grid_charge=None, *,
         body = request.get_json(silent=True) or {}
         enabled = bool(body.get("enabled", False))
         try:
-            _reject_if_other_enabled(enabled, grid_charge, "grid-export charging")
+            _check_schedule_enable(enabled)
             state = scheduler.set_state(enabled, body.get("rules", []))
         except CommandRejected as e:
             return _fail(e.message, code=e.code, status=409, hint=e.hint)
@@ -283,8 +304,8 @@ def create_app(service, scheduler=None, grid_charge=None, *,
             return _no_grid_charge()
         body = request.get_json(silent=True) or {}
         try:
-            _reject_if_other_enabled(bool(body.get("enabled", False)),
-                                     scheduler, "the time-of-day schedule")
+            _check_gridcharge_enable(bool(body.get("enabled", False)),
+                                     str(body.get("mode", "exclusive")))
             state = grid_charge.set_config(body)
         except CommandRejected as e:
             return _fail(e.message, code=e.code, status=409, hint=e.hint)

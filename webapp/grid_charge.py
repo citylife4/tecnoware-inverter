@@ -48,8 +48,23 @@ from transport import InverterError
 from webapp.atomic_write import write_json_atomic
 from webapp.safety import PCP_VALUES, apply_low_battery_floor
 
+# Como é que este controlador se relaciona com o agendamento horário:
+#
+#   "exclusive" -- comportamento original: controla o PCP sozinho (carrega
+#       quando há excedente, não carrega caso contrário). Mutuamente
+#       exclusivo com o agendamento, porque os dois escreveriam PCP.
+#
+#   "override"  -- só atua QUANDO há exportação: nessa altura força o
+#       carregamento para consumir o excedente. Sem excedente, não escreve
+#       nada e deixa a decisão ao agendamento. Serve o caso em que exportar
+#       para a rede não é permitido e é preciso acrescentar carga à casa
+#       sempre que isso acontece, mantendo na mesma um horário de
+#       carregamento normal por baixo.
+MODES = ("exclusive", "override")
+
 DEFAULT_CONFIG = {
     "enabled": False,
+    "mode": "exclusive",
     # The auto-energy dashboard's live-telemetry endpoint. Runs on
     # palacoulo-rasp in this deployment; adjust if that ever moves.
     "source_url": "http://192.168.188.11:8000/api/live",
@@ -100,6 +115,9 @@ def validate_config(cfg: dict) -> dict:
         raise ValueError(f"unknown config key(s): {sorted(unknown)}")
     out.update(cfg)
     out["enabled"] = bool(out["enabled"])
+
+    if out["mode"] not in MODES:
+        raise ValueError(f"mode must be one of {list(MODES)}, got {out['mode']!r}")
 
     if not isinstance(out["source_url"], str) or not out["source_url"].startswith(
             ("http://", "https://")):
@@ -213,6 +231,21 @@ class GridChargeController:
                 self._tick(force=True)
         return self.get_state()
 
+    def is_overriding(self) -> bool:
+        """True quando este controlador está, neste momento, a impor o
+        carregamento e o agendamento deve ficar de fora.
+
+        Usa a decisão do último tick (`self._desired`) em vez de ir buscar
+        uma leitura nova: o agendamento corre a cada 60s e este a cada 30s,
+        por isso o valor está sempre fresco, e assim evita-se um pedido HTTP
+        extra (e uma possível divergência) a cada verificação do
+        agendamento.
+        """
+        with self._lock:
+            return (self._config["enabled"]
+                    and self._config["mode"] == "override"
+                    and self._desired == "charging")
+
     def set_enabled(self, enabled: bool) -> dict:
         """Flip the enabled flag alone, keeping every other setting --
         used for the schedule/grid-export mutual-exclusion check in
@@ -291,6 +324,14 @@ class GridChargeController:
 
         if not cfg["enabled"]:
             result["note"] = "grid-export charging disabled"
+        elif cfg["mode"] == "override" and desired != "charging":
+            # Modo "override": sem excedente não escrevemos nada -- quem
+            # manda é o agendamento. Limpamos o último PCP aplicado para
+            # que a próxima exportação volte mesmo a escrever, em vez de
+            # concluir "já está em PCPxx" a partir de um valor que
+            # entretanto o agendamento já substituiu.
+            self._last_applied_pcp = None
+            result["note"] = "sem excedente — decisão entregue ao agendamento"
         elif not self.service.allow_writes:
             result["note"] = "server is read-only; not applied"
         elif target == self._last_applied_pcp and not force:

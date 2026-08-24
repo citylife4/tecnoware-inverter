@@ -139,11 +139,16 @@ def main() -> int:
     )
     service.start()
 
-    scheduler = Scheduler(service, path=cfg["schedule_config"],
-                          poll_interval=float(cfg["schedule_poll_interval"]))
-    scheduler.start()
-
+    # O carregamento por excedente é criado primeiro para que o
+    # agendamento lhe possa perguntar, a cada tick, se está a sobrepor-se
+    # -- sem isso os dois escreviam PCP em cadências diferentes e ficavam
+    # a lutar um com o outro. Ver GridChargeController.is_overriding().
     grid_charge = GridChargeController(service, path=cfg["gridcharge_config"])
+
+    scheduler = Scheduler(service, path=cfg["schedule_config"],
+                          poll_interval=float(cfg["schedule_poll_interval"]),
+                          override_check=grid_charge.is_overriding)
+    scheduler.start()
     grid_charge.start()
 
     app = create_app(service, scheduler, grid_charge, token=cfg["token"],

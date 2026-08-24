@@ -365,6 +365,158 @@ class TestLastKnownPrioritiesInStatus(unittest.TestCase):
         self.assertEqual(body["last_known_priorities"]["POP"]["value"], "02")
 
 
+class TestOverrideMode(unittest.TestCase):
+    """Modo "override": exportar para a rede não é permitido nesta
+    instalação, por isso o excedente tem de ser absorvido acrescentando
+    carga -- mas o agendamento horário continua a mandar o resto do tempo.
+    Os dois têm de coexistir sem escreverem PCP um por cima do outro."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.gc_path = os.path.join(self.dir, "web_gridcharge.json")
+        self.sched_path = os.path.join(self.dir, "web_schedule.json")
+
+    def make_pair(self, net_balance, service=None):
+        service = service or FakeService()
+        stub = FetchStub(net_balance)
+        gc = GridChargeController(service, self.gc_path, fetch_fn=stub)
+        sched = Scheduler(service, self.sched_path,
+                          override_check=gc.is_overriding)
+        return service, stub, gc, sched
+
+    # ---- validation ----
+    def test_rejects_unknown_mode(self):
+        with self.assertRaises(ValueError):
+            validate_config({"mode": "whatever"})
+
+    def test_default_mode_is_exclusive(self):
+        self.assertEqual(validate_config({})["mode"], "exclusive")
+
+    # ---- is_overriding ----
+    def test_not_overriding_when_disabled(self):
+        _, _, gc, _ = self.make_pair(-300)
+        gc.set_config({"mode": "override", "enabled": False,
+                       "export_threshold_w": -150, "min_switch_interval": 0})
+        self.assertFalse(gc.is_overriding())
+
+    def test_not_overriding_in_exclusive_mode(self):
+        _, _, gc, _ = self.make_pair(-300)
+        gc.set_config({"mode": "exclusive", "enabled": True,
+                       "export_threshold_w": -150, "min_switch_interval": 0})
+        self.assertFalse(gc.is_overriding())   # exclusive never "overrides"
+
+    def test_overriding_only_while_exporting(self):
+        _, stub, gc, _ = self.make_pair(-300)
+        gc.set_config({"mode": "override", "enabled": True,
+                       "export_threshold_w": -150, "import_threshold_w": 150,
+                       "min_switch_interval": 0})
+        self.assertTrue(gc.is_overriding())
+        stub.net_balance = 400          # a importar
+        gc.tick()
+        self.assertFalse(gc.is_overriding())
+
+    # ---- who writes PCP ----
+    def test_override_writes_while_exporting(self):
+        service, _, gc, _ = self.make_pair(-300)
+        gc.set_config({"mode": "override", "enabled": True,
+                       "export_threshold_w": -150, "min_switch_interval": 0})
+        self.assertEqual(service.sent, ["PCP01"])
+
+    def test_override_writes_nothing_when_not_exporting(self):
+        service, _, gc, _ = self.make_pair(400)
+        gc.set_config({"mode": "override", "enabled": True,
+                       "export_threshold_w": -150, "import_threshold_w": 150,
+                       "min_switch_interval": 0})
+        self.assertEqual(service.sent, [])      # deixa o agendamento decidir
+        self.assertIn("agendamento", gc.get_state()["last_run"]["note"])
+
+    def test_scheduler_stands_down_while_override_active(self):
+        service, _, gc, sched = self.make_pair(-300)
+        gc.set_config({"mode": "override", "enabled": True,
+                       "export_threshold_w": -150, "min_switch_interval": 0})
+        service.sent.clear()
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "03", "why": "dia"}])
+        self.assertEqual(service.sent, [])      # não escreve por cima
+        self.assertIn("espera", sched.get_state()["last_run"]["note"])
+
+    def test_scheduler_resumes_once_export_stops(self):
+        service, stub, gc, sched = self.make_pair(-300)
+        gc.set_config({"mode": "override", "enabled": True,
+                       "export_threshold_w": -150, "import_threshold_w": 150,
+                       "min_switch_interval": 0})
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "03", "why": "dia"}])
+        service.sent.clear()
+
+        stub.net_balance = 400      # excedente acabou
+        gc.tick()                   # cede
+        sched.tick()                # agendamento retoma
+        self.assertEqual(service.sent, ["PCP03"])
+
+    def test_low_battery_floor_still_applies_in_override(self):
+        service = FakeService(battery_voltage=20.0, min_battery_voltage=24.0)
+        _, _, gc, _ = self.make_pair(-300, service=service)
+        gc.set_config({"mode": "override", "enabled": True, "idle_pcp": "03",
+                       "charge_pcp": "03",   # pediríamos 03...
+                       "export_threshold_w": -150, "min_switch_interval": 0})
+        self.assertEqual(service.sent, ["PCP01"])   # ...mas o piso força 01
+
+    # ---- API coexistence ----
+    def test_api_allows_both_when_grid_charge_is_override(self):
+        service = FakeService()
+        gc = GridChargeController(service, self.gc_path, fetch_fn=FetchStub(-300))
+        gc.set_config({"mode": "override", "enabled": True,
+                       "export_threshold_w": -150, "min_switch_interval": 0})
+        sched = Scheduler(service, self.sched_path, override_check=gc.is_overriding)
+        client = client_for(service, sched, gc)
+        frm, to = window_around_now()
+        r = client.put("/api/schedule", data=json.dumps(
+            {"enabled": True, "rules": [{"from": frm, "to": to, "pcp": "01", "why": "t"}]}),
+            content_type="application/json", headers=AUTH)
+        self.assertEqual(r.status_code, 200)
+
+    def test_api_still_refuses_when_grid_charge_is_exclusive(self):
+        service = FakeService()
+        gc = GridChargeController(service, self.gc_path, fetch_fn=FetchStub(-300))
+        gc.set_config({"mode": "exclusive", "enabled": True,
+                       "export_threshold_w": -150, "min_switch_interval": 0})
+        sched = Scheduler(service, self.sched_path, override_check=gc.is_overriding)
+        client = client_for(service, sched, gc)
+        frm, to = window_around_now()
+        r = client.put("/api/schedule", data=json.dumps(
+            {"enabled": True, "rules": [{"from": frm, "to": to, "pcp": "01", "why": "t"}]}),
+            content_type="application/json", headers=AUTH)
+        self.assertEqual(r.status_code, 409)
+
+    def test_api_refuses_exclusive_grid_charge_while_schedule_on(self):
+        # Regression: this used to slip through, because the check looked at
+        # the STORED mode (still disabled -> "not exclusive") instead of the
+        # mode being requested.
+        service = FakeService()
+        gc = GridChargeController(service, self.gc_path, fetch_fn=FetchStub(-300))
+        sched = Scheduler(service, self.sched_path, override_check=gc.is_overriding)
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "01", "why": "t"}])
+        client = client_for(service, sched, gc)
+        r = client.put("/api/grid-charge", data=json.dumps(
+            {"enabled": True, "mode": "exclusive"}),
+            content_type="application/json", headers=AUTH)
+        self.assertEqual(r.status_code, 409)
+
+    def test_api_allows_override_grid_charge_while_schedule_on(self):
+        service = FakeService()
+        gc = GridChargeController(service, self.gc_path, fetch_fn=FetchStub(-300))
+        sched = Scheduler(service, self.sched_path, override_check=gc.is_overriding)
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "01", "why": "t"}])
+        client = client_for(service, sched, gc)
+        r = client.put("/api/grid-charge", data=json.dumps(
+            {"enabled": True, "mode": "override", "export_threshold_w": -150}),
+            content_type="application/json", headers=AUTH)
+        self.assertEqual(r.status_code, 200)
+
+
 class TestUiLabels(unittest.TestCase):
     """The pt-PT display labels must cover every code the API can emit --
     otherwise the dashboard silently falls back to an English string (or a

@@ -183,6 +183,11 @@
 
       <h3>Definições principais</h3>
       <div class="control-grid">
+        <label class="field">Modo
+          <select id="gc-mode">
+            <option value="override">Sobreposição — só atua ao exportar, resto fica com o agendamento</option>
+            <option value="exclusive">Exclusivo — controla o PCP sozinho (não pode ter agendamento ativo)</option>
+          </select></label>
         <label class="field">Começar a carregar ao exportar mais de (W)
           <input type="number" id="gc-export-threshold" min="0" step="1" required></label>
         <label class="field">Parar de carregar ao importar mais de (W)
@@ -191,6 +196,11 @@
       <p class="muted small">Entre estes dois valores o estado anterior mantém-se
         (histerese) &mdash; é isso que evita ligar e desligar constantemente com as
         variações normais de consumo da casa.</p>
+      <p class="muted small">Em <strong>sobreposição</strong>, sempre que houver
+        exportação isto força o carregamento para consumir o excedente; sem
+        exportação não escreve nada e a decisão volta ao agendamento. É o modo a
+        usar quando não é permitido injetar na rede. Em <strong>exclusivo</strong>
+        controla o PCP sozinho e o agendamento tem de estar desativado.</p>
 
       <div class="btnrow sched-actions">
         <button id="gc-save">Guardar definições</button>
