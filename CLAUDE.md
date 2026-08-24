@@ -16,6 +16,28 @@ the bundled Windows app does NOT support this inverter" sections.
 
 ## Hardware topology — CHECK THIS, it may have changed
 
+**THE PI IS POWERED FROM THE INVERTER.** Confirmed 2026-08-24: the user
+was asked to power-cycle the inverter for ~10 s to apply a front-panel
+setting, and `palacoulo-inverter` rebooted with `hwmon1: Undervoltage
+detected!` in its kernel log. This also explains the earlier 09:05
+"coincidence" — the inverter's Fault 01 event and the Pi's undervoltage
+reboot were not two symptoms of a shared circuit, they were one event:
+the inverter hiccuped, so the Pi lost power.
+
+Consequences, all learned the hard way:
+- **Never tell anyone to power-cycle the inverter without saying the Pi
+  goes down with it.** The monitoring dies exactly when something
+  interesting is happening.
+- Anything the Pi is mid-write on gets truncated. `web.json` was found
+  zero-length this way once; the telemetry CSV picked up a NUL block
+  (56 bytes, 1 row lost out of 1578). JSON config is written atomically;
+  the CSV is plain append by design, so **use `read_telemetry.py`**, which
+  skips corrupt lines instead of letting Python's csv module reject the
+  whole file over a few bytes.
+- The inverter cannot be rebooted to apply a setting without also
+  rebooting the logger, so expect a gap in `telemetry/` around every
+  front-panel change.
+
 **Changed on 2026-08-23:** the USB-serial adapter now lives on
 **`palacoulo-inverter`** (`valverde@192.168.188.20`, also reachable over
 Tailscale) as `/dev/ttyUSB0` — confirmed by a live `QPIGS`. It is no longer
@@ -211,7 +233,10 @@ load. The user has ruled out cutting the Shelly for now.
 
 ## Incident log
 
-- **2026-08-24 ~09:03-09:06 local — beeping, panel "Fault 01".** The Pi's
+- **2026-08-24 ~09:03-09:06 local — beeping, panel "Fault 01".** The
+  manual (section 5.5) confirms **Fault 01 = "Fan is locked when inverter
+  is off"** — the earlier guess was right but was unverified at the time.
+  Worth physically checking the fan spins freely. The Pi's
   own kernel log shows `hwmon1: Undervoltage detected!` at boot plus an
   unclean-shutdown journald message, so this was a genuine brief electrical
   disturbance on the shared circuit, not a software glitch. "Fault 01" is

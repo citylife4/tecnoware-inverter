@@ -596,6 +596,66 @@ class TestTelemetryLog(unittest.TestCase):
         svc._append_telemetry(self.snap)             # silencioso, sem excepção
 
 
+class TestTelemetryReader(unittest.TestCase):
+    """O Pi é alimentado pelo inversor, por isso qualquer corte
+    power-cycla o logger a meio de uma escrita. O leitor tem de aguentar
+    isso -- o csv do Python recusa o ficheiro inteiro por causa de um NUL,
+    o que deitaria fora milhares de linhas boas por causa de meia dúzia de
+    bytes."""
+
+    def setUp(self):
+        import read_telemetry
+        self.rt = read_telemetry
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "telemetry-2026-08-24.csv")
+        self.header = ("ts,mode,battery_voltage,battery_capacity,"
+                       "battery_charging_current,battery_discharge_current,"
+                       "ac_output_active_power,output_load_percent,"
+                       "grid_voltage,pv_charging_power,heatsink_temperature")
+
+    def write(self, body: bytes):
+        with open(self.path, "wb") as fh:
+            fh.write(self.header.encode() + b"\n" + body)
+
+    def test_reads_clean_file(self):
+        self.write(b"2026-08-24T12:00:00+00:00,L,27.0,100,4,0,1,0,231.0,0,26\n")
+        rows, skipped = self.rt.load(self.path)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(rows[0]["battery_voltage"], 27.0)
+
+    def test_skips_only_the_nul_line(self):
+        # O caso real: 56 bytes NUL a 97.8% do ficheiro, 1 linha perdida
+        # em 1578.
+        self.write(
+            b"2026-08-24T12:00:00+00:00,L,27.0,100,4,0,1,0,231.0,0,26\n"
+            b"2026-08-24T12:00:10+00:00,L,\x00\x00\x00,100,4,0,1,0,231.0,0,26\n"
+            b"2026-08-24T12:00:20+00:00,L,27.1,100,5,0,1,0,230.0,0,26\n")
+        rows, skipped = self.rt.load(self.path)
+        self.assertEqual(len(rows), 2)          # as boas sobrevivem
+        self.assertEqual(skipped, 1)
+
+    def test_reorders_replayed_tail(self):
+        # Um encerramento sujo pode deixar o fim do ficheiro fora de ordem.
+        self.write(
+            b"2026-08-24T12:00:20+00:00,L,27.2,100,4,0,1,0,231.0,0,26\n"
+            b"2026-08-24T12:00:00+00:00,L,27.0,100,4,0,1,0,231.0,0,26\n")
+        rows, _ = self.rt.load(self.path)
+        self.assertEqual([r["ts"][11:19] for r in rows],
+                         ["12:00:00", "12:00:20"])
+
+    def test_keeps_malformed_field_raw(self):
+        # Esta unidade emite mesmo coisas como "06P" -- não inventar número.
+        self.write(b"2026-08-24T12:00:00+00:00,L,27.0,100,06P,0,1,0,231.0,0,26\n")
+        rows, _ = self.rt.load(self.path)
+        self.assertEqual(rows[0]["battery_charging_current"], "06P")
+
+    def test_empty_field_becomes_none(self):
+        self.write(b"2026-08-24T12:00:00+00:00,L,27.0,,4,0,1,0,231.0,0,26\n")
+        rows, _ = self.rt.load(self.path)
+        self.assertIsNone(rows[0]["battery_capacity"])
+
+
 class TestUiLabels(unittest.TestCase):
     """The pt-PT display labels must cover every code the API can emit --
     otherwise the dashboard silently falls back to an English string (or a
