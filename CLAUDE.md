@@ -321,19 +321,47 @@ actually sun, to see whether -150W turns out to need tuning the same way.
 
 ## Loads on this installation
 
-- **Fridge — on the inverter's protected output.** ~45-46 W baseline
-  (compressor off), ~1223 W inrush when the compressor starts. Only visible
-  in `POP=02`; in bypass the inverter reports its 1 W placeholder
-  (gotcha #3). At 360 Wh usable that is roughly **4-8 h of backup**,
-  depending on duty cycle — the number still to be measured.
-- **Water pump — NOT on the inverter output.** Confirmed: while the house
-  drew 1623 W the inverter's output still read 1 W. Runs **20:00-21:00,
-  cycling roughly every 10 minutes**, peaking ~2 kW. The battery cannot
-  help with it: 1.5 kW from a 24 V bank is ~62 A, i.e. 2C on a 30 Ah pack,
-  which would sag the voltage and trip the cutoff almost immediately.
-  **If a charging schedule is ever added, keep it out of 20:00-21:00** —
-  stacking ~500 W of charger on top of the pump is worth avoiding.
-- Anything else on that output is **unconfirmed**.
+Everything below is on the inverter's **protected output** — stated by the
+user 2026-08-24:
+
+| Load | Notes |
+|---|---|
+| Fridge | ~45-46 W idle, ~1223 W compressor inrush |
+| **Water pump + remote** | **~2 kW, every ~10 min from 20:00-21:00. TRIPS THE INVERTER if run from battery.** |
+| Light | small |
+| Remote garage door | intermittent |
+| **Raspberry Pi** | the logger itself — see the topology warning above |
+
+**An earlier note here claimed the pump was NOT on the output. That was
+wrong.** It came from reading `ac_output_active_power` as 1 W at 20:58
+while the house drew 1623 W — but the inverter was in bypass, where that
+field is a fixed placeholder (gotcha #3). The measurement proved nothing;
+the conclusion was invented. Third time the bypass placeholder caused a
+wrong call, which is why the dashboard now renders it as "—".
+
+### The pump is a latent fault, not just an inconvenience
+
+The inverter is rated **3600 VA**. A ~2 kW motor's starting surge is
+several times its running draw, so the inverter cannot start it from
+battery — the user reports it trips.
+
+That risk is **not avoided by staying on `POP=00`**. In utility-first mode
+the inverter still transfers to battery automatically when the grid fails.
+So *any* grid outage between 20:00 and 21:00 will have the pump attempt to
+start on battery, trip the inverter, and drop the whole protected output —
+**fridge, light, garage door and the Pi included**. The backup is
+guaranteed to fail in exactly the window it is most likely to be tested.
+
+**Recommendation: move the pump off the protected output.** It is the one
+change that makes this battery do its job. The remaining loads (fridge +
+light + Pi, ~50-60 W) are a comfortable fit for ~360 Wh usable — roughly
+6 hours — and none of them have a surge the inverter can't handle.
+
+This also very likely explains the 2026-08-24 09:05 Fault 01: the unit was
+in `POP=02` (battery priority) at the time, so any large load starting
+would trip it, killing the output and with it the Pi — which is precisely
+what the kernel log shows. That is a better fit than the "brief electrical
+disturbance" originally guessed, though it remains unproven.
 
 ## Planned next session (2026-08-25)
 
@@ -347,9 +375,14 @@ Nothing needs to be left running on the assistant side.
    in bypass — use channel 1 for load.
 2. **Supervised battery-mode test** (~1-2 h, user present): switch to
    `POP=02`, measure real fridge consumption and duty cycle and the actual
-   discharge rate, then back to `POP=00`. **Do not leave `POP=02`
-   unattended** — it never recharges (gotcha #1), the low-battery floor is
-   dead in that mode, and the fridge would eventually lose power.
+   discharge rate, then back to `POP=00`.
+   - **Never inside 20:00-21:00** — the pump would try to start on battery
+     and trip the inverter, dropping the fridge, the light, the garage door
+     and the Pi at once.
+   - **Do not leave `POP=02` unattended.** The pack only recharges once it
+     falls to program 12's threshold (~23 V), the software low-battery
+     floor is dead in that mode (gotcha #1), and the Pi is on the same
+     output — so a flat battery takes the logger down with it.
 3. **Decide the POP strategy** with real numbers: if the fridge's daily
    draw is small enough that ~0.13 kWh/day of surplus meaningfully refills
    the pack, alternating POP is worth building; if it drains far faster
@@ -400,9 +433,10 @@ Do not record either as done until observed:
 - **Zero export cannot currently be guaranteed** — see the limitation under
   "Why grid-export exists here". Options are generation curtailment via the
   solar Shelly's relay (user has ruled it out for now) or a dump load.
-- Which loads besides the fridge are on the inverter's output is still
-  unconfirmed; the pump is **not** (measured 1 W output while the house
-  drew 1623 W).
+- **The pump shares the protected output and trips the inverter on
+  battery** — see "Loads on this installation". Moving it off is the
+  highest-value physical change available and blocks any reliable backup
+  until done.
 - The macOS `launchd` plist for the standalone `charge_schedule.py` is
   obsolete now scheduling lives in the server — probably delete it.
 - `grid_charge`'s `source_url` defaults to `http://192.168.188.11:8000`
