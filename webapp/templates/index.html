@@ -53,7 +53,9 @@
     <div class="charts" id="charts">
       <figure class="chart-card"><figcaption>Tensão da bateria <span class="unit">V</span><b id="lbl-batt"></b></figcaption><div class="chart" id="chart-batt"></div></figure>
       <figure class="chart-card"><figcaption>Potência de carga PV <span class="unit">W</span><b id="lbl-pv"></b></figcaption><div class="chart" id="chart-pv"></div></figure>
-      <figure class="chart-card"><figcaption>Carga na saída <span class="unit">W</span><b id="lbl-load"></b></figcaption><div class="chart" id="chart-load"></div></figure>
+      <figure class="chart-card"><figcaption>Carga na saída <span class="unit">W</span><b id="lbl-load"></b></figcaption><div class="chart" id="chart-load"></div>
+        <p class="muted small" id="load-bypass-note" hidden>Em bypass o inversor não
+          mede a saída (devolve 1 W fixo) &mdash; só há leitura real em modo bateria.</p></figure>
     </div>
     <details class="table-view">
       <summary>Ver em tabela</summary>

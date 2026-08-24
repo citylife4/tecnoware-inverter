@@ -79,11 +79,17 @@ already burned a full day.
    proves the command was accepted, not that it did anything — see #1.
 3. **`ac_output_active_power` is only valid in battery mode.** With
    `POP=00` the inverter is in bypass (grid through the transfer relay,
-   not inverting) and reports a constant **1 W** whatever is connected.
-   This led to a wrong claim that nothing was attached to the output —
-   the installation has a fridge on it. Switching to `POP=02` showed
-   45-46 W immediately. In bypass, read the Shelly's inverter-input
-   channel instead.
+   not inverting) and reports a constant **1 W** whatever is connected —
+   a placeholder, not a measurement. Quantified from the telemetry log:
+   **251 of 252 consecutive samples were exactly 1.0 W**, the single
+   exception being 1223 W (34% load) — almost certainly the fridge
+   compressor's inrush sagging the line hard enough that the inverter
+   briefly took over and, for that instant, actually measured the load.
+   This led to a wrong claim that nothing was attached to the output; the
+   installation has a fridge on it, and `POP=02` showed 45-46 W
+   immediately. In bypass, read the Shelly's inverter-input channel
+   instead. The dashboard now renders this as "—" rather than "1 W", so
+   the placeholder isn't mistaken for data.
 4. **`PCP03` = solar-only charging.** With no PV this stops grid charging
    entirely and drains the battery — it happened during testing
    (undetected for a while because of #2) and dropped the pack from

@@ -56,13 +56,23 @@ function tileSpecs(s) {
   let battSub = "inativa";
   if (typeof netA === "number" && netA > 0) battSub = `a carregar ${netA} A`;
   else if (typeof netA === "number" && netA < 0) battSub = `a descarregar ${-netA} A`;
+  // Em bypass (POP=00, modo "L") o inversor NÃO mede a carga da saída:
+  // devolve 1 W fixo, aconteça o que acontecer. Confirmado em 251 de 252
+  // amostras consecutivas -- todas exactamente 1.0 W, com uma única
+  // excepção de 1223 W (arranque do compressor do frigorífico, quando o
+  // inversor assume por instantes). Mostrar "1 W" seria apresentar um
+  // valor de preenchimento como se fosse medição.
+  const bypass = s.mode !== "B";
   return [
     { k: "Bateria", v: fmt(s.battery_voltage, 2), u: "V", sub: battSub, cls: "accent-batt" },
     { k: "Estado de carga", v: fmt(s.battery_capacity, 0), u: "%", sub: "indicado pelo inversor" },
     { k: "Potência PV", v: fmt(s.pv_charging_power, 0), u: "W",
       sub: `painéis a ${fmt(s.pv_input_voltage, 1)} V`, cls: "accent-pv" },
-    { k: "Carga na saída", v: fmt(s.ac_output_active_power, 0), u: "W",
-      sub: `${fmt(s.output_load_percent, 0)}% do nominal`, cls: "accent-load" },
+    { k: "Carga na saída",
+      v: bypass ? "—" : fmt(s.ac_output_active_power, 0),
+      u: bypass ? "" : "W",
+      sub: bypass ? "não medida em bypass" : `${fmt(s.output_load_percent, 0)}% do nominal`,
+      cls: "accent-load" },
     { k: "Entrada da rede", v: fmt(s.grid_voltage, 1), u: "V", sub: `${fmt(s.grid_frequency, 1)} Hz` },
     { k: "Saída AC", v: fmt(s.ac_output_voltage, 1), u: "V", sub: `${fmt(s.ac_output_frequency, 1)} Hz` },
     { k: "Dissipador", v: fmt(s.heatsink_temperature, 0), u: "°C", sub: "temperatura interna" },
@@ -238,6 +248,9 @@ async function tick() {
     const last = new Date(hist.history[hist.history.length - 1].ts).toLocaleTimeString();
     $("#trend-range").textContent = `${first} – ${last} (${hist.history.length} amostras)`;
   }
+  const loadNote = document.querySelector("#load-bypass-note");
+  if (loadNote && data.status) loadNote.hidden = data.status.mode === "B";
+
   markCurrentPriorities(data.last_known_priorities);
   loadAudit();
   loadSchedule();
