@@ -27,8 +27,11 @@ from transport import InverterError
 
 SAMPLE_QPIGS = ("(232.0 49.9 231.0 50.0 0000 0001 000 401 24.20 000 050 0026 "
                 "0000 000.0 24.20 00000 00010110 00 00 00000 010")
-SAMPLE_QPIRI = ("(230.0 26.1 230.0 50.0 26.1 6000 6000 24.0 11.0 10.5 14.1 13.5 "
-                "2 60 06P 0 0 1 0 1 6 01 52.0 0 0")
+# Resposta real desta unidade (2026-08-24). Não inventar valores aqui: a
+# versão anterior dizia 6000 VA / 26.1 A quando o aparelho é 3600 VA / 20 A,
+# e tinha os campos 15-24 por outra ordem.
+SAMPLE_QPIRI = ("(230.0 20.0 230.0 50.0 20.0 3600 3600 24.0 11.0 10.5 14.1 13.5 "
+                "2 60 06P 1 0 1 6 01 0 0 52.0 0 1")
 
 TOKEN = "test-token-123"
 

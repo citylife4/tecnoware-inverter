@@ -94,11 +94,24 @@ already burned a full day.
    **This also disables the low-battery interlock**, which works by
    writing `PCP01`. `POP=01` was never tested; treat as unknown.
    `webapp/grid_charge.py` has `CHARGING_POP = "00"` and warns otherwise.
-2. **`QPIRI` reports static rated values and NEVER reflects a setting
-   change.** Writes were once (wrongly) believed non-functional because
-   `QPIRI` looked unchanged. **Verify a write via `QPIGS` behaviour**
-   (e.g. `battery_charging_current`), never via `QPIRI`. An `(ACK` alone
-   proves the command was accepted, not that it did anything — see #1.
+2. **`QPIRI` shows settings as of the last BOOT, not live.** Writes were
+   once (wrongly) believed non-functional because `QPIRI` looked unchanged
+   after them. **Verify a write via `QPIGS` behaviour** (e.g.
+   `battery_charging_current`), never via `QPIRI`. An `(ACK` alone proves
+   the command was accepted, not that it did anything — see #1.
+
+   Refined 2026-08-24: it is not that `QPIRI` never updates. After the
+   inverter was rebooted (front-panel setting change), its
+   `output_source_priority` and `charger_source_priority` correctly read
+   `0` and `1`, matching the `POP=00`/`PCP=01` that had been set over
+   serial. So `QPIRI` is a snapshot taken at boot. Live changes are
+   invisible until a restart — which is still useless for confirming a
+   write, but explains why the field sometimes *does* look right.
+
+   The two charging-current fields remain untrustworthy: with front-panel
+   program 11 at 20 A (later 10 A), `max_ac_charging_current` read `60`
+   throughout and `max_charging_current` read the malformed `06P`. Neither
+   tracks program 11. Don't use them.
 3. **`ac_output_active_power` is only valid in battery mode.** With
    `POP=00` the inverter is in bypass (grid through the transfer relay,
    not inverting) and reports a constant **1 W** whatever is connected —
@@ -139,11 +152,17 @@ already burned a full day.
    total, ~360 Wh usable. The configured 21.0V cutoff suits lead-acid and
    would over-discharge LiFePO4, so re-check these if the pack is ever
    swapped.
-10. **The charger over-drives this bank.** It pushes 18-20 A into 30 Ah
-    (~C/1.5) and barely tapers; deep-cycle lead-acid wants C/10-C/5, i.e.
-    3-6 A. `QCHGC`/`QMCC` NAK and `CHGC`/`MCHGC` aren't in the verified
-    set, so the limit likely has to be changed from the front panel.
-    Unresolved.
+10. **Charging current is set from the front panel, program 11.**
+    Resolved 2026-08-24: it was at **20 A** into a 30 Ah bank (~C/1.5, and
+    the observed 18-20 A was the *limit*, not the battery's acceptance —
+    it was taking everything offered). Reduced to **10 A** (~C/3), the
+    lowest useful option; program 11 offers 2 A then 10/20/…/80 A, so the
+    ideal C/5 (~6 A) isn't selectable. Not reachable over serial —
+    `QCHGC`/`QMCC` NAK, `CHGC`/`MCHGC` aren't in the verified set, and
+    `QPIRI` doesn't expose it (see #2). **Verify by watching the charge
+    current cap at 10 A next time the pack is actually accepting charge**;
+    it was already at float when the change was made, so it has not yet
+    been observed working.
 
 ## What's confirmed working on this unit (`QPI` → `(PI30`, `QVFW` → `00072.40`)
 

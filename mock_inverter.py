@@ -40,6 +40,14 @@ STATE = {
 
 SUPPORTED_SILENT = {"QMD", "QVFTR", "QT", "QEY"}   # answer nothing, like the real unit
 
+# Resposta QPIRI real desta unidade, com POP/PCP como marcadores. Os índices
+# 16 e 17 são output_source_priority e charger_source_priority (ver
+# parsers.QPIRI_FIELDS) -- e o aparelho real reflecte-os mesmo, desde que
+# tenha reiniciado depois da alteração.
+REAL_QPIRI_TEMPLATE = (
+    "(230.0 20.0 230.0 50.0 20.0 3600 3600 24.0 11.0 10.5 14.1 13.5 2 60 "
+    "06P 1 {} {} 6 01 0 0 52.0 0 1")
+
 
 def qpigs() -> str:
     s = STATE
@@ -54,8 +62,11 @@ def qpigs() -> str:
 def qpiri() -> str:
     # Static rated values -- deliberately does NOT reflect PCP/POP writes,
     # except for the two priority code fields, matching the real unit.
-    return ("(230.0 26.1 230.0 50.0 26.1 6000 6000 24.0 11.0 10.5 14.1 13.5 2 60 "
-            "06P 0 {} {} 0 1 6 01 52.0 0 0").format(STATE["pop"][-1], STATE["pcp"][-1])
+    # Copiado LITERALMENTE do aparelho real (2026-08-24), não inventado: a
+    # versão anterior tinha 6000 VA / 26.1 A e a ordem dos campos 15-24
+    # trocada, o que fazia o mock mentir sobre a potência nominal da
+    # unidade (é 3600 VA / 20 A -- modelo ATA 3.5 kW).
+    return REAL_QPIRI_TEMPLATE.format(STATE["pop"][-1], STATE["pcp"][-1])
 
 
 def handle(cmd: str, glitch: bool):
