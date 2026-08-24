@@ -147,6 +147,23 @@ def post(client, path, payload, **headers):
 
 
 class TestParsers(unittest.TestCase):
+    def test_battery_power_w_signed(self):
+        # O protocolo só dá amperes; watts é o que se compara com a carga da
+        # casa ou com a exportação -- e nesta instalação é o único número de
+        # carga/descarga que varia (pv_charging_power é sempre 0).
+        chg = parse_qpigs("(232.0 49.9 231.0 50.0 0000 0001 000 401 27.10 005 "
+                          "100 0026 0000 000.0 27.10 00000 00010110 00 00 00000 010")
+        self.assertEqual(chg["battery_power_w"], 136)      # 5 A x 27.1 V
+        dis = parse_qpigs("(232.0 49.9 231.0 50.0 0000 0001 000 401 24.50 000 "
+                          "050 0026 0000 000.0 24.50 00003 00010110 00 00 00000 010")
+        self.assertEqual(dis["battery_power_w"], -74)      # a descarregar
+
+    def test_battery_power_absent_when_current_unparsable(self):
+        # Campo malformado não pode virar um watt inventado.
+        bad = parse_qpigs("(232.0 49.9 231.0 50.0 0000 0001 000 401 27.10 06P "
+                          "100 0026 0000 000.0 27.10 00000 00010110 00 00 00000 010")
+        self.assertNotIn("battery_power_w", bad)
+
     def test_qpigs_types_and_flags(self):
         s = parse_qpigs(SAMPLE_QPIGS)
         self.assertEqual(s["battery_voltage"], 24.2)

@@ -110,6 +110,17 @@ def parse_qpigs(raw: str) -> dict:
     dis = out.get("battery_discharge_current")
     if isinstance(chg, int) and isinstance(dis, int):
         out["battery_net_current"] = chg - dis
+        # Battery power in watts, same sign convention. The protocol only
+        # gives amps, but watts is what you actually want to compare against
+        # PV output, house load or the export figure -- and on this
+        # installation it is the only charge/discharge number that varies at
+        # all (pv_charging_power is a flat 0, the PV input being
+        # unconnected). Deliberately NOT added to the telemetry CSV: it is
+        # derivable from the current and voltage columns already there, and
+        # appending changes the file format for no gain.
+        volts = out.get("battery_voltage")
+        if isinstance(volts, (int, float)):
+            out["battery_power_w"] = round(out["battery_net_current"] * volts)
     return out
 
 
@@ -453,6 +464,7 @@ class InverterService:
             "output_load_percent": snap.get("output_load_percent"),
             "grid_voltage": snap.get("grid_voltage"),
             "battery_net_current": snap.get("battery_net_current"),
+            "battery_power_w": snap.get("battery_power_w"),
         })
         return snap
 

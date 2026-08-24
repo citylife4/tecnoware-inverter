@@ -66,6 +66,8 @@ function tileSpecs(s) {
   return [
     { k: "Bateria", v: fmt(s.battery_voltage, 2), u: "V", sub: battSub, cls: "accent-batt" },
     { k: "Estado de carga", v: fmt(s.battery_capacity, 0), u: "%", sub: "indicado pelo inversor" },
+    { k: "Potência da bateria", v: fmt(s.battery_power_w, 0), u: "W",
+      sub: battSub, cls: "accent-batt" },
     { k: "Potência PV", v: fmt(s.pv_charging_power, 0), u: "W",
       sub: `painéis a ${fmt(s.pv_input_voltage, 1)} V`, cls: "accent-pv" },
     { k: "Carga na saída",
@@ -97,7 +99,12 @@ function renderTiles(s) {
 const CHARTS = [
   { el: "#chart-batt", label: "#lbl-batt", key: "battery_voltage",
     color: "--series-batt", unit: "V", digits: 2 },
-  { el: "#chart-pv", label: "#lbl-pv", key: "pv_charging_power",
+  // Era pv_charging_power, mas nesta instalação a entrada PV do inversor
+  // não está ligada: 293 amostras seguidas, todas 0 W -- um gráfico plano
+  // e inútil. A potência da bateria varia mesmo (108-136 W observados) e é
+  // o número que interessa aqui. A produção solar real continua visível,
+  // medida pelo Shelly, no painel do auto-energy.
+  { el: "#chart-pv", label: "#lbl-pv", key: "battery_power_w",
     color: "--series-pv", unit: "W", digits: 0 },
   { el: "#chart-load", label: "#lbl-load", key: "ac_output_active_power",
     color: "--series-load", unit: "W", digits: 0 },
