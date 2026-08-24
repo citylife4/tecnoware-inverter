@@ -313,7 +313,41 @@ class TestApi(unittest.TestCase):
         client.post("/login", data={"token": TOKEN})
         r = client.get("/")
         self.assertEqual(r.status_code, 200)
-        self.assertIn(b"Live status", r.data)
+        # UI is pt-PT (webapp/ui_labels.py); the REST API stays English.
+        self.assertIn("Estado atual".encode(), r.data)
+        self.assertIn(b'lang="pt-PT"', r.data)
+
+
+class TestUiLabels(unittest.TestCase):
+    """The pt-PT display labels must cover every code the API can emit --
+    otherwise the dashboard silently falls back to an English string (or a
+    bare code) for the uncovered one."""
+
+    def test_every_pcp_value_has_a_pt_label(self):
+        from webapp import ui_labels
+        self.assertEqual(set(ui_labels.PCP_LABELS_PT), set(safety.PCP_VALUES))
+
+    def test_every_pop_value_has_a_pt_label(self):
+        from webapp import ui_labels
+        self.assertEqual(set(ui_labels.POP_LABELS_PT),
+                         set(safety.OUTPUT_PRIORITY_VALUES))
+
+    def test_every_device_mode_has_a_pt_label(self):
+        from webapp import ui_labels
+        from webapp.service import DEVICE_MODES
+        self.assertEqual(set(ui_labels.MODE_LABELS_PT), set(DEVICE_MODES))
+
+    def test_every_qpiri_field_has_a_pt_label(self):
+        from webapp import ui_labels
+        from parsers import QPIRI_FIELDS
+        self.assertEqual(set(ui_labels.RATING_LABELS_PT),
+                         {name for name, _unit in QPIRI_FIELDS})
+
+    def test_every_battery_type_has_a_pt_label(self):
+        from webapp import ui_labels
+        from parsers import BATTERY_TYPES
+        self.assertEqual(set(ui_labels.BATTERY_TYPE_LABELS_PT),
+                         set(BATTERY_TYPES.values()))
 
 
 class TestScheduleValidation(unittest.TestCase):

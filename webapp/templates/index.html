@@ -1,26 +1,33 @@
 <!doctype html>
-<html lang="en">
+<html lang="pt-PT">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tecnoware Inverter</title>
+<title>Inversor Tecnoware</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9889;</text></svg>">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
+{# Etiquetas traduzidas passadas ao app.js. Os códigos do protocolo
+   ("L", "B", "00", ...) nunca mudam; só o texto é que é traduzido. #}
+<script id="ui-labels" type="application/json">
+{"modes": {{ mode_labels | tojson }},
+ "ratings": {{ rating_labels | tojson }},
+ "batteryTypes": {{ battery_type_labels | tojson }}}
+</script>
 <header class="topbar">
   <div class="brand">
     <span class="bolt">&#9889;</span>
     <div>
-      <h1>Tecnoware Inverter</h1>
-      <p class="muted small" id="device-line">loading device info&hellip;</p>
+      <h1>Inversor Tecnoware</h1>
+      <p class="muted small" id="device-line">a carregar informação do aparelho&hellip;</p>
     </div>
   </div>
   <div class="topbar-right">
     <span class="badge" id="mode-badge">&mdash;</span>
-    <span class="conn" id="conn"><i class="dot"></i><span id="conn-text">connecting</span></span>
-    <button class="ghost" id="refresh-btn" title="Force a live read">Refresh</button>
-    <a class="ghost" href="{{ url_for('logout') }}">Sign out</a>
+    <span class="conn" id="conn"><i class="dot"></i><span id="conn-text">a ligar</span></span>
+    <button class="ghost" id="refresh-btn" title="Forçar uma leitura imediata">Atualizar</button>
+    <a class="ghost" href="{{ url_for('logout') }}">Terminar sessão</a>
   </div>
 </header>
 
@@ -28,40 +35,42 @@
   <p class="error-banner" id="global-error" hidden></p>
 
   {% if not allow_writes %}
-  <p class="notice">This server is running <strong>read-only</strong>. Set commands are refused.</p>
+  <p class="notice">Este servidor está em modo <strong>só-leitura</strong>. Os comandos de
+    escrita são recusados.</p>
   {% endif %}
 
-  <!-- Live values -->
+  <!-- Valores em tempo real -->
   <section aria-labelledby="h-live">
-    <h2 id="h-live">Live status</h2>
+    <h2 id="h-live">Estado atual</h2>
     <div class="tiles" id="tiles"></div>
   </section>
 
-  <!-- Trends: three single-series small multiples, each with its own scale.
-       Deliberately NOT one dual-axis chart -- volts and watts don't share a scale. -->
+  <!-- Gráficos: três séries independentes, cada uma com a sua escala.
+       Propositadamente NÃO um gráfico de eixo duplo -- volts e watts não
+       partilham escala. -->
   <section aria-labelledby="h-trend">
-    <h2 id="h-trend">Trend <span class="muted small" id="trend-range"></span></h2>
+    <h2 id="h-trend">Evolução <span class="muted small" id="trend-range"></span></h2>
     <div class="charts" id="charts">
-      <figure class="chart-card"><figcaption>Battery voltage <span class="unit">V</span><b id="lbl-batt"></b></figcaption><div class="chart" id="chart-batt"></div></figure>
-      <figure class="chart-card"><figcaption>PV charging power <span class="unit">W</span><b id="lbl-pv"></b></figcaption><div class="chart" id="chart-pv"></div></figure>
-      <figure class="chart-card"><figcaption>Output load <span class="unit">W</span><b id="lbl-load"></b></figcaption><div class="chart" id="chart-load"></div></figure>
+      <figure class="chart-card"><figcaption>Tensão da bateria <span class="unit">V</span><b id="lbl-batt"></b></figcaption><div class="chart" id="chart-batt"></div></figure>
+      <figure class="chart-card"><figcaption>Potência de carga PV <span class="unit">W</span><b id="lbl-pv"></b></figcaption><div class="chart" id="chart-pv"></div></figure>
+      <figure class="chart-card"><figcaption>Carga na saída <span class="unit">W</span><b id="lbl-load"></b></figcaption><div class="chart" id="chart-load"></div></figure>
     </div>
     <details class="table-view">
-      <summary>Table view</summary>
+      <summary>Ver em tabela</summary>
       <div class="scroll-x"><table id="history-table"><thead><tr>
-        <th>Time</th><th>Battery V</th><th>SOC %</th><th>PV W</th><th>Load W</th><th>Grid V</th>
+        <th>Hora</th><th>Bateria V</th><th>Carga %</th><th>PV W</th><th>Consumo W</th><th>Rede V</th>
       </tr></thead><tbody></tbody></table></div>
     </details>
   </section>
 
   {% if allow_writes %}
-  <!-- Controls -->
+  <!-- Controlos -->
   <section aria-labelledby="h-ctl">
-    <h2 id="h-ctl">Controls</h2>
+    <h2 id="h-ctl">Controlos</h2>
     <div class="control-grid">
       <div class="control-card">
-        <h3>Charger source priority <code>PCP</code></h3>
-        <p class="muted small">Where charge current comes from.</p>
+        <h3>Prioridade da fonte de carga <code>PCP</code></h3>
+        <p class="muted small">De onde vem a corrente de carregamento.</p>
         <div class="btnrow" id="pcp-row">
           {% for value, label in pcp_values.items() %}
           <button class="opt" data-kind="charger-priority" data-value="{{ value }}">
@@ -69,13 +78,18 @@
           {% endfor %}
         </div>
         <p class="muted small" id="note-charger-priority"></p>
-        <p class="warn small"><strong>03 is solar-only.</strong> With no sun the pack
-          will drain. The server refuses it below the battery safety floor.</p>
+        <p class="warn small"><strong>03 é apenas solar.</strong> Sem sol, a bateria
+          descarrega. O servidor recusa este valor abaixo do limite mínimo de segurança
+          da bateria.</p>
+        <p class="warn small">O <code>PCP</code> só tem efeito real enquanto o
+          <code>POP</code> estiver em <code>02</code> (SBU) &mdash; confirmado no
+          aparelho. Noutros modos o comando é aceite mas não muda nada.</p>
       </div>
 
       <div class="control-card">
-        <h3>Output source priority <code>POP</code></h3>
-        <p class="muted small">Which source feeds the loads.</p>
+        <h3>Prioridade da fonte de saída <code>POP</code></h3>
+        <p class="muted small">Que fonte alimenta os consumos. É esta que comuta o relé
+          (o "clique" audível).</p>
         <div class="btnrow" id="pop-row">
           {% for value, label in pop_values.items() %}
           <button class="opt" data-kind="output-priority" data-value="{{ value }}">
@@ -86,12 +100,12 @@
       </div>
 
       <div class="control-card">
-        <h3>Quick actions</h3>
+        <h3>Ações rápidas</h3>
         <div class="btnrow">
-          <button class="opt" data-cmd="BZON">Buzzer on</button>
-          <button class="opt" data-cmd="BZOFF">Buzzer off</button>
-          <button class="opt danger" data-cmd="SOFF" data-confirm="1">Output OFF</button>
-          <button class="opt danger" data-cmd="SON" data-confirm="1">Output ON</button>
+          <button class="opt" data-cmd="BZON">Ligar sinal sonoro</button>
+          <button class="opt" data-cmd="BZOFF">Desligar sinal sonoro</button>
+          <button class="opt danger" data-cmd="SOFF" data-confirm="1">DESLIGAR saída</button>
+          <button class="opt danger" data-cmd="SON" data-confirm="1">LIGAR saída</button>
         </div>
       </div>
     </div>
@@ -99,22 +113,23 @@
   {% endif %}
 
   {% if scheduler_available %}
-  <!-- Schedule -->
+  <!-- Agendamento -->
   <section aria-labelledby="h-sched">
-    <h2 id="h-sched">Automatic schedule</h2>
-    <p class="muted small">Applies charger source priority (<code>PCP</code>) by time of
-      day, checked every <span id="sched-poll">&mdash;</span>s inside this server &mdash;
-      no separate cron job needed, and nothing else can hold the port at the same time anyway.</p>
+    <h2 id="h-sched">Agendamento automático</h2>
+    <p class="muted small">Aplica a prioridade da fonte de carga (<code>PCP</code>) por
+      hora do dia, verificado a cada <span id="sched-poll">&mdash;</span>s dentro deste
+      servidor &mdash; sem precisar de um cron à parte, até porque mais nada consegue
+      usar a porta série ao mesmo tempo.</p>
     <div class="control-card">
       <div class="sched-toolbar">
-        <label class="chk"><input type="checkbox" id="sched-enabled"> Enabled</label>
+        <label class="chk"><input type="checkbox" id="sched-enabled"> Ativado</label>
         <span class="badge" id="sched-status">&mdash;</span>
       </div>
       <p class="small" id="sched-current"></p>
 
       <div class="scroll-x">
         <table id="sched-table"><thead><tr>
-          <th>From</th><th>To</th><th>PCP</th><th>Why</th><th></th>
+          <th>Das</th><th>Até</th><th>PCP</th><th>Motivo</th><th></th>
         </tr></thead><tbody></tbody></table>
       </div>
 
@@ -127,83 +142,85 @@
           <option value="{{ value }}">{{ value }} &mdash; {{ label }}</option>
           {% endfor %}
         </select>
-        <input type="text" id="sched-why" placeholder="why (optional)">
-        <button type="submit">Add rule</button>
+        <input type="text" id="sched-why" placeholder="motivo (opcional)">
+        <button type="submit">Adicionar regra</button>
       </form>
 
       <div class="btnrow sched-actions">
-        <button class="ghost" id="sched-apply-now">Apply now</button>
+        <button class="ghost" id="sched-apply-now">Aplicar agora</button>
       </div>
-      <p class="warn small">A <code>03</code> rule is downgraded to <code>01</code>
-        automatically if the battery is below the safety floor when it would apply
-        &mdash; same protection as a manual write, and the same rule
-        <code>charge_schedule.py</code> uses.</p>
-      <p class="muted small">The inverter cannot report its current priority back
-        (verified on hardware &mdash; see README), so "current" below reflects what
-        this server has applied, not a reading from the device.</p>
+      <p class="warn small">Uma regra <code>03</code> é automaticamente reduzida para
+        <code>01</code> se a bateria estiver abaixo do limite de segurança na altura em
+        que seria aplicada &mdash; a mesma proteção de uma escrita manual.</p>
+      <p class="muted small">O inversor não consegue devolver a prioridade que tem
+        configurada, por isso o valor "atual" abaixo reflete o que este servidor
+        aplicou, não uma leitura do aparelho.</p>
       {% if grid_charge_available %}
-      <p class="muted small" id="sched-conflict-note">Mutually exclusive with
-        grid-export charging below &mdash; only one may be enabled at a time.</p>
+      <p class="muted small" id="sched-conflict-note">Mutuamente exclusivo com o
+        carregamento por excedente abaixo &mdash; só um pode estar ativado de cada vez.</p>
       {% endif %}
     </div>
   </section>
   {% endif %}
 
   {% if grid_charge_available %}
-  <!-- Grid-export charging -->
+  <!-- Carregamento por excedente -->
   <section aria-labelledby="h-gridcharge">
-    <h2 id="h-gridcharge">Grid-export charging</h2>
-    <p class="muted small">Enables charging only while the house is exporting surplus
-      solar to the grid (via the <code>auto-energy</code> dashboard's grid meter),
-      instead of assuming a time window means the sun is out &mdash; this inverter's
-      own PV input reads 0V, so it has no other way to know.
-      {% if scheduler_available %}Mutually exclusive with the schedule above.{% endif %}</p>
+    <h2 id="h-gridcharge">Carregamento por excedente</h2>
+    <p class="muted small">Só carrega enquanto a casa estiver a <strong>exportar</strong>
+      excedente solar para a rede (medido pelo contador do painel
+      <code>auto-energy</code>), em vez de assumir que uma dada hora do dia significa que
+      há sol &mdash; a entrada PV deste inversor lê 0 V, por isso não tem outra forma de
+      saber. {% if scheduler_available %}Mutuamente exclusivo com o agendamento
+      acima.{% endif %}</p>
     <div class="control-card">
       <div class="sched-toolbar">
-        <label class="chk"><input type="checkbox" id="gc-enabled"> Enabled</label>
+        <label class="chk"><input type="checkbox" id="gc-enabled"> Ativado</label>
         <span class="badge" id="gc-status">&mdash;</span>
       </div>
       <p class="warn small" id="gc-pop-warning" hidden></p>
       <p class="small" id="gc-current"></p>
 
-      <h3>Common settings</h3>
+      <h3>Definições principais</h3>
       <div class="control-grid">
-        <label class="field">Start charging once exporting more than (W)
-          <input type="number" id="gc-export-threshold" min="0" step="1"></label>
-        <label class="field">Stop charging once importing more than (W)
-          <input type="number" id="gc-import-threshold" min="0" step="1"></label>
+        <label class="field">Começar a carregar ao exportar mais de (W)
+          <input type="number" id="gc-export-threshold" min="0" step="1" required></label>
+        <label class="field">Parar de carregar ao importar mais de (W)
+          <input type="number" id="gc-import-threshold" min="0" step="1" required></label>
       </div>
+      <p class="muted small">Entre estes dois valores o estado anterior mantém-se
+        (histerese) &mdash; é isso que evita ligar e desligar constantemente com as
+        variações normais de consumo da casa.</p>
 
       <div class="btnrow sched-actions">
-        <button id="gc-save">Save settings</button>
-        <button class="ghost" id="gc-apply-now">Apply now</button>
+        <button id="gc-save">Guardar definições</button>
+        <button class="ghost" id="gc-apply-now">Aplicar agora</button>
       </div>
-      <p class="warn small">The "stop" PCP is upgraded to <code>01</code> (allow
-        utility charging) automatically if the battery is below the safety floor
-        &mdash; same interlock as the schedule above, applied regardless of grid
-        export state.</p>
-      <p class="muted small">If the dashboard can't be reached, or its last reading
-        is too old, this assumes <strong>not exporting</strong> and stops charging
-        rather than guessing.</p>
+      <p class="warn small">O PCP de "parar" é automaticamente elevado para
+        <code>01</code> (permitir carregar da rede) se a bateria estiver abaixo do limite
+        de segurança &mdash; independentemente do estado da rede.</p>
+      <p class="muted small">Se o painel <code>auto-energy</code> não estiver acessível,
+        ou a última leitura for demasiado antiga, assume <strong>não estar a
+        exportar</strong> e para de carregar, em vez de adivinhar.</p>
 
       <details class="gc-advanced">
-        <summary>Advanced settings</summary>
+        <summary>Definições avançadas</summary>
         <div class="control-grid">
-          <label class="field">Data source URL
-            <input type="text" id="gc-source-url" spellcheck="false"></label>
-          <label class="field">Check every (s)
-            <input type="number" id="gc-poll-interval" min="5" step="1"></label>
-          <label class="field">Min. seconds between switches
-            <input type="number" id="gc-min-switch" min="0" step="1"></label>
-          <label class="field">Treat as stale after (s)
-            <input type="number" id="gc-stale-after" min="0" step="1"></label>
-          <label class="field">PCP while exporting (start)
+          <label class="field">URL da fonte de dados
+            <input type="text" id="gc-source-url" spellcheck="false" required></label>
+          <label class="field">Verificar a cada (s)
+            <input type="number" id="gc-poll-interval" min="5" step="1" required></label>
+          <label class="field">Mín. de segundos entre comutações
+            <input type="number" id="gc-min-switch" min="0" step="1" required></label>
+          <label class="field">Considerar desatualizado após (s)
+            <input type="number" id="gc-stale-after" min="0" step="1" required></label>
+          <label class="field">PCP ao exportar (começar)
             <select id="gc-charge-pcp">
               {% for value, label in pcp_values.items() %}
               <option value="{{ value }}">{{ value }} &mdash; {{ label }}</option>
               {% endfor %}
             </select></label>
-          <label class="field">PCP otherwise (stop)
+          <label class="field">PCP caso contrário (parar)
             <select id="gc-idle-pcp">
               {% for value, label in pcp_values.items() %}
               <option value="{{ value }}">{{ value }} &mdash; {{ label }}</option>
@@ -215,35 +232,36 @@
   </section>
   {% endif %}
 
-  <!-- Raw console -->
+  <!-- Consola de comandos -->
   <section aria-labelledby="h-console">
-    <h2 id="h-console">Command console</h2>
+    <h2 id="h-console">Consola de comandos</h2>
     <form class="console" id="console-form" autocomplete="off">
       <input id="console-input" name="command" placeholder="QPIGS, QMOD, PCP01 &hellip;"
              spellcheck="false" required>
-      <label class="chk"><input type="checkbox" id="console-confirm"> confirm</label>
-      <button type="submit">Send</button>
+      <label class="chk"><input type="checkbox" id="console-confirm"> confirmar</label>
+      <button type="submit">Enviar</button>
     </form>
-    <p class="muted small">Queries run immediately. Set commands are policy-checked;
-      dangerous ones need <em>confirm</em>. <a href="/api/commands">Full command list &rarr;</a></p>
+    <p class="muted small">As consultas são executadas de imediato. Os comandos de
+      escrita passam por verificação de segurança; os perigosos exigem
+      <em>confirmar</em>. <a href="/api/commands">Lista completa de comandos &rarr;</a></p>
     <pre id="console-out" class="console-out" aria-live="polite"></pre>
   </section>
 
-  <!-- Ratings -->
+  <!-- Valores nominais -->
   <section aria-labelledby="h-rate">
-    <h2 id="h-rate">Configuration <code>QPIRI</code></h2>
-    <p class="muted small">Static rated values. These <strong>never</strong> reflect a
-      setting change &mdash; confirm writes from live status instead.</p>
-    <details><summary>Show rated configuration</summary>
+    <h2 id="h-rate">Configuração <code>QPIRI</code></h2>
+    <p class="muted small">Valores nominais fixos. Estes <strong>nunca</strong> refletem
+      uma alteração de definições &mdash; confirme as escritas pelo estado atual.</p>
+    <details><summary>Mostrar configuração nominal</summary>
       <div class="scroll-x"><table id="ratings-table"><tbody></tbody></table></div>
     </details>
   </section>
 
-  <!-- Audit -->
+  <!-- Registo de escritas -->
   <section aria-labelledby="h-audit">
-    <h2 id="h-audit">Write log</h2>
+    <h2 id="h-audit">Registo de escritas</h2>
     <div class="scroll-x"><table id="audit-table"><thead><tr>
-      <th>Time</th><th>Source</th><th>Command</th><th>Response</th></tr></thead><tbody></tbody></table></div>
+      <th>Hora</th><th>Origem</th><th>Comando</th><th>Resposta</th></tr></thead><tbody></tbody></table></div>
   </section>
 </main>
 

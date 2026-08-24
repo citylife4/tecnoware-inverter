@@ -26,7 +26,7 @@ from flask import (Flask, jsonify, render_template, request, session,
 
 from commands import QUERY_COMMANDS, SET_COMMANDS, VERIFIED_WORKING_QUERIES
 from transport import InverterError
-from webapp import safety
+from webapp import safety, ui_labels
 from webapp.safety import CommandRejected
 
 # Endpoints reachable without a token: liveness probing and the login flow.
@@ -113,7 +113,7 @@ def create_app(service, scheduler=None, grid_charge=None, *,
                 if not nxt.startswith("/") or nxt.startswith("//"):
                     nxt = url_for("dashboard")
                 return redirect(nxt)
-            error = "Incorrect token."
+            error = "Token incorreto."
         return render_template("login.html", error=error)
 
     @app.route("/logout")
@@ -123,9 +123,14 @@ def create_app(service, scheduler=None, grid_charge=None, *,
 
     @app.route("/")
     def dashboard():
+        # Etiquetas em pt-PT só para o browser -- a API mantém-se em
+        # inglês para quem automatiza. Ver webapp/ui_labels.py.
         return render_template("index.html",
-                               pcp_values=safety.PCP_VALUES,
-                               pop_values=safety.OUTPUT_PRIORITY_VALUES,
+                               pcp_values=ui_labels.PCP_LABELS_PT,
+                               pop_values=ui_labels.POP_LABELS_PT,
+                               mode_labels=ui_labels.MODE_LABELS_PT,
+                               rating_labels=ui_labels.RATING_LABELS_PT,
+                               battery_type_labels=ui_labels.BATTERY_TYPE_LABELS_PT,
                                allow_writes=service.allow_writes,
                                scheduler_available=scheduler is not None,
                                grid_charge_available=grid_charge is not None)

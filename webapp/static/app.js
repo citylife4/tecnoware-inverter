@@ -6,6 +6,19 @@
    second, so per-request reads would queue up behind each other as soon as
    a second tab opened. "Refresh" is the explicit escape hatch. */
 
+/* Etiquetas traduzidas injetadas pelo template (ver webapp/ui_labels.py).
+   A API REST continua em inglês -- estável para quem automatiza; só o que
+   aparece no browser é que é traduzido. */
+const UI_LABELS = (() => {
+  try { return JSON.parse(document.getElementById("ui-labels").textContent); }
+  catch (e) { return { modes: {}, ratings: {}, batteryTypes: {} }; }
+})();
+
+const KIND_LABELS = {
+  "charger-priority": "prioridade da fonte de carga",
+  "output-priority": "prioridade da fonte de saída",
+};
+
 const $ = (sel) => document.querySelector(sel);
 const fmt = (v, digits = 1) =>
   (v === null || v === undefined || v === "") ? "—" : Number(v).toFixed(digits);
@@ -40,20 +53,20 @@ function showError(msg) {
    the tile stays a glanceable number rather than a paragraph. */
 function tileSpecs(s) {
   const netA = s.battery_net_current;
-  let battSub = "idle";
-  if (typeof netA === "number" && netA > 0) battSub = `charging ${netA} A`;
-  else if (typeof netA === "number" && netA < 0) battSub = `discharging ${-netA} A`;
+  let battSub = "inativa";
+  if (typeof netA === "number" && netA > 0) battSub = `a carregar ${netA} A`;
+  else if (typeof netA === "number" && netA < 0) battSub = `a descarregar ${-netA} A`;
   return [
-    { k: "Battery", v: fmt(s.battery_voltage, 2), u: "V", sub: battSub, cls: "accent-batt" },
-    { k: "State of charge", v: fmt(s.battery_capacity, 0), u: "%", sub: "reported by inverter" },
-    { k: "PV power", v: fmt(s.pv_charging_power, 0), u: "W",
-      sub: `${fmt(s.pv_input_voltage, 1)} V array`, cls: "accent-pv" },
-    { k: "Output load", v: fmt(s.ac_output_active_power, 0), u: "W",
-      sub: `${fmt(s.output_load_percent, 0)}% of rating`, cls: "accent-load" },
-    { k: "Grid in", v: fmt(s.grid_voltage, 1), u: "V", sub: `${fmt(s.grid_frequency, 1)} Hz` },
-    { k: "AC out", v: fmt(s.ac_output_voltage, 1), u: "V", sub: `${fmt(s.ac_output_frequency, 1)} Hz` },
-    { k: "Heatsink", v: fmt(s.heatsink_temperature, 0), u: "°C", sub: "internal temperature" },
-    { k: "Bus", v: fmt(s.bus_voltage, 0), u: "V", sub: "DC link" },
+    { k: "Bateria", v: fmt(s.battery_voltage, 2), u: "V", sub: battSub, cls: "accent-batt" },
+    { k: "Estado de carga", v: fmt(s.battery_capacity, 0), u: "%", sub: "indicado pelo inversor" },
+    { k: "Potência PV", v: fmt(s.pv_charging_power, 0), u: "W",
+      sub: `painéis a ${fmt(s.pv_input_voltage, 1)} V`, cls: "accent-pv" },
+    { k: "Carga na saída", v: fmt(s.ac_output_active_power, 0), u: "W",
+      sub: `${fmt(s.output_load_percent, 0)}% do nominal`, cls: "accent-load" },
+    { k: "Entrada da rede", v: fmt(s.grid_voltage, 1), u: "V", sub: `${fmt(s.grid_frequency, 1)} Hz` },
+    { k: "Saída AC", v: fmt(s.ac_output_voltage, 1), u: "V", sub: `${fmt(s.ac_output_frequency, 1)} Hz` },
+    { k: "Dissipador", v: fmt(s.heatsink_temperature, 0), u: "°C", sub: "temperatura interna" },
+    { k: "Barramento", v: fmt(s.bus_voltage, 0), u: "V", sub: "barramento DC" },
   ];
 }
 
@@ -103,7 +116,7 @@ function drawChart(spec, rows) {
     labelEl.textContent = fmt(pts[pts.length - 1].v, spec.digits);
   }
   if (pts.length < 2) {
-    host.innerHTML = `<div class="chart-empty">collecting data…</div>`;
+    host.innerHTML = `<div class="chart-empty">a recolher dados…</div>`;
     return;
   }
 
@@ -198,19 +211,22 @@ function setConn(ok, text) {
 
 async function tick() {
   const data = await api("/api/status");
-  if (!data.ok) { setConn(false, "server error"); showError(data.error || "status failed"); return; }
+  if (!data.ok) { setConn(false, "erro do servidor"); showError(data.error || "falha ao obter estado"); return; }
 
   if (data.status) {
     latestStatus = data.status;
     renderTiles(data.status);
-    $("#mode-badge").textContent = data.status.mode_label || "—";
+    // Traduz a partir da LETRA do modo (QMOD), não do texto inglês, para
+    // não depender de uma tradução do lado do servidor.
+    $("#mode-badge").textContent =
+      UI_LABELS.modes[data.status.mode] || data.status.mode_label || "—";
   }
   if (data.error) {
-    setConn(false, "serial error");
-    showError(`Inverter link: ${data.error}`);
+    setConn(false, "erro na ligação série");
+    showError(`Ligação ao inversor: ${data.error}`);
   } else {
     const age = data.last_success ? Math.round((Date.now() - new Date(data.last_success)) / 1000) : null;
-    setConn(true, age === null ? "connected" : `updated ${age}s ago`);
+    setConn(true, age === null ? "ligado" : `atualizado há ${age}s`);
     showError(null);
   }
 
@@ -220,7 +236,7 @@ async function tick() {
     renderHistoryTable(hist.history);
     const first = new Date(hist.history[0].ts).toLocaleTimeString();
     const last = new Date(hist.history[hist.history.length - 1].ts).toLocaleTimeString();
-    $("#trend-range").textContent = `${first} – ${last} (${hist.history.length} samples)`;
+    $("#trend-range").textContent = `${first} – ${last} (${hist.history.length} amostras)`;
   }
   loadAudit();
   loadSchedule();
@@ -236,7 +252,7 @@ async function loadAudit() {
         <td class="muted">${a.source || "manual"}</td>
         <td><code>${a.command}</code></td>
         <td class="${a.ok ? "" : "err"}">${a.response || "—"}</td></tr>`).join("")
-    : `<tr><td colspan="4" class="muted">No set commands sent yet.</td></tr>`;
+    : `<tr><td colspan="4" class="muted">Ainda não foram enviados comandos de escrita.</td></tr>`;
 }
 
 /* ---------- device + ratings (static, fetched once) ---------- */
@@ -246,8 +262,8 @@ async function loadDevice() {
   if (!d.ok) return;
   const x = d.device;
   $("#device-line").textContent =
-    [x.model && `model ${x.model}`, x.protocol && `protocol ${x.protocol}`,
-     x.firmware && `fw ${x.firmware}`, x.serial_number && `s/n ${x.serial_number}`,
+    [x.model && `modelo ${x.model}`, x.protocol && `protocolo ${x.protocol}`,
+     x.firmware && `fw ${x.firmware}`, x.serial_number && `n/s ${x.serial_number}`,
      x.port].filter(Boolean).join(" · ");
 }
 
@@ -256,9 +272,9 @@ async function loadRatings() {
   if (!d.ok) return;
   $("#ratings-table tbody").innerHTML = Object.entries(d.ratings).map(([k, v]) => {
     const extra = v.actual_volts !== undefined
-      ? ` <span class="muted">→ ${v.actual_volts} V pack</span>`
-      : (v.label ? ` <span class="muted">(${v.label})</span>` : "");
-    return `<tr><td class="name">${k.replace(/_/g, " ")}</td>
+      ? ` <span class="muted">→ ${v.actual_volts} V no conjunto</span>`
+      : (v.label ? ` <span class="muted">(${UI_LABELS.batteryTypes[v.label] || v.label})</span>` : "");
+    return `<tr><td class="name">${UI_LABELS.ratings[k] || k.replace(/_/g, " ")}</td>
             <td>${v.value} <span class="muted">${v.unit || ""}</span>${extra}</td></tr>`;
   }).join("");
 }
@@ -278,9 +294,9 @@ function describe(res) {
     if (res.kind === "set") msg += `\n         ${res.note}`;
     return [msg, "ok"];
   }
-  let msg = `${res.command || ""} FAILED: ${res.error}`;
-  if (res.hint) msg += `\n         hint: ${res.hint}`;
-  if (res.valid) msg += `\n         valid: ${Object.keys(res.valid).join(", ")}`;
+  let msg = `${res.command || ""} FALHOU: ${res.error}`;
+  if (res.hint) msg += `\n         sugestão: ${res.hint}`;
+  if (res.valid) msg += `\n         válidos: ${Object.keys(res.valid).join(", ")}`;
   return [msg, "err"];
 }
 
@@ -308,10 +324,10 @@ async function setPriority(kind, value, confirm) {
 async function withConfirmRetry(runner, prompt) {
   let res = await runner(false);
   if (!res.ok && res.code === "confirmation_required") {
-    if (window.confirm(`${prompt}\n\n${res.error}\n\nSend it anyway?`)) {
+    if (window.confirm(`${prompt}\n\n${res.error}\n\nEnviar mesmo assim?`)) {
       res = await runner(true);
     } else {
-      logConsole("cancelled", "muted");
+      logConsole("cancelado", "muted");
     }
   }
   return res;
@@ -322,10 +338,10 @@ function wireControls() {
     btn.addEventListener("click", async () => {
       const { kind, value } = btn.dataset;
       const label = btn.textContent.trim();
-      if (!window.confirm(`Set ${kind.replace("-", " ")} to ${label}?`)) return;
+      if (!window.confirm(`Definir ${KIND_LABELS[kind] || kind} para ${label}?`)) return;
       btn.disabled = true;
       try {
-        const res = await withConfirmRetry((c) => setPriority(kind, value, c), `Set ${label}`);
+        const res = await withConfirmRetry((c) => setPriority(kind, value, c), `Definir ${label}`);
         if (res.ok) {
           btn.parentElement.querySelectorAll(".opt").forEach((b) => b.classList.remove("active"));
           btn.classList.add("active");
@@ -341,12 +357,12 @@ function wireControls() {
   document.querySelectorAll(".opt[data-cmd]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const cmd = btn.dataset.cmd;
-      if (!window.confirm(`Send ${cmd} to the inverter?`)) return;
+      if (!window.confirm(`Enviar ${cmd} para o inversor?`)) return;
       btn.disabled = true;
       try {
         // Dangerous commands come back as confirmation_required on the
         // first try; withConfirmRetry then asks and re-sends with confirm.
-        await withConfirmRetry((c) => sendCommand(cmd, c), `Send ${cmd}`);
+        await withConfirmRetry((c) => sendCommand(cmd, c), `Enviar ${cmd}`);
       } finally { btn.disabled = false; loadAudit(); }
     });
   });
@@ -374,14 +390,14 @@ async function markCurrentPriorities() {
       // us. Claiming a value here would be a guess.
       buttons.forEach((b) => b.classList.remove("active"));
       const note = document.querySelector(`#note-${kind}`);
-      if (note) note.textContent = "Current setting unknown — the inverter does not report it back.";
+      if (note) note.textContent = "Definição atual desconhecida — o inversor não a devolve.";
       return;
     }
     const code = last.command.slice(prefix.length, prefix.length + 2);
     buttons.forEach((b) => b.classList.toggle("active", b.dataset.value === code));
     const note = document.querySelector(`#note-${kind}`);
     if (note) {
-      note.textContent = `Last set by this server at ${new Date(last.at).toLocaleString()}.`;
+      note.textContent = `Definido por este servidor em ${new Date(last.at).toLocaleString()}.`;
     }
   });
 }
@@ -396,7 +412,7 @@ async function markCurrentPriorities() {
    (same reason markCurrentPriorities() above uses the audit log). */
 
 function fmtRule(r) {
-  if (!r) return "no rule matches the current time";
+  if (!r) return "nenhuma regra corresponde à hora atual";
   return `${r.from}–${r.to} → PCP${r.pcp}${r.why ? ` (${r.why})` : ""}`;
 }
 
@@ -404,10 +420,10 @@ function renderSchedule(state) {
   if (!document.querySelector("#sched-enabled")) return;   // section not rendered
   $("#sched-poll").textContent = state.poll_interval;
   $("#sched-enabled").checked = state.enabled;
-  $("#sched-status").textContent = state.enabled ? "enabled" : "disabled";
+  $("#sched-status").textContent = state.enabled ? "ativado" : "desativado";
   $("#sched-status").className = `badge ${state.enabled ? "" : "muted"}`;
   if (!state.allow_writes) {
-    $("#sched-status").textContent += " (server read-only — not applied)";
+    $("#sched-status").textContent += " (servidor só-leitura — não aplicado)";
   }
 
   const body = $("#sched-table tbody");
@@ -416,18 +432,18 @@ function renderSchedule(state) {
         <td>${r.from}</td><td>${r.to}</td>
         <td><span class="code">PCP${r.pcp}</span></td>
         <td class="name">${r.why || ""}</td>
-        <td><button class="ghost" data-del="${i}">Remove</button></td></tr>`).join("")
-    : `<tr><td colspan="5" class="muted">No rules yet — add one below.</td></tr>`;
+        <td><button class="ghost" data-del="${i}">Remover</button></td></tr>`).join("")
+    : `<tr><td colspan="5" class="muted">Ainda sem regras — adicione uma abaixo.</td></tr>`;
   body.querySelectorAll("[data-del]").forEach((b) => {
     b.addEventListener("click", () => deleteRule(+b.dataset.del));
   });
 
-  let cur = `<span class="muted">Matches now:</span> ${fmtRule(state.current_rule)}`;
-  if (state.override_reason) cur += `<br><span class="warn small">OVERRIDE: ${state.override_reason}</span>`;
+  let cur = `<span class="muted">Regra ativa agora:</span> ${fmtRule(state.current_rule)}`;
+  if (state.override_reason) cur += `<br><span class="warn small">${state.override_reason}</span>`;
   if (state.last_run) {
     const t = new Date(state.last_run.at).toLocaleTimeString();
     const cls = state.last_run.applied ? "ok" : (state.last_run.note.startsWith("error") ? "err" : "");
-    cur += `<br><span class="muted">Last check ${t}:</span> <span class="${cls}">${state.last_run.note}</span>`;
+    cur += `<br><span class="muted">Última verificação às ${t}:</span> <span class="${cls}">${state.last_run.note}</span>`;
   }
   $("#sched-current").innerHTML = cur;
 }
@@ -447,7 +463,7 @@ async function saveSchedule(enabled, rules) {
   });
   if (d.ok) { scheduleState = d; renderSchedule(d); }
   else {
-    logConsole(`schedule save failed: ${d.error}`, "err");
+    logConsole(`falha ao guardar o agendamento: ${d.error}`, "err");
     renderSchedule(scheduleState);   // revert the enabled checkbox etc. to the last-saved state
   }
   return d;
@@ -484,7 +500,7 @@ function wireSchedule() {
     e.target.disabled = true;
     try {
       const d = await api("/api/schedule/apply-now", { method: "POST", body: JSON.stringify({ force: true }) });
-      if (d.ok) { logConsole(`schedule apply-now: ${d.result.note}`, d.result.applied ? "ok" : "err"); }
+      if (d.ok) { logConsole(`agendamento — aplicar agora: ${d.result.note}`, d.result.applied ? "ok" : "err"); }
       await loadSchedule();
     } finally { e.target.disabled = false; }
   });
@@ -518,9 +534,9 @@ const GC_FIELDS = [
 function renderGridCharge(state) {
   if (!document.querySelector("#gc-enabled")) return;   // section not rendered
   $("#gc-enabled").checked = state.enabled;
-  $("#gc-status").textContent = state.enabled ? "enabled" : "disabled";
+  $("#gc-status").textContent = state.enabled ? "ativado" : "desativado";
   $("#gc-status").className = `badge ${state.enabled ? "" : "muted"}`;
-  if (!state.allow_writes) $("#gc-status").textContent += " (server read-only — not applied)";
+  if (!state.allow_writes) $("#gc-status").textContent += " (servidor só-leitura — não aplicado)";
 
   const popWarnEl = document.querySelector("#gc-pop-warning");
   if (popWarnEl) {
@@ -539,15 +555,34 @@ function renderGridCharge(state) {
   });
 
   const c = state.current || {};
-  let cur = c.net_balance_w === null || c.net_balance_w === undefined
-    ? `<span class="muted">No reading yet.</span>`
-    : `<span class="muted">Grid:</span> ${c.net_balance_w > 0 ? "importing" : "exporting"} `
-      + `${Math.abs(c.net_balance_w).toFixed(0)} W`
-      + (c.age_s !== null ? ` <span class="muted">(${c.age_s.toFixed(0)}s ago)</span>` : "");
+  const v = c.net_balance_w;
+  let cur;
+  if (v === null || v === undefined) {
+    cur = `<span class="muted">Ainda sem leitura da rede.</span>`;
+  } else {
+    // 0 W não é importar nem exportar. Antes isto era
+    // `v > 0 ? "importing" : "exporting"`, que mostrava "a exportar 0 W"
+    // -- afirmação errada sobre o sentido da energia.
+    const dir = v > 0 ? "a importar" : (v < 0 ? "a exportar" : "equilibrada");
+    const amount = v === 0 ? "" : ` ${Math.abs(v).toFixed(0)} W`;
+    cur = `<span class="muted">Rede:</span> ${dir}${amount}`
+      + (c.age_s !== null && c.age_s !== undefined
+          ? ` <span class="muted">(leitura de há ${c.age_s.toFixed(0)}s)</span>` : "");
+  }
+  // A decisão da automação é coisa DIFERENTE do sentido instantâneo da
+  // energia: a histerese mantém a decisão anterior enquanto a leitura
+  // estiver entre os dois limiares, por isso "carregar" pode manter-se
+  // enquanto a rede está momentaneamente a importar. Mostrar as duas em
+  // linhas separadas evita que isso pareça uma contradição -- foi
+  // exatamente essa confusão que motivou esta alteração.
+  if (c.desired_state) {
+    const decision = c.desired_state === "charging" ? "carregar" : "não carregar";
+    cur += `<br><span class="muted">Decisão da automação:</span> ${decision}`;
+  }
   if (state.last_run) {
     const t = new Date(state.last_run.at).toLocaleTimeString();
     const cls = state.last_run.applied ? "ok" : (state.last_run.note.startsWith("error") ? "err" : "");
-    cur += `<br><span class="muted">Last check ${t}:</span> <span class="${cls}">${state.last_run.note}</span>`;
+    cur += `<br><span class="muted">Última verificação às ${t}:</span> <span class="${cls}">${state.last_run.note}</span>`;
     if (state.last_run.why) cur += `<br><span class="warn small">${state.last_run.why}</span>`;
   }
   $("#gc-current").innerHTML = cur;
@@ -560,22 +595,41 @@ async function loadGridCharge() {
   renderGridCharge(d);
 }
 
+/* Devolve {values, invalid}. `invalid` lista os campos vazios ou não
+   numéricos em vez de os deixar passar: `Number("")` é 0, e a validação do
+   servidor aceita 0 em vários destes campos, por isso um campo vazio podia
+   gravar silenciosamente um limiar de 0 W -- foi o que aconteceu ao
+   export_threshold_w a 2026-08-24. Melhor recusar do que adivinhar. */
 function readGridChargeForm() {
   const out = { enabled: gridChargeState.enabled };
+  const invalid = [];
   GC_FIELDS.forEach(([id, key, type]) => {
     const el = document.querySelector(`#${id}`);
-    if (type === "negnum") out[key] = -Math.abs(Number(el.value));
-    else out[key] = type === "num" ? Number(el.value) : el.value;
+    if (!el) return;
+    const raw = String(el.value).trim();
+    if (type === "str") {
+      if (!raw) invalid.push(id); else out[key] = raw;
+      return;
+    }
+    const n = Number(raw);
+    if (raw === "" || !Number.isFinite(n)) { invalid.push(id); return; }
+    out[key] = type === "negnum" ? -Math.abs(n) : n;
   });
-  return out;
+  return { values: out, invalid };
 }
 
 async function saveGridCharge(overrides) {
-  const body = { ...readGridChargeForm(), ...overrides };
+  const { values, invalid } = readGridChargeForm();
+  if (invalid.length) {
+    logConsole(`definições não guardadas — campos por preencher: ${invalid.join(", ")}`, "err");
+    renderGridCharge(gridChargeState);   // repõe os valores guardados
+    return { ok: false, code: "invalid_form" };
+  }
+  const body = { ...values, ...overrides };
   const d = await api("/api/grid-charge", { method: "PUT", body: JSON.stringify(body) });
   if (d.ok) { gridChargeState = d; renderGridCharge(d); }
   else {
-    logConsole(`grid-charge save failed: ${d.error}`, "err");
+    logConsole(`falha ao guardar o carregamento por excedente: ${d.error}`, "err");
     renderGridCharge(gridChargeState);
   }
   return d;
@@ -599,7 +653,7 @@ function wireGridCharge() {
     e.target.disabled = true;
     try {
       const d = await api("/api/grid-charge/apply-now", { method: "POST", body: JSON.stringify({ force: true }) });
-      if (d.ok) logConsole(`grid-charge apply-now: ${d.result.note}`, d.result.applied ? "ok" : "err");
+      if (d.ok) logConsole(`excedente — aplicar agora: ${d.result.note}`, d.result.applied ? "ok" : "err");
       await loadGridCharge();
     } finally { e.target.disabled = false; }
   });
@@ -617,7 +671,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     btn.disabled = true;
     try {
       await withConfirmRetry((c) => sendCommand(cmd, c || $("#console-confirm").checked),
-                             `Send ${cmd}`);
+                             `Enviar ${cmd}`);
       input.value = "";
     } finally { btn.disabled = false; loadAudit(); }
   });
