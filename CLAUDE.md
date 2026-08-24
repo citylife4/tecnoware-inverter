@@ -275,6 +275,48 @@ data has been observed yet (fixed after sunset the same day). Worth
 checking `/api/audit` for `grid_export` entries the next time there's
 actually sun, to see whether -150W turns out to need tuning the same way.
 
+## Loads on this installation
+
+- **Fridge — on the inverter's protected output.** ~45-46 W baseline
+  (compressor off), ~1223 W inrush when the compressor starts. Only visible
+  in `POP=02`; in bypass the inverter reports its 1 W placeholder
+  (gotcha #3). At 360 Wh usable that is roughly **4-8 h of backup**,
+  depending on duty cycle — the number still to be measured.
+- **Water pump — NOT on the inverter output.** Confirmed: while the house
+  drew 1623 W the inverter's output still read 1 W. Runs **20:00-21:00,
+  cycling roughly every 10 minutes**, peaking ~2 kW. The battery cannot
+  help with it: 1.5 kW from a 24 V bank is ~62 A, i.e. 2C on a 30 Ah pack,
+  which would sag the voltage and trip the cutoff almost immediately.
+  **If a charging schedule is ever added, keep it out of 20:00-21:00** —
+  stacking ~500 W of charger on top of the pump is worth avoiding.
+- Anything else on that output is **unconfirmed**.
+
+## Planned next session (2026-08-25)
+
+Data is accumulating on its own overnight: `telemetry/` on the Pi (battery,
+mode, charging) and `auto-energy`'s DB (grid, solar, inverter AC input).
+Nothing needs to be left running on the assistant side.
+
+1. **Read what was collected** (no risk): fridge/inverter draw over 24 h
+   from the Shelly's channel 1, battery behaviour, whether any export
+   happened and when. Note the inverter's own output column is blind while
+   in bypass — use channel 1 for load.
+2. **Supervised battery-mode test** (~1-2 h, user present): switch to
+   `POP=02`, measure real fridge consumption and duty cycle and the actual
+   discharge rate, then back to `POP=00`. **Do not leave `POP=02`
+   unattended** — it never recharges (gotcha #1), the low-battery floor is
+   dead in that mode, and the fridge would eventually lose power.
+3. **Decide the POP strategy** with real numbers: if the fridge's daily
+   draw is small enough that ~0.13 kWh/day of surplus meaningfully refills
+   the pack, alternating POP is worth building; if it drains far faster
+   than solar can refill, that is just buying grid power at night to run a
+   fridge at ~90% efficiency, and `POP=00` stays correct.
+4. **Re-verify `PBCV24.0`** once the pack is resting rather than charging.
+
+User's own jobs, independent of the above: set the charge current from the
+**front panel** (gotcha #10 — the single change most likely to extend the
+battery's life), and confirm what else is wired to the inverter's output.
+
 ## What's not done / open questions
 
 Deployment state as of end of 2026-08-24:
