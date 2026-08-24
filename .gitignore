@@ -18,3 +18,7 @@ web_schedule.json.tmp
 # grid-export charge controller's config -- instance-specific runtime config
 web_gridcharge.json
 web_gridcharge.json.tmp
+
+# last-known POP/PCP priority values -- instance-specific runtime state
+web_priorities.json
+web_priorities.json.tmp

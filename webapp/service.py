@@ -19,6 +19,8 @@ observed on this hardware and is documented in CLAUDE.md:
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 from collections import deque
@@ -29,6 +31,7 @@ import serial
 from parsers import (BATTERY_SETPOINT_SCALE, BATTERY_TYPES,
                      DEVICE_STATUS_BITS, QPIRI_FIELDS, parse_fields)
 from transport import InverterConnection, InverterError
+from webapp.atomic_write import write_json_atomic
 
 # QPIGS field index -> (json name, converter). Indexes follow parsers.QPIGS_FIELDS;
 # this table exists separately because the web layer wants real numbers
@@ -141,7 +144,8 @@ class InverterService:
 
     def __init__(self, port: str, poll_interval: float = 10.0,
                  history_size: int = 720, min_battery_voltage=None,
-                 allow_writes: bool = True, timeout: float = 3.0):
+                 allow_writes: bool = True, timeout: float = 3.0,
+                 priorities_path: str | None = None):
         self.port = port
         self.poll_interval = poll_interval
         self.min_battery_voltage = min_battery_voltage
@@ -162,6 +166,31 @@ class InverterService:
         self._audit = deque(maxlen=200)
         self._consecutive_failures = 0
         self._last_success_mono = 0.0
+
+        # Which routine set commands are worth remembering "what we last
+        # set this to" for -- currently just the two priority codes,
+        # since QPIRI can't answer that (gotchas #1/#2) and the in-memory
+        # audit log alone doesn't survive a restart. Found this gap live
+        # (2026-08-24): a routine service restart wiped the audit log, so
+        # grid_charge.py's POP-awareness warning came back "unknown"
+        # despite POP genuinely having been set moments earlier -- see
+        # CLAUDE.md gotcha #7.
+        self._priorities_path = priorities_path
+        self._last_known = self._load_last_known()
+
+    def _load_last_known(self) -> dict:
+        if not self._priorities_path or not os.path.exists(self._priorities_path):
+            return {}
+        try:
+            with open(self._priorities_path) as fh:
+                raw = fh.read()
+            return json.loads(raw) if raw.strip() else {}
+        except (ValueError, OSError):
+            return {}
+
+    def _save_last_known(self) -> None:
+        if self._priorities_path:
+            write_json_atomic(self._priorities_path, self._last_known)
 
     # ---- connection handling -------------------------------------------
 
@@ -237,17 +266,43 @@ class InverterService:
             self._record_audit(command, resp, source)
             return resp
 
+    # Set commands worth remembering "what we last set this to" for --
+    # see _load_last_known()'s docstring note.
+    _TRACKED_PRIORITIES = ("POP", "PCP")
+
     def _record_audit(self, command: str, response: str, source: str = "manual"):
+        at = _utcnow()
+        ok = response.startswith("(ACK")
         self._audit.appendleft({
-            "at": _utcnow(),
-            "command": command,
-            "response": response,
-            "ok": response.startswith("(ACK"),
-            "source": source,
+            "at": at, "command": command, "response": response,
+            "ok": ok, "source": source,
         })
+        if ok:
+            for prefix in self._TRACKED_PRIORITIES:
+                if command.startswith(prefix):
+                    self._last_known[prefix] = {
+                        "value": command[len(prefix):len(prefix) + 2], "at": at,
+                    }
+                    self._save_last_known()
+                    break
 
     def audit_log(self) -> list:
         return list(self._audit)
+
+    def last_known_priority(self, prefix: str):
+        """The 2-digit value of the most recent successful `prefix` write
+        (e.g. "POP", "PCP") this service has seen, from any source -- manual,
+        scheduler, or grid-export. None if it's never observed one at all.
+
+        QPIRI can't answer this (static rated values, never reflects a
+        setting change -- CLAUDE.md gotcha #1/#2), and the in-memory audit
+        log alone doesn't survive a restart -- confirmed live (2026-08-24)
+        that a routine restart made this come back "unknown" moments after
+        POP had genuinely been set (gotcha #7). Persisted to
+        `priorities_path` for exactly that reason.
+        """
+        entry = self._last_known.get(prefix)
+        return entry["value"] if entry else None
 
     # ---- higher-level reads ---------------------------------------------
 

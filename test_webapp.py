@@ -37,7 +37,7 @@ class FakeService:
     """Stands in for InverterService without touching a serial port."""
 
     def __init__(self, battery_voltage=26.0, allow_writes=True,
-                 min_battery_voltage=24.0, ack=True):
+                 min_battery_voltage=24.0, ack=True, pop="02"):
         self.allow_writes = allow_writes
         self.min_battery_voltage = min_battery_voltage
         self.poll_interval = 10.0
@@ -45,9 +45,19 @@ class FakeService:
         self._ack = ack
         self.sent = []
         self.sent_sources = []
+        # Last-known POP, as GridChargeController._pop_warning() would see
+        # it via the real service's last_known_priority(). Default "02"
+        # (SBU) so existing tests aren't all forced to think about this --
+        # tests of the warning itself override it explicitly.
+        self._last_known_pop = pop
 
     def battery_voltage(self):
         return self._battery_voltage
+
+    def last_known_priority(self, prefix):
+        if prefix == "POP":
+            return self._last_known_pop
+        return None
 
     def query(self, command):
         if command == "QPIGS":
@@ -634,6 +644,102 @@ class TestGridChargeController(unittest.TestCase):
         gc.tick()
         self.assertEqual(service.sent, ["PCP01"])   # held, not resent
         self.assertIn("anti-flap", gc.get_state()["last_run"]["note"])
+
+
+class TestLastKnownPriority(unittest.TestCase):
+    """InverterService.last_known_priority() -- real class, not FakeService,
+    since this exercises the actual audit-log scan."""
+
+    def make_service(self):
+        from webapp.service import InverterService
+        return InverterService(port="/dev/null")
+
+    def test_none_when_never_observed(self):
+        svc = self.make_service()
+        self.assertIsNone(svc.last_known_priority("POP"))
+
+    def test_returns_most_recent_successful_value(self):
+        svc = self.make_service()
+        svc._record_audit("POP00", "(ACK", source="manual")
+        svc._record_audit("POP02", "(ACK", source="manual")
+        self.assertEqual(svc.last_known_priority("POP"), "02")
+
+    def test_ignores_failed_writes(self):
+        svc = self.make_service()
+        svc._record_audit("POP02", "(ACK", source="manual")
+        svc._record_audit("POP00", "(NAK", source="manual")
+        self.assertEqual(svc.last_known_priority("POP"), "02")
+
+    def test_ignores_other_prefixes(self):
+        svc = self.make_service()
+        svc._record_audit("PCP01", "(ACK", source="manual")
+        self.assertIsNone(svc.last_known_priority("POP"))
+
+    def test_survives_a_restart_when_a_path_is_configured(self):
+        # The actual bug found live 2026-08-24: the in-memory audit log
+        # resets on every restart, so without persistence this comes back
+        # "unknown" moments after POP was genuinely set. Confirm a second
+        # InverterService pointed at the same file picks up what the first
+        # one wrote -- simulating exactly that restart.
+        from webapp.service import InverterService
+        path = os.path.join(tempfile.mkdtemp(), "web_priorities.json")
+        first = InverterService(port="/dev/null", priorities_path=path)
+        first._record_audit("POP02", "(ACK", source="manual")
+
+        second = InverterService(port="/dev/null", priorities_path=path)
+        self.assertEqual(second.last_known_priority("POP"), "02")
+
+    def test_without_a_path_nothing_persists(self):
+        from webapp.service import InverterService
+        first = InverterService(port="/dev/null")
+        first._record_audit("POP02", "(ACK", source="manual")
+        second = InverterService(port="/dev/null")
+        self.assertIsNone(second.last_known_priority("POP"))
+
+
+class TestGridChargePopWarning(unittest.TestCase):
+    """PCP writes were confirmed live (2026-08-24) to only actually change
+    charging behaviour while POP is 02 (SBU); other POP values still ACK
+    the PCP write but it's a no-op. This is the warning surfacing that."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "web_gridcharge.json")
+
+    def test_no_warning_when_pop_is_sbu(self):
+        service = FakeService(pop="02")
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200))
+        state = gc.get_state()
+        self.assertIsNone(state["pop_warning"])
+
+    def test_warns_when_pop_is_not_sbu(self):
+        service = FakeService(pop="00")
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200))
+        state = gc.get_state()
+        self.assertIsNotNone(state["pop_warning"])
+        self.assertIn("00", state["pop_warning"])
+
+    def test_warns_when_pop_never_observed(self):
+        service = FakeService(pop=None)
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200))
+        state = gc.get_state()
+        self.assertIsNotNone(state["pop_warning"])
+        self.assertIn("not been observed", state["pop_warning"])
+
+    def test_warning_present_on_tick_result_too(self):
+        service = FakeService(pop="00")
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200))
+        result = gc.tick(force=True)
+        self.assertIsNotNone(result["pop_warning"])
+
+    def test_pcp_still_applied_despite_warning(self):
+        # The warning is informational -- it must not block the write, since
+        # a missed charge opportunity isn't a safety issue the way an
+        # unexpected PCP03 would be.
+        service = FakeService(pop="00")
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200))
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        self.assertEqual(service.sent, ["PCP01"])
 
 
 class TestGridChargeApi(unittest.TestCase):

@@ -522,6 +522,16 @@ function renderGridCharge(state) {
   $("#gc-status").className = `badge ${state.enabled ? "" : "muted"}`;
   if (!state.allow_writes) $("#gc-status").textContent += " (server read-only — not applied)";
 
+  const popWarnEl = document.querySelector("#gc-pop-warning");
+  if (popWarnEl) {
+    if (state.pop_warning) {
+      popWarnEl.textContent = `⚠ ${state.pop_warning}`;
+      popWarnEl.hidden = false;
+    } else {
+      popWarnEl.hidden = true;
+    }
+  }
+
   GC_FIELDS.forEach(([id, key, type]) => {
     const el = document.querySelector(`#${id}`);
     if (!el || document.activeElement === el) return;

@@ -151,6 +151,37 @@ protocol code. Deployed to `palacoulo-inverter`. Two things to know:
    one via the API while the other is enabled (`409
    conflicting_automation`), rather than silently disabling the other.
    Config is `web_gridcharge.json` (gitignored, atomic-written).
+7. **`PCP` only actually affects charging while `POP` is `02` (SBU)** —
+   confirmed by the user directly at the physical unit, 2026-08-24, after a
+   real fault event: `POP` is what triggers the audible transfer-relay
+   clank (it switches the physical output path between grid-bypass and
+   battery-inverting), while `PCP` writes are silent — no relay click.
+   Under other `POP` values `PCP` writes still get ACKed but appear to have
+   no real effect on charging. `webapp/grid_charge.py`'s `_pop_warning()`
+   (backed by `InverterService.last_known_priority()`, which scans the
+   audit log since `QPIRI` can't answer this either) surfaces a warning in
+   `/api/grid-charge` and the dashboard if the last `POP` we've observed
+   isn't `02` — but it only warns, it doesn't block the `PCP` write or
+   touch `POP` itself. If you ever want the automation to *manage* `POP`
+   too rather than just warn about it, that's a bigger, riskier change
+   (POP governs whether the house loads lose power on a bad write) and
+   should probably be its own explicit conversation, not a quick addition.
+8. **A real fault event happened 2026-08-24, ~09:03-09:06 local** —
+   continuous beeping, panel showed "Fault 01" (commonly documented as a
+   fan-lock fault on this inverter family, *not verified* against this
+   unit's actual fault-code table). `palacoulo-inverter`'s own kernel log
+   confirms a genuine power interruption at the same time (`hwmon1:
+   Undervoltage detected!` at boot, plus an unclean-shutdown journald
+   message) — this points to a real, if brief, electrical disturbance on
+   the circuit both the Pi and the inverter share, not a software glitch
+   or a stuck display. The persistent `QPIWS` bit 5 (commonly "line fail
+   warning") seen since 2026-08-23 afternoon is probably the same
+   underlying cause, not a separate coincidence. Root cause (loose
+   connection? marginal supply? actual grid blip?) is still unconfirmed —
+   worth physically checking the wiring around the Pi's power adapter and
+   the inverter's AC input if it recurs. The automation's config and the
+   web service both survived the reboot cleanly (systemd auto-restart,
+   `web_gridcharge.json` persisted correctly) — no data or state was lost.
 
 ## Related project on this network: `auto-energy`
 

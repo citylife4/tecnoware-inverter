@@ -49,6 +49,9 @@ DEFAULTS = {
     # Grid-export-following charge control (see webapp/grid_charge.py).
     # Mutually exclusive with the scheduler above -- app.py enforces that.
     "gridcharge_config": "web_gridcharge.json",
+    # Last-known POP/PCP values, so InverterService.last_known_priority()
+    # survives a restart -- see CLAUDE.md gotcha #7.
+    "priorities_config": "web_priorities.json",
 }
 
 
@@ -132,6 +135,7 @@ def main() -> int:
         min_battery_voltage=cfg.get("min_battery_voltage"),
         allow_writes=bool(cfg["allow_writes"]),
         timeout=float(cfg["serial_timeout"]),
+        priorities_path=cfg["priorities_config"],
     )
     service.start()
 

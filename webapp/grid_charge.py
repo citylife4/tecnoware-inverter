@@ -177,6 +177,7 @@ class GridChargeController:
                 **self._config,
                 "allow_writes": self.service.allow_writes,
                 "min_battery_voltage": self.service.min_battery_voltage,
+                "pop_warning": self._pop_warning(),
                 "current": {
                     "net_balance_w": self._last_net_balance,
                     "remote_timestamp": self._last_remote_ts,
@@ -185,6 +186,23 @@ class GridChargeController:
                 },
                 "last_run": self._last_run,
             }
+
+    def _pop_warning(self):
+        """None if the output priority (POP) we've most recently observed
+        is "02" (SBU) -- the only mode confirmed live on real hardware
+        (2026-08-24) where a PCP write actually changes charging behaviour;
+        under other POP values PCP appears to be accepted (ACK) but has no
+        real effect. A warning string otherwise, so that silent no-op
+        doesn't go unnoticed. See CLAUDE.md.
+        """
+        pop = self.service.last_known_priority("POP")
+        if pop is None:
+            return ("output priority (POP) has not been observed this session -- "
+                    "if it isn't 02 (SBU), PCP charging writes may have no effect")
+        if pop != "02":
+            return (f"output priority (POP) was last set to {pop}, not 02 (SBU) -- "
+                    f"PCP charging writes may have no effect until it's changed back")
+        return None
 
     def set_config(self, updates: dict) -> dict:
         cfg = validate_config(updates)
@@ -265,6 +283,7 @@ class GridChargeController:
             "at": _utcnow(), "desired_state": desired, "target": target,
             "net_balance_w": self._last_net_balance, "known": known,
             "why": override, "applied": False, "note": "",
+            "pop_warning": self._pop_warning(),
         }
 
         now_mono = time.monotonic()
