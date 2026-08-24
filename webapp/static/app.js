@@ -238,6 +238,7 @@ async function tick() {
     const last = new Date(hist.history[hist.history.length - 1].ts).toLocaleTimeString();
     $("#trend-range").textContent = `${first} – ${last} (${hist.history.length} amostras)`;
   }
+  markCurrentPriorities(data.last_known_priorities);
   loadAudit();
   loadSchedule();
   loadGridCharge();
@@ -345,9 +346,8 @@ function wireControls() {
         if (res.ok) {
           btn.parentElement.querySelectorAll(".opt").forEach((b) => b.classList.remove("active"));
           btn.classList.add("active");
-          // QPIRI never reflects a change, so re-read live status instead,
-          // and re-derive the highlight from the audit log.
-          markCurrentPriorities();
+          // Realce otimista imediato; o tick() a seguir confirma-o a
+          // partir do estado persistido no servidor.
           setTimeout(() => api("/api/status?live=1").then(tick), 1200);
         }
       } finally { btn.disabled = false; }
@@ -373,31 +373,36 @@ function wireControls() {
    Confirmed on this hardware: QPIRI does NOT track these writes. Sending
    PCP02 returns (ACK, yet QPIRI's charger_source_priority still reports the
    old value -- the same "QPIRI reports static rated values" trap documented
-   in the README, and it applies to the priority code fields too.
+   in the README, and it applies to the priority code fields too. So the
+   only trustworthy record is what this server set and had acknowledged.
 
-   So the only trustworthy record of the current setting is what this server
-   has actually set and had acknowledged: the audit log. QPIRI is shown only
-   as the rated/default value, and never as a confirmed current state. */
-async function markCurrentPriorities() {
-  const d = await api("/api/audit");
-  if (!d.ok) return;
+   Reads `last_known_priorities` from /api/status, NOT the audit log. The
+   audit log is in-memory and empties on every restart, which meant the POP
+   button showed nothing while PCP showed fine: the grid-export automation
+   rewrites PCP every few minutes so it was always in the recent log, but
+   POP only changes when a person sets it, so after a restart there was no
+   POP entry to find. The server-side value is persisted, so it survives.
+
+   Called from tick(), i.e. on every poll -- so a change made by the
+   automation (or from another browser tab, or by curl) shows up on the
+   buttons within one poll, instead of only after a manual click or a page
+   reload. */
+function markCurrentPriorities(lastKnown) {
   const kinds = [["PCP", "charger-priority"], ["POP", "output-priority"]];
   kinds.forEach(([prefix, kind]) => {
-    const last = d.audit.find((a) => a.ok && a.command.startsWith(prefix));
+    const entry = (lastKnown || {})[prefix];
     const buttons = document.querySelectorAll(`.opt[data-kind="${kind}"]`);
-    if (!last) {
-      // Nothing set since this server started, and the inverter won't tell
-      // us. Claiming a value here would be a guess.
+    const note = document.querySelector(`#note-${kind}`);
+    if (!entry) {
+      // Never set through this server, and the inverter won't tell us.
+      // Claiming a value here would be a guess.
       buttons.forEach((b) => b.classList.remove("active"));
-      const note = document.querySelector(`#note-${kind}`);
       if (note) note.textContent = "Definição atual desconhecida — o inversor não a devolve.";
       return;
     }
-    const code = last.command.slice(prefix.length, prefix.length + 2);
-    buttons.forEach((b) => b.classList.toggle("active", b.dataset.value === code));
-    const note = document.querySelector(`#note-${kind}`);
+    buttons.forEach((b) => b.classList.toggle("active", b.dataset.value === entry.value));
     if (note) {
-      note.textContent = `Definido por este servidor em ${new Date(last.at).toLocaleString()}.`;
+      note.textContent = `Definido por este servidor em ${new Date(entry.at).toLocaleString()}.`;
     }
   });
 }
@@ -409,7 +414,8 @@ async function markCurrentPriorities() {
    at the same time anyway. This panel edits the rule list and shows what
    the scheduler most recently did; it never claims a "current setting"
    read back from the inverter, because the hardware doesn't report one
-   (same reason markCurrentPriorities() above uses the audit log). */
+   (same reason markCurrentPriorities() above uses the server's persisted
+   last-known values rather than reading QPIRI). */
 
 function fmtRule(r) {
   if (!r) return "nenhuma regra corresponde à hora atual";
@@ -688,7 +694,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   await tick();
   loadDevice();
   loadRatings();
-  markCurrentPriorities();
 
   const interval = 5000;
   pollTimer = setInterval(() => tick().catch(() => {}), interval);

@@ -74,11 +74,16 @@ class FakeService:
         return "(ACK" if self._ack else "(NAK"
 
     def latest(self):
+        known = {}
+        if self._last_known_pop:
+            known["POP"] = {"value": self._last_known_pop,
+                            "at": "2026-01-01T00:00:00+00:00"}
         return {"status": parse_qpigs(SAMPLE_QPIGS), "error": None,
                 "connected": True, "last_success": "2026-01-01T00:00:00+00:00",
                 "poll_interval": self.poll_interval,
                 "allow_writes": self.allow_writes,
-                "min_battery_voltage": self.min_battery_voltage}
+                "min_battery_voltage": self.min_battery_voltage,
+                "last_known_priorities": known}
 
     def history(self):
         return []
@@ -316,6 +321,48 @@ class TestApi(unittest.TestCase):
         # UI is pt-PT (webapp/ui_labels.py); the REST API stays English.
         self.assertIn("Estado atual".encode(), r.data)
         self.assertIn(b'lang="pt-PT"', r.data)
+
+
+class TestLastKnownPrioritiesInStatus(unittest.TestCase):
+    """/api/status carries the persisted POP/PCP so the dashboard can
+    highlight the right button on every poll. It used to derive that from
+    /api/audit, which is in-memory: after a restart the POP button showed
+    nothing (nobody had set POP since boot) while PCP showed fine (the
+    grid-export automation rewrites it constantly)."""
+
+    def make_service(self, path):
+        from webapp.service import InverterService
+        return InverterService(port="/dev/null", priorities_path=path)
+
+    def test_status_exposes_persisted_priorities(self):
+        path = os.path.join(tempfile.mkdtemp(), "web_priorities.json")
+        svc = self.make_service(path)
+        svc._record_audit("POP02", "(ACK", source="manual")
+        svc._record_audit("PCP01", "(ACK", source="grid_export")
+        known = svc.latest()["last_known_priorities"]
+        self.assertEqual(known["POP"]["value"], "02")
+        self.assertEqual(known["PCP"]["value"], "01")
+
+    def test_pop_survives_a_restart_that_empties_the_audit_log(self):
+        # The exact reported symptom: POP set once, service restarts, audit
+        # log is empty -- but the button must still highlight.
+        path = os.path.join(tempfile.mkdtemp(), "web_priorities.json")
+        first = self.make_service(path)
+        first._record_audit("POP02", "(ACK", source="manual")
+
+        restarted = self.make_service(path)
+        self.assertEqual(restarted.audit_log(), [])          # log really is empty
+        known = restarted.latest()["last_known_priorities"]
+        self.assertEqual(known["POP"]["value"], "02")        # ...but POP survives
+
+    def test_absent_when_never_set(self):
+        svc = self.make_service(os.path.join(tempfile.mkdtemp(), "p.json"))
+        self.assertEqual(svc.latest()["last_known_priorities"], {})
+
+    def test_served_over_http(self):
+        client = client_for(FakeService(pop="02"))
+        body = client.get("/api/status", headers=AUTH).get_json()
+        self.assertEqual(body["last_known_priorities"]["POP"]["value"], "02")
 
 
 class TestUiLabels(unittest.TestCase):

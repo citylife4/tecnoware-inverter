@@ -360,6 +360,16 @@ class InverterService:
             "poll_interval": self.poll_interval,
             "allow_writes": self.allow_writes,
             "min_battery_voltage": self.min_battery_voltage,
+            # {"POP": {"value": "02", "at": ...}, "PCP": {...}} -- what this
+            # server last set and had acknowledged, persisted across
+            # restarts. Included here (rather than left to /api/audit) so
+            # the dashboard can highlight the right priority button on
+            # every poll: the audit log is in-memory and empties on
+            # restart, which is why the POP button showed nothing while
+            # PCP did -- the automation rewrites PCP constantly, so it was
+            # always in the recent log, but POP only changes when a person
+            # sets it.
+            "last_known_priorities": {k: dict(v) for k, v in self._last_known.items()},
         }
 
     def history(self) -> list:
