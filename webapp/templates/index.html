@@ -81,15 +81,18 @@
         <p class="warn small"><strong>03 é apenas solar.</strong> Sem sol, a bateria
           descarrega. O servidor recusa este valor abaixo do limite mínimo de segurança
           da bateria.</p>
-        <p class="warn small">O <code>PCP</code> só tem efeito real enquanto o
-          <code>POP</code> estiver em <code>02</code> (SBU) &mdash; confirmado no
-          aparelho. Noutros modos o comando é aceite mas não muda nada.</p>
+        <p class="warn small">O <code>PCP</code> só carrega mesmo enquanto o
+          <code>POP</code> estiver em <code>00</code> (rede primeiro) &mdash; medido
+          no aparelho a 2026-08-24: com <code>POP02</code> (SBU) fica a 0 A e a
+          bateria desce. Noutros modos o comando é aceite mas não carrega.</p>
       </div>
 
       <div class="control-card">
         <h3>Prioridade da fonte de saída <code>POP</code></h3>
         <p class="muted small">Que fonte alimenta os consumos. É esta que comuta o relé
-          (o "clique" audível).</p>
+          (o "clique" audível). <strong>Só em <code>00</code> é que a bateria
+          carrega</strong> &mdash; em <code>02</code> (SBU) alimenta os consumos mas
+          nunca recarrega.</p>
         <div class="btnrow" id="pop-row">
           {% for value, label in pop_values.items() %}
           <button class="opt" data-kind="output-priority" data-value="{{ value }}">

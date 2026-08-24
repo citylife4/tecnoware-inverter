@@ -62,6 +62,11 @@ from webapp.safety import PCP_VALUES, apply_low_battery_floor
 #       carregamento normal por baixo.
 MODES = ("exclusive", "override")
 
+# A única prioridade de saída em que o carregador comprovadamente funciona
+# nesta instalação -- ver _pop_warning() para a medição. POP=02 foi testado
+# e NÃO carrega; POP=01 não foi testado.
+CHARGING_POP = "00"
+
 DEFAULT_CONFIG = {
     "enabled": False,
     "mode": "exclusive",
@@ -206,20 +211,35 @@ class GridChargeController:
             }
 
     def _pop_warning(self):
-        """None if the output priority (POP) we've most recently observed
-        is "02" (SBU) -- the only mode confirmed live on real hardware
-        (2026-08-24) where a PCP write actually changes charging behaviour;
-        under other POP values PCP appears to be accepted (ACK) but has no
-        real effect. A warning string otherwise, so that silent no-op
-        doesn't go unnoticed. See CLAUDE.md.
+        """None if the output priority (POP) we've most recently observed is
+        one that actually lets the charger run. A warning string otherwise.
+
+        MEASURED ON THE REAL UNIT, 2026-08-24 -- and it is the opposite of
+        what this code assumed until now:
+
+            POP=00 (utility first) + PCP=01  ->  charges, 20 A, 24.0 -> 28.2 V
+            POP=02 (SBU)           + PCP=01  ->  0 A for 2 min, battery FELL
+
+        So charging requires POP=00, not POP=02. The earlier note here had
+        it inverted, which meant this warned when things were fine and
+        stayed silent when the charger was dead -- and every PCP write the
+        automations made while POP=02 was a silent no-op. POP=01 has not
+        been tested; it is treated as unsafe-to-assume and warned about.
+
+        This also disables the low-battery floor: forcing PCP01 on a low
+        pack does nothing at all while POP=02, so that interlock cannot
+        rescue the battery either. That is why this warns loudly rather
+        than being a footnote.
         """
         pop = self.service.last_known_priority("POP")
         if pop is None:
-            return ("output priority (POP) has not been observed this session -- "
-                    "if it isn't 02 (SBU), PCP charging writes may have no effect")
-        if pop != "02":
-            return (f"output priority (POP) was last set to {pop}, not 02 (SBU) -- "
-                    f"PCP charging writes may have no effect until it's changed back")
+            return ("a prioridade de saída (POP) ainda não foi observada nesta "
+                    "instalação -- se não estiver em 00, o carregamento não funciona")
+        if pop != CHARGING_POP:
+            return (f"POP está em {pop}: o carregador NÃO funciona assim. "
+                    f"Medido a 2026-08-24: só com POP={CHARGING_POP} é que o PCP "
+                    f"faz o inversor carregar (20 A); com POP=02 fica a 0 A e a "
+                    f"bateria desce. Isto também anula o limite mínimo de bateria.")
         return None
 
     def set_config(self, updates: dict) -> dict:

@@ -37,7 +37,7 @@ class FakeService:
     """Stands in for InverterService without touching a serial port."""
 
     def __init__(self, battery_voltage=26.0, allow_writes=True,
-                 min_battery_voltage=24.0, ack=True, pop="02"):
+                 min_battery_voltage=24.0, ack=True, pop="00"):
         self.allow_writes = allow_writes
         self.min_battery_voltage = min_battery_voltage
         self.poll_interval = 10.0
@@ -46,9 +46,9 @@ class FakeService:
         self.sent = []
         self.sent_sources = []
         # Last-known POP, as GridChargeController._pop_warning() would see
-        # it via the real service's last_known_priority(). Default "02"
-        # (SBU) so existing tests aren't all forced to think about this --
-        # tests of the warning itself override it explicitly.
+        # it via the real service's last_known_priority(). Default "00" --
+        # measured 2026-08-24 as the only value where the charger actually
+        # runs (see _pop_warning). Tests of the warning override it.
         self._last_known_pop = pop
 
     def battery_voltage(self):
@@ -939,28 +939,37 @@ class TestGridChargePopWarning(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         self.path = os.path.join(self.dir, "web_gridcharge.json")
 
-    def test_no_warning_when_pop_is_sbu(self):
-        service = FakeService(pop="02")
-        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200))
-        state = gc.get_state()
-        self.assertIsNone(state["pop_warning"])
-
-    def test_warns_when_pop_is_not_sbu(self):
+    def test_no_warning_when_pop_allows_charging(self):
+        # POP=00 is the ONLY value measured to actually charge (2026-08-24).
         service = FakeService(pop="00")
         gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200))
-        state = gc.get_state()
-        self.assertIsNotNone(state["pop_warning"])
-        self.assertIn("00", state["pop_warning"])
+        self.assertIsNone(gc.get_state()["pop_warning"])
+
+    def test_warns_when_pop_is_sbu(self):
+        # Regression for a real incident: POP=02 was believed to be the
+        # required mode, so this warned when things were fine and stayed
+        # silent while the charger was dead. Measured: POP=02 + PCP=01 gives
+        # 0 A and a falling battery.
+        service = FakeService(pop="02")
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200))
+        w = gc.get_state()["pop_warning"]
+        self.assertIsNotNone(w)
+        self.assertIn("02", w)
+
+    def test_warns_for_untested_pop_01(self):
+        service = FakeService(pop="01")
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200))
+        self.assertIsNotNone(gc.get_state()["pop_warning"])
 
     def test_warns_when_pop_never_observed(self):
         service = FakeService(pop=None)
         gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200))
         state = gc.get_state()
         self.assertIsNotNone(state["pop_warning"])
-        self.assertIn("not been observed", state["pop_warning"])
+        self.assertIn("não foi observada", state["pop_warning"])
 
     def test_warning_present_on_tick_result_too(self):
-        service = FakeService(pop="00")
+        service = FakeService(pop="02")
         gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200))
         result = gc.tick(force=True)
         self.assertIsNotNone(result["pop_warning"])
@@ -969,7 +978,7 @@ class TestGridChargePopWarning(unittest.TestCase):
         # The warning is informational -- it must not block the write, since
         # a missed charge opportunity isn't a safety issue the way an
         # unexpected PCP03 would be.
-        service = FakeService(pop="00")
+        service = FakeService(pop="02")
         gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200))
         gc.set_config({"enabled": True, "min_switch_interval": 0})
         self.assertEqual(service.sent, ["PCP01"])

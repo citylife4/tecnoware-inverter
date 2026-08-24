@@ -151,21 +151,35 @@ protocol code. Deployed to `palacoulo-inverter`. Two things to know:
    one via the API while the other is enabled (`409
    conflicting_automation`), rather than silently disabling the other.
    Config is `web_gridcharge.json` (gitignored, atomic-written).
-7. **`PCP` only actually affects charging while `POP` is `02` (SBU)** —
-   confirmed by the user directly at the physical unit, 2026-08-24, after a
-   real fault event: `POP` is what triggers the audible transfer-relay
-   clank (it switches the physical output path between grid-bypass and
-   battery-inverting), while `PCP` writes are silent — no relay click.
-   Under other `POP` values `PCP` writes still get ACKed but appear to have
-   no real effect on charging. `webapp/grid_charge.py`'s `_pop_warning()`
-   (backed by `InverterService.last_known_priority()`, which scans the
-   audit log since `QPIRI` can't answer this either) surfaces a warning in
-   `/api/grid-charge` and the dashboard if the last `POP` we've observed
-   isn't `02` — but it only warns, it doesn't block the `PCP` write or
-   touch `POP` itself. If you ever want the automation to *manage* `POP`
-   too rather than just warn about it, that's a bigger, riskier change
-   (POP governs whether the house loads lose power on a bad write) and
-   should probably be its own explicit conversation, not a quick addition.
+7. **`PCP` only actually charges while `POP` is `00` (utility first).**
+   Measured directly on the unit, 2026-08-24, with the schedule paused so
+   nothing could interfere:
+
+       POP=02 (SBU) + PCP=01  ->  0 A for 2 minutes, battery FELL 24.2->23.9 V
+       POP=00 (util) + PCP=01 ->  20 A within ~20 s, battery 24.0 -> 28.2 V
+
+   **An earlier version of this note claimed the opposite** (that POP had to
+   be `02`), based on a misreading of a user remark rather than a
+   measurement. That was wrong and had real consequences: the deployed
+   config sat at POP=02 for roughly a day, so *every* `PCP01` the
+   automations wrote was a silent no-op and the battery never charged.
+   Don't re-derive this from the protocol docs -- the measurement above is
+   the ground truth for this unit. `POP=01` was never tested; treat it as
+   unknown.
+
+   Consequences worth holding on to:
+   - `webapp/grid_charge.py` defines `CHARGING_POP = "00"` and
+     `_pop_warning()` warns for anything else. Both were inverted before.
+   - **The low-battery floor is also disabled by POP=02** -- forcing
+     `PCP01` on a low pack does nothing at all in that mode, so that
+     interlock cannot rescue the battery either. This is why the warning
+     is worded loudly.
+   - There is a genuine conflict here with no clean answer yet: `POP=00`
+     charges but leaves the loads on grid; `POP=02` runs the loads from the
+     battery but never recharges it. Using both needs alternating POP,
+     which switches a physical relay each time. Not resolved -- see the
+     open questions section.
+
 8. **A real fault event happened 2026-08-24, ~09:03-09:06 local** —
    continuous beeping, panel showed "Fault 01" (commonly documented as a
    fan-lock fault on this inverter family, *not verified* against this
