@@ -585,11 +585,34 @@ reboot plus ordinary deploys) and both times erased exactly the window
 worth analysing. Write failures are swallowed deliberately: losing a log
 line matters far less than stopping the poller.
 
-One caveat when reading those files: **`ac_output_active_power` is only
-meaningful in battery mode.** With `POP=00` the inverter is in bypass --
-grid passes through the transfer relay, it isn't inverting, and it reports
-a constant 1 W regardless of what is connected to its output. In bypass,
-use the grid meter's inverter-input channel instead.
+Read them with [`read_telemetry.py`](read_telemetry.py) rather than a plain
+`csv.reader`:
+
+```bash
+python3 read_telemetry.py                  # summarise today
+python3 read_telemetry.py --column battery_voltage
+```
+
+If the machine loses power mid-append the file picks up a run of NUL bytes,
+and Python's `csv` module then rejects the *entire file* with
+`_csv.Error: line contains NUL`. That would throw away a day of good data
+over a few bytes -- measured once at 56 NUL bytes costing exactly 1 row out
+of 1578. The reader skips only the damaged lines, re-sorts a tail the
+filesystem replayed out of order, and reports what it dropped.
+
+Two caveats when reading those files:
+
+- **`ac_output_active_power` is only meaningful in battery mode.** With
+  `POP=00` the inverter is in bypass -- grid passes through the transfer
+  relay, it isn't inverting, and it reports a constant 1 W regardless of
+  what is connected to its output. In bypass, use the grid meter's
+  inverter-input channel instead. The dashboard renders this as "--"
+  rather than "1 W" so the placeholder isn't mistaken for data.
+- **Charge/discharge power (`battery_power_w`) isn't in the CSV** -- it is
+  derived in `/api/status` and `/api/history` as
+  `battery_net_current x battery_voltage` (positive charging, negative
+  discharging), and is deliberately not logged because both its inputs
+  already are.
 
 ### Security
 
@@ -658,4 +681,5 @@ commands with real caution before using them on a live system.
 - `webapp/atomic_write.py` — crash-safe JSON writes, shared by `web.json` and both automations' config
 - `webapp/app.py` — Flask routes, auth, JSON API
 - `mock_inverter.py` — fake inverter on a pty, for development without hardware
+- `read_telemetry.py` — reads the daily telemetry CSVs, tolerating the corruption an unclean power cut leaves behind
 - `test_webapp.py` — tests for the API, parsers, both automations, and write policy

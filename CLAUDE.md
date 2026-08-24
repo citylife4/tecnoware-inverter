@@ -370,11 +370,23 @@ Deployment state as of end of 2026-08-24:
   battery charged to full for the first time this session once `POP=00` was
   set. Grid-export is currently inert because `PCP01` is already set.
 
-Open, roughly by importance:
+### Applied but NOT yet verified
 
-- **Charge current is ~3x too high** (18-20 A into a 30 Ah bank) and could
-  not be changed over the wire — see gotcha #10. Needs the front panel.
-  This is the item most likely to be shortening the battery's life.
+Both were accepted by the inverter and neither has been *seen* working.
+Do not record either as done until observed:
+
+- **Charge current 20 A -> 10 A** (front panel, program 11; done by the
+  user 2026-08-24). The pack was already at float when it changed, so
+  nothing has been observed capping at 10 A. **Check the first time the
+  battery accepts real charge** — `battery_charging_current` should stop
+  at 10 rather than climbing to 20.
+- **`PBCV24.0`** — ACKed, intent was to raise the recharge point from a
+  near-flat 22.0 V to ~50%. `QPIRI` still reports 22.0 V, which proves
+  nothing either way (gotcha #2). Confirming it needs the pack near 24 V
+  in battery mode and seen to start recharging.
+
+### Open, roughly by importance
+
 - **`POP` strategy is undecided.** `POP=00` charges but leaves loads on
   grid; `POP=02` runs the fridge off the battery but never recharges.
   Doing both needs alternating `POP`, which throws a physical relay each
@@ -400,6 +412,32 @@ Open, roughly by importance:
   resolved, don't trust it.
 - `battery_redischarge_voltage` (field 22, reads `52.0`) fits neither the
   raw nor the x2 scale — unexplained.
-- `POP=01` has never been tested. `QPIWS` bit meanings were never verified
-  against this unit; the "line fail warning" reading is the published
-  convention, not a confirmed fact.
+- `POP=01` has never been tested. `QPIWS` *warning-bit* meanings were never
+  verified against this unit; the "line fail warning" reading is the
+  published convention, not a confirmed fact. (The *fault* codes are
+  different and ARE documented — see below.)
+- The charge rate is still ~C/3, above the C/10-C/5 deep-cycle lead-acid
+  wants. Program 11's only lower option is 2 A (~C/15), which would make a
+  full recharge take most of a day. 10 A was the pragmatic choice, not the
+  ideal one.
+
+### Source documents
+
+The user supplied the official manual (**"ATA SOLAR INVERTER 3.5KW/5.5KW
+User's Manual"**, Tecnoware) on 2026-08-24. It is not in this repo, but it
+settled several things that had been guesswork:
+
+- **Fault code table (section 5.5).** `01 = "Fan is locked when inverter is
+  off"`, `02` over temperature, `03/04` battery voltage too high/low,
+  `07` overload timeout, `51` over current or surge, `59` PV over
+  limitation. This is the *fault* table, not the `QPIWS` warning bits.
+- **Front-panel program list (section 5.4)** — program 01 output priority,
+  02 total max charging current (10-100 A), **11 max utility charging
+  current (2 A, then 10-80 A)**, 12/13 the SBU switch-back voltages,
+  16 charger source priority, 26/27/29 bulk/float/cut-off voltages.
+- **"All settings must be modified in battery mode and must be rebooted to
+  be valid."** Worth remembering before concluding a front-panel change
+  didn't take.
+- Programs **12 (default 23.0 V)** and **13 (default 27.0 V / FUL)** are
+  the SBU switch-back points — which is why `POP=02` does eventually
+  recharge, just not until the pack falls to ~23 V. See gotcha #1's note.
