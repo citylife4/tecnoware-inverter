@@ -281,6 +281,31 @@ sit near 24 V in battery mode and be seen to start recharging; it was at
 28.2 V on charge at the time, so that could not be tested. **Do not record
 this as "done" until it has been observed behaving.**
 
+## Telemetria persistente (2026-08-24)
+
+`InverterService` grava agora cada leitura bem sucedida em
+`telemetry/telemetry-YYYY-MM-DD.csv` (append-only, um ficheiro por dia,
+gitignored). Antes disto o único histórico do inversor era o deque em
+memória (`/api/history`), que **se perde em cada reinício** -- aconteceu
+duas vezes a 2026-08-24 (reboot por subtensão + reinícios de deploy) e das
+duas apagou exactamente os minutos que era preciso analisar. Falhas de
+escrita são engolidas de propósito: perder uma linha de log é muito menos
+grave do que parar o poller.
+
+`TELEMETRY_COLUMNS` tem ordem fixa -- não reordenar, ou os ficheiros
+antigos deixam de casar com os novos.
+
+**O `ac_output_active_power` do QPIGS só é válido em modo bateria.** Com
+`POP=00` o inversor está em bypass (a rede passa pelo relé de
+transferência) e reporta 1 W constante, independentemente do que esteja
+ligado à saída. Isto levou-me a afirmar, erradamente, que não havia nada
+ligado ao inversor -- quando na verdade tem um frigorífico. Confirmado
+comutando para `POP=02`: a saída passou imediatamente de 1 W para 45-46 W,
+com um pico de 1175 W registado antes (arranque do compressor). Para medir
+a carga real da saída é preciso estar em `POP=02`; em bypass usar antes o
+canal 1 do Shelly (entrada AC do inversor), que o `auto-energy` já
+persiste.
+
 ## Related project on this network: `auto-energy`
 
 `~/dev/auto-energy` on `palacoulo-rasp` (this machine) — a Flask dashboard

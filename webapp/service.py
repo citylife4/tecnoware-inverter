@@ -145,7 +145,8 @@ class InverterService:
     def __init__(self, port: str, poll_interval: float = 10.0,
                  history_size: int = 720, min_battery_voltage=None,
                  allow_writes: bool = True, timeout: float = 3.0,
-                 priorities_path: str | None = None):
+                 priorities_path: str | None = None,
+                 telemetry_dir: str | None = None):
         self.port = port
         self.poll_interval = poll_interval
         self.min_battery_voltage = min_battery_voltage
@@ -178,6 +179,13 @@ class InverterService:
         self._priorities_path = priorities_path
         self._last_known = self._load_last_known()
 
+        # Onde gravar a telemetria em disco. O histórico em memória
+        # (self._history) é um deque que se perde em cada reinício -- o que
+        # já aconteceu duas vezes a 2026-08-24 e apagou justamente os
+        # minutos que interessava analisar. Um CSV por dia, append-only,
+        # resolve isso sem depender de base de dados nenhuma.
+        self._telemetry_dir = telemetry_dir
+
     def _load_last_known(self) -> dict:
         if not self._priorities_path or not os.path.exists(self._priorities_path):
             return {}
@@ -191,6 +199,35 @@ class InverterService:
     def _save_last_known(self) -> None:
         if self._priorities_path:
             write_json_atomic(self._priorities_path, self._last_known)
+
+    # Colunas gravadas no CSV diário. Ordem fixa -- não reordenar, senão os
+    # ficheiros antigos deixam de casar com os novos.
+    TELEMETRY_COLUMNS = (
+        "ts", "mode", "battery_voltage", "battery_capacity",
+        "battery_charging_current", "battery_discharge_current",
+        "ac_output_active_power", "output_load_percent",
+        "grid_voltage", "pv_charging_power", "heatsink_temperature",
+    )
+
+    def _append_telemetry(self, snap: dict) -> None:
+        """Grava uma linha no CSV do dia. Falhas aqui nunca podem derrubar o
+        poller -- perder uma linha de log é muito menos grave do que parar
+        de ler o inversor."""
+        if not self._telemetry_dir:
+            return
+        try:
+            os.makedirs(self._telemetry_dir, exist_ok=True)
+            day = snap["ts"][:10]
+            path = os.path.join(self._telemetry_dir, f"telemetry-{day}.csv")
+            new = not os.path.exists(path)
+            with open(path, "a") as fh:
+                if new:
+                    fh.write(",".join(self.TELEMETRY_COLUMNS) + "\n")
+                fh.write(",".join(
+                    "" if snap.get(c) is None else str(snap.get(c))
+                    for c in self.TELEMETRY_COLUMNS) + "\n")
+        except OSError:
+            pass
 
     # ---- connection handling -------------------------------------------
 
@@ -405,6 +442,7 @@ class InverterService:
         self._latest_error = None
         self._last_success = snap["ts"]
         self._last_success_mono = time.monotonic()
+        self._append_telemetry(snap)
         self._history.append({
             "ts": snap["ts"],
             "battery_voltage": snap.get("battery_voltage"),

@@ -517,6 +517,68 @@ class TestOverrideMode(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
 
 
+class TestTelemetryLog(unittest.TestCase):
+    """O histórico em memória perde-se em cada reinício do serviço -- já
+    aconteceu duas vezes a 2026-08-24 e apagou os minutos que interessavam.
+    Este CSV diário é o que sobrevive."""
+
+    def setUp(self):
+        from webapp.service import InverterService
+        self.dir = os.path.join(tempfile.mkdtemp(), "telemetry")
+        self.svc = InverterService(port="/dev/null", telemetry_dir=self.dir)
+        self.snap = {
+            "ts": "2026-08-24T12:00:00+00:00", "mode": "L",
+            "battery_voltage": 27.1, "battery_capacity": 100,
+            "battery_charging_current": 6, "battery_discharge_current": 0,
+            "ac_output_active_power": 1, "output_load_percent": 0,
+            "grid_voltage": 230.0, "pv_charging_power": 0,
+            "heatsink_temperature": 26,
+        }
+
+    def _lines(self):
+        path = os.path.join(self.dir, "telemetry-2026-08-24.csv")
+        with open(path) as fh:
+            return fh.read().strip().split("\n")
+
+    def test_writes_header_then_row(self):
+        self.svc._append_telemetry(self.snap)
+        lines = self._lines()
+        self.assertEqual(lines[0], ",".join(self.svc.TELEMETRY_COLUMNS))
+        self.assertIn("27.1", lines[1])
+        self.assertEqual(len(lines), 2)
+
+    def test_appends_without_repeating_header(self):
+        for _ in range(3):
+            self.svc._append_telemetry(self.snap)
+        self.assertEqual(len(self._lines()), 4)      # 1 cabeçalho + 3 linhas
+
+    def test_splits_by_day(self):
+        self.svc._append_telemetry(self.snap)
+        other = dict(self.snap, ts="2026-08-25T00:00:01+00:00")
+        self.svc._append_telemetry(other)
+        self.assertTrue(os.path.exists(os.path.join(self.dir, "telemetry-2026-08-24.csv")))
+        self.assertTrue(os.path.exists(os.path.join(self.dir, "telemetry-2026-08-25.csv")))
+
+    def test_missing_fields_become_empty_not_none(self):
+        # "None" a meio de um CSV estraga qualquer parser; melhor campo vazio.
+        self.svc._append_telemetry(dict(self.snap, battery_capacity=None))
+        row = self._lines()[1]
+        self.assertNotIn("None", row)
+        self.assertIn(",,", row)
+
+    def test_disabled_when_no_dir_configured(self):
+        from webapp.service import InverterService
+        svc = InverterService(port="/dev/null")      # sem telemetry_dir
+        svc._append_telemetry(self.snap)             # não pode rebentar
+        self.assertFalse(os.path.exists(self.dir))
+
+    def test_write_failure_never_propagates(self):
+        # Perder uma linha de log é muito menos grave do que parar o poller.
+        from webapp.service import InverterService
+        svc = InverterService(port="/dev/null", telemetry_dir="/proc/nope/nope")
+        svc._append_telemetry(self.snap)             # silencioso, sem excepção
+
+
 class TestUiLabels(unittest.TestCase):
     """The pt-PT display labels must cover every code the API can emit --
     otherwise the dashboard silently falls back to an English string (or a
