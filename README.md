@@ -171,16 +171,34 @@ the rest. They look supported but aren't. `--scan` flags these for you.
 
 ### Charger source priority (`PCP`) — verified on hardware
 
-| Command | Meaning | Observed effect |
+> **`PCP` does nothing unless `POP` is `00`.** Measured on this unit
+> 2026-08-24, with everything else held still:
+>
+> | | Result |
+> |---|---|
+> | `POP=02` (SBU) + `PCP=01` | **0 A** for 2 minutes, battery *fell* 24.2 → 23.9 V |
+> | `POP=00` (utility) + `PCP=01` | **20 A** within ~20 s, battery 24.0 → 28.2 V |
+>
+> Every `PCP` write still returns `(ACK` under `POP=02` — it is simply a
+> no-op. This cost a full day of a "working" automation charging nothing at
+> all. It also disables the low-battery interlock, which acts by writing
+> `PCP01`. `POP=01` was never tested; treat it as unknown. Read the whole
+> table below as "given `POP=00`".
+
+| Command | Meaning | Observed effect (with `POP=00`) |
 |---|---|---|
 | `PCP00` | Utility first | ACK |
-| `PCP01` | Solar first (falls back to utility) | ACK — charging resumed, 9A |
+| `PCP01` | Solar first (falls back to utility) | ACK — charging resumed, 9–20 A |
 | `PCP02` | Solar + utility | ACK |
 | `PCP03` | **Solar ONLY** | ACK — utility charging STOPS |
 
 `PCP03` with no sun means the battery will not charge at all and will
 slowly drain. Do not leave a unit in `PCP03` unless that is genuinely what
 you want.
+
+Note also that on the reference installation the inverter's own PV input is
+**not connected**, so "solar" is not a source it can ever select — `PCP03`
+there means "do not charge", full stop.
 
 ## Scheduled / timed charging — possible via the host
 
@@ -284,6 +302,14 @@ why per-request reads would queue up.
 - a raw command console, the rated `QPIRI` configuration, and a log of every
   set command the server has sent
 
+**The dashboard is in European Portuguese (pt-PT); the REST API is not.**
+Display strings live in [`webapp/ui_labels.py`](webapp/ui_labels.py) and are
+injected into the page, deliberately separate from the values the API
+returns -- scripts consuming `/api/commands` or `/api/status` keep getting
+stable English. Adding a new protocol code means adding its label there too;
+`test_webapp.py` asserts the tables stay in sync so an untranslated code
+can't slip through silently.
+
 **The inverter never reports its current priority back.** Confirmed live on
 this unit: `PCP02` returns `(ACK`, and `QPIRI`'s `charger_source_priority`
 still reads the old value afterwards — the "static rated values" trap applies
@@ -291,6 +317,12 @@ to the priority code fields too, not just the battery setpoints. The dashboard
 therefore highlights a priority button from **this server's own write log**,
 and says "current setting unknown" when it has not set one since starting.
 Nothing in the UI claims a current setting the hardware did not confirm.
+
+That record is `last_known_priorities` in `/api/status`, and it is
+**persisted** to `web_priorities.json` rather than kept in the audit log --
+the audit log is in-memory and empties on restart, which made the `POP`
+button show nothing while `PCP` (rewritten constantly by the automation)
+looked fine.
 
 ### API
 
@@ -304,7 +336,7 @@ Authorization: Bearer <token>
 | Method | Endpoint | Purpose |
 |---|---|---|
 | GET | `/api/health` | liveness; no auth |
-| GET | `/api/status` | latest polled snapshot (`?live=1` forces a fresh read) |
+| GET | `/api/status` | latest polled snapshot (`?live=1` forces a fresh read), plus `last_known_priorities` |
 | GET | `/api/history?limit=N` | recent samples for charting |
 | GET | `/api/device` | model / firmware / serial number |
 | GET | `/api/ratings` | parsed `QPIRI`, with 12V-block setpoints scaled |
@@ -418,8 +450,10 @@ whether the sun is actually out. The scheduler still works exactly as
 documented above and is unit-tested; it's kept for other uses (e.g. a fixed
 off-peak-tariff charging window) and because deleting a working, tested
 feature to fix a documentation-level assumption felt like the wrong trade.
-The two automations are **mutually exclusive** -- enabling one while the
-other is enabled is refused with `409 conflicting_automation`.
+Whether the two automations can run together depends on grid-export's
+`mode`: in `exclusive` they are mutually exclusive (`409
+conflicting_automation`), in `override` they are designed to run together.
+See [Grid-export charging](#grid-export-charging).
 
 Driving it from external cron instead of the built-in thread above still
 works (`PUT /api/schedule` or plain `POST /api/charger-priority` calls), but
@@ -448,16 +482,37 @@ already computes that from a Shelly EM on the grid connection
 (`net_balance` in its `/api/live` response -- positive means buying,
 negative means selling). This feature polls that endpoint and enables
 charging only while there's a surplus being exported anyway, so the battery
-soaks up power that would otherwise be sold at the (usually much lower)
-feed-in tariff, and never causes the inverter to draw *additional* grid
-power beyond what was already flowing out.
+soaks up power that would otherwise leave the property, and never causes
+the inverter to draw *additional* grid power beyond what was already
+flowing out.
+
+**Why you would actually run this: compliance, not savings.** On the
+reference installation exporting to the grid is not permitted, and the
+feed-in tariff is `0.0` -- exported energy earns nothing. The saving is
+therefore whatever export you avoid: measured at ~0.13 kWh/day, or roughly
+**EUR 10/year**. Do not adopt this expecting it to pay for anything. It is
+worth having when export is a legal or contractual problem, and the honest
+answer otherwise is that it is not worth the complexity.
+
+Two limits worth knowing before relying on it:
+
+- **The charger cannot modulate.** It draws 350-560 W or nothing. Absorbing
+  50 W of export means pulling ~500 W, i.e. swinging straight into
+  importing. If the surplus is much smaller than the charger, you buy the
+  difference.
+- **A full battery cannot absorb anything.** At float the charger tapers to
+  a few watts, so this mechanism silently stops working exactly when the
+  battery is topped up. For a *hard* zero-export guarantee you need
+  something that curtails generation or a dump load; this feature alone
+  cannot promise it.
 
 ```bash
 curl -X PUT -H "X-API-Key: $TOKEN" -H "Content-Type: application/json" -d '{
       "enabled": true,
+      "mode": "override",
       "source_url": "http://<host-running-auto-energy>:8000/api/live",
-      "export_threshold_w": -50,
-      "import_threshold_w": 20,
+      "export_threshold_w": 0,
+      "import_threshold_w": 400,
       "charge_pcp": "01",
       "idle_pcp": "03"
     }' http://inverter.local:8080/api/grid-charge
@@ -491,10 +546,17 @@ Behaviour, all configurable, defaults shown:
   `03`) is upgraded to `01` if the battery is at/under
   `min_battery_voltage`, including when it can't be read at all -- this
   interlock is what the anti-flap timer is allowed to skip.
-- **Mutually exclusive with the time-of-day schedule** -- both drive PCP;
-  running both would have them fight. Enabling either while the other is
-  on is refused (`409 conflicting_automation`); disabling one is never
-  blocked by the other being on.
+- **`mode` decides how it coexists with the schedule** (both drive PCP, so
+  something has to give):
+  - `"exclusive"` (default) -- owns PCP outright. Enabling either
+    automation while the other is on is refused (`409
+    conflicting_automation`); disabling one is never blocked.
+  - `"override"` -- only writes PCP *while exporting*; otherwise writes
+    nothing and lets the schedule decide. The scheduler asks
+    `is_overriding()` before each of its own writes and stands down, so
+    they take turns instead of fighting (they poll at 60s vs 30s and would
+    otherwise overwrite each other). This is the mode to use when export is
+    not permitted and you still want a normal charging schedule underneath.
 
 ### Running it as a service
 
@@ -508,6 +570,26 @@ journalctl -u inverter-web -f
 ```
 
 The service user must be in the `dialout` group for serial access.
+
+### Telemetry logging
+
+Every successful poll is appended to
+`telemetry/telemetry-YYYY-MM-DD.csv` (one file per day, gitignored,
+`telemetry_dir` in `web.json`). Columns are fixed in
+`InverterService.TELEMETRY_COLUMNS` -- do not reorder them, or old files
+stop matching new ones.
+
+This exists because `/api/history` is an in-memory ring buffer that is
+**lost on every restart**, which happened twice in one day (an undervoltage
+reboot plus ordinary deploys) and both times erased exactly the window
+worth analysing. Write failures are swallowed deliberately: losing a log
+line matters far less than stopping the poller.
+
+One caveat when reading those files: **`ac_output_active_power` is only
+meaningful in battery mode.** With `POP=00` the inverter is in bypass --
+grid passes through the transfer relay, it isn't inverting, and it reports
+a constant 1 W regardless of what is connected to its output. In bypass,
+use the grid meter's inverter-input channel instead.
 
 ### Security
 

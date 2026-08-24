@@ -56,255 +56,173 @@ to origin rather than keeping two histories of the same thing).
 
 ## Critical gotchas — read before touching the real inverter
 
-1. **`QPIRI` reports static rated values and NEVER reflects a setting
-   change.** This caused a real incident: writes were (wrongly) believed to
-   be non-functional because `QPIRI` looked unchanged after them. **Always
-   verify a write via `QPIGS` behaviour** (e.g. `battery_charging_current`
-   for charger-priority changes), never via `QPIRI`.
-2. **`PCP03` = solar-only charging.** With no PV, this stops grid charging
-   entirely and will drain the battery. This actually happened during
-   testing (undetected for a while because of gotcha #1) and dropped the
-   pack from 100%/27.0V to 80%/26.1V before being caught and reverted.
-   `charge_schedule.py` has a `min_battery_voltage` safety override for
-   exactly this reason — don't bypass it.
-3. **Set commands need the CRC appended; queries don't.** A bare `PDa` gets
-   no reply at all; `PDa` + 2-byte CRC gets `(ACK`. See `protocol.py`.
-4. **Set commands are slow** — can take several seconds longer to answer
-   than queries. `transport.py` uses `SET_TIMEOUT_S = 10`.
-5. **The serial link occasionally returns truncated/corrupt `QPIGS`
-   frames**, and the USB adapter occasionally throws a transient
-   `Resource busy` right after a previous process closes it. Both are
-   handled with retries in `charge_schedule.py` — don't remove those
-   without re-adding equivalent handling.
-6. **QPIRI battery setpoints (recharge/under/bulk/float voltage) are per
-   12V block, not pack voltage.** On this 24V unit, multiply by 2 for the
-   real target. `parsers.py` shows this in its output already.
-7. Battery type on this unit is `2` = **user-defined**, not a factory AGM/
-   Flooded preset — the setpoints were configured by hand. If the pack
-   is ever swapped to lithium, those voltages are wrong for it (lead-acid
-   cutoff of 21.0V would over-discharge LiFePO4) — this hasn't been
-   checked/confirmed either way, just flagged.
+Ordered by how much time they cost when forgotten. #1 and #2 have each
+already burned a full day.
+
+1. **`PCP` only charges while `POP` is `00` (utility first).** Measured
+   2026-08-24, everything else held still:
+
+       POP=02 (SBU) + PCP=01  ->  0 A for 2 min, battery FELL 24.2->23.9 V
+       POP=00 (util) + PCP=01 ->  20 A within ~20 s, 24.0 -> 28.2 V
+
+   Every `PCP` write still returns `(ACK` under `POP=02`; it is simply a
+   no-op. An earlier version of this file asserted the **opposite** (that
+   `POP` had to be `02`), from misreading a remark instead of testing —
+   the deployed config then sat at `POP=02` for a day charging nothing.
+   **This also disables the low-battery interlock**, which works by
+   writing `PCP01`. `POP=01` was never tested; treat as unknown.
+   `webapp/grid_charge.py` has `CHARGING_POP = "00"` and warns otherwise.
+2. **`QPIRI` reports static rated values and NEVER reflects a setting
+   change.** Writes were once (wrongly) believed non-functional because
+   `QPIRI` looked unchanged. **Verify a write via `QPIGS` behaviour**
+   (e.g. `battery_charging_current`), never via `QPIRI`. An `(ACK` alone
+   proves the command was accepted, not that it did anything — see #1.
+3. **`ac_output_active_power` is only valid in battery mode.** With
+   `POP=00` the inverter is in bypass (grid through the transfer relay,
+   not inverting) and reports a constant **1 W** whatever is connected.
+   This led to a wrong claim that nothing was attached to the output —
+   the installation has a fridge on it. Switching to `POP=02` showed
+   45-46 W immediately. In bypass, read the Shelly's inverter-input
+   channel instead.
+4. **`PCP03` = solar-only charging.** With no PV this stops grid charging
+   entirely and drains the battery — it happened during testing
+   (undetected for a while because of #2) and dropped the pack from
+   100%/27.0V to 80%/26.1V. `min_battery_voltage` guards this; don't
+   bypass it. **On this installation the inverter's PV input is not
+   connected at all**, so `PCP03` means "never charge", full stop.
+5. **Setpoint reads and writes use different scales.** `QPIRI` reports
+   battery setpoints **per 12V block** (multiply by 2 on this 24V unit;
+   `parsers.py` already does). But `PBCV` **takes the pack voltage** —
+   proven by `PBCV11.0` (exactly what QPIRI reports) being NAKed while
+   `PBCV22.0` and `PBCV24.0` ACK. Assume the same asymmetry for the other
+   setpoint writes until tested.
+6. **Set commands need the CRC appended; queries don't.** A bare `PDa`
+   gets no reply at all; `PDa` + 2-byte CRC gets `(ACK`. See `protocol.py`.
+7. **Set commands are slow** — several seconds longer than queries.
+   `transport.py` uses `SET_TIMEOUT_S = 10`.
+8. **The serial link returns truncated/corrupt `QPIGS` frames**
+   occasionally, and the USB adapter throws a transient `Resource busy`
+   right after another process closes it. Both are handled with retries —
+   don't remove them without equivalent handling. Garbled replies to set
+   commands also occur; retry rather than assuming failure.
+9. **Battery type is `2` = user-defined**, not a factory preset — the
+   setpoints were entered by hand. The pack is **2x Xunzel SOLARX 30
+   (12V 30Ah deep-cycle lead-acid) in series = 24V 30Ah**, i.e. 720 Wh
+   total, ~360 Wh usable. The configured 21.0V cutoff suits lead-acid and
+   would over-discharge LiFePO4, so re-check these if the pack is ever
+   swapped.
+10. **The charger over-drives this bank.** It pushes 18-20 A into 30 Ah
+    (~C/1.5) and barely tapers; deep-cycle lead-acid wants C/10-C/5, i.e.
+    3-6 A. `QCHGC`/`QMCC` NAK and `CHGC`/`MCHGC` aren't in the verified
+    set, so the limit likely has to be changed from the front panel.
+    Unresolved.
 
 ## What's confirmed working on this unit (`QPI` → `(PI30`, `QVFW` → `00072.40`)
 
 Run `python3 inverter_ctl.py --port <dev> --scan` to regenerate this
 matrix for whatever's actually connected — 12 of 52 queries work, listed
 in README's capability matrix. Set commands `PE`/`PD`/`PCP`/`POP`/`PBT`/
-`PSDV`/`PBCV`/`PGR` are recognised and DO apply (proven via `PCP03`→`PCP01`
-round-trip changing real charging current, not just via ACK).
+`PSDV`/`PBCV`/`PGR` are recognised and ACK.
 
-## Web interface (added 2026-08-23)
+"Recognised" is not "does something": `PCP` ACKs happily under `POP=02`
+while charging nothing at all (gotcha #1), and `PBCV24.0` ACKed with no way
+to confirm it applied (gotcha #2). Treat an `(ACK` as "the command parsed",
+and prove effect through `QPIGS` behaviour. Of these, only `PCP` and `POP`
+have been observed changing real behaviour on hardware.
+
+## Web interface and automations
 
 `serve.py` + `webapp/` is a Flask dashboard and REST API over the same
-protocol code. Deployed to `palacoulo-inverter`. Two things to know:
+protocol code, deployed to `palacoulo-inverter` under systemd
+(`inverter-web.service`).
 
 1. **The serial port is exclusive.** While `serve.py` runs it owns
    `/dev/ttyUSB0`, so `charge_schedule.py` and `inverter_ctl.py` cannot
-   open it. **Scheduling now lives inside the server itself**
-   (`webapp/scheduler.py`, added 2026-08-23) rather than as cron hitting
-   `/api/charger-priority` — same low-battery override behaviour as
-   `charge_schedule.py`, but no second process fighting for the port.
-   Config is `web_schedule.json` (gitignored, atomic-written). Stop the
-   service before using the CLI/`charge_schedule.py` on that host.
-2. **`QPIRI` does not reflect priority writes either** — verified live on
-   2026-08-23: `PCP02` → `(ACK`, yet `QPIRI` field 17
-   (`charger_source_priority`) still read `1` afterwards, before and after
-   restoring `PCP01`. So gotcha #1 is broader than the battery setpoints:
-   there is **no way to read the current priority back off this unit**. The
-   web UI highlights priority buttons from its own audit log and shows
-   "unknown" otherwise — don't "fix" it to read QPIRI.
-3. **Write policy lives in `webapp/safety.py`**, not in the routes. The
-   `PCP03` low-battery interlock and the "dangerous commands need
-   `confirm: true`" rule are both there, and both are unit-tested in
-   `test_webapp.py` (63 tests, no hardware needed). `mock_inverter.py`
-   fakes the unit on a pty for development away from the hardware.
-4. **`web.json` was found zero-length after an unclean reboot** (a plain
-   open/write/close isn't durable) — fixed via `webapp/atomic_write.py`
-   (temp file + fsync + rename + fsync dir), shared by `web.json`,
-   `web_schedule.json`, and `web_gridcharge.json`. If you ever add another
-   on-disk config/state file to this project, write it through that
-   helper, not a bare `open(..., "w")` — this bit us for real, not
-   hypothetically.
-5. **The inverter's own PV/DC input is unconnected** — confirmed by every
-   `QPIGS` sample taken across this whole project, at any time of day,
-   reading `pv_input_voltage: 0.0V` / `pv_charging_power: 0W`, cross-checked
-   against `auto-energy` (a separate project on this network, see below)
-   showing real nonzero solar production at the same moments. The panels
-   are on a separate AC-coupled system feeding the house wiring directly —
-   this inverter only ever sees "utility." **This means the time-of-day
-   scheduler's original "daytime = PCP03 solar-only" assumption
-   (inherited from `charge_schedule.py`'s pre-existing example config) does
-   not track reality on this hardware** — PCP03 during daylight just stops
-   charging on a timer, unrelated to whether the sun is out. Don't "fix"
-   this by changing the scheduler; the correct tool is the grid-export
-   automation added to address it directly, below.
-6. **Grid-export-following charge control** (added 2026-08-23,
-   `webapp/grid_charge.py`) — enables charging only while the house is
-   exporting surplus solar, using `auto-energy`'s grid-meter reading
-   (`net_balance` from its `/api/live`, at `http://192.168.188.11:8000` in
-   this deployment) instead of a clock. Same low-battery floor as the
-   scheduler, via a helper (`apply_low_battery_floor`) now shared by both
-   in `webapp/safety.py` — don't duplicate that logic if you touch either
-   automation. **Mutually exclusive with the time-of-day scheduler** by
-   explicit design choice (the user picked "export-following only,
-   replace the time rules" when asked) — `webapp/app.py` refuses to enable
-   one via the API while the other is enabled (`409
-   conflicting_automation`), rather than silently disabling the other.
-   Config is `web_gridcharge.json` (gitignored, atomic-written).
-7. **`PCP` only actually charges while `POP` is `00` (utility first).**
-   Measured directly on the unit, 2026-08-24, with the schedule paused so
-   nothing could interfere:
+   open it. Scheduling therefore lives *inside* the server
+   (`webapp/scheduler.py`) rather than as external cron. Stop the service
+   before using the CLI on that host.
+2. **Write policy lives in `webapp/safety.py`**, not in the routes — the
+   `PCP03` low-battery interlock and "dangerous commands need
+   `confirm: true`" are both there, unit-tested in `test_webapp.py`
+   (132 tests, no hardware needed). `mock_inverter.py` fakes the unit on a
+   pty for development away from the hardware.
+3. **All on-disk config goes through `webapp/atomic_write.py`** (temp file
+   + fsync + rename + fsync dir). `web.json` was once found zero-length
+   after an unclean reboot, losing the API token. If you add another
+   config/state file, use that helper, not a bare `open(..., "w")`.
+4. **The UI is pt-PT; the API is English.** Display strings are in
+   `webapp/ui_labels.py`, injected into the page, deliberately separate
+   from what the API returns so scripts keep a stable contract. Tests
+   assert the label tables stay in sync with the code tables they mirror.
+5. **Nothing in the UI claims a setting the hardware confirmed**, because
+   it can't — see gotcha #2. Priority buttons are highlighted from
+   `last_known_priorities` in `/api/status`, persisted to
+   `web_priorities.json`. Don't "fix" this to read `QPIRI`.
+6. **Telemetry is persisted** to `telemetry/telemetry-YYYY-MM-DD.csv`,
+   because `/api/history` is in-memory and dies on restart — which
+   happened twice on 2026-08-24 and both times erased the window worth
+   analysing. `TELEMETRY_COLUMNS` order is fixed.
 
-       POP=02 (SBU) + PCP=01  ->  0 A for 2 minutes, battery FELL 24.2->23.9 V
-       POP=00 (util) + PCP=01 ->  20 A within ~20 s, battery 24.0 -> 28.2 V
+### The two automations
 
-   **An earlier version of this note claimed the opposite** (that POP had to
-   be `02`), based on a misreading of a user remark rather than a
-   measurement. That was wrong and had real consequences: the deployed
-   config sat at POP=02 for roughly a day, so *every* `PCP01` the
-   automations wrote was a silent no-op and the battery never charged.
-   Don't re-derive this from the protocol docs -- the measurement above is
-   the ground truth for this unit. `POP=01` was never tested; treat it as
-   unknown.
+Both drive PCP, so they must not write at the same time.
 
-   Consequences worth holding on to:
-   - `webapp/grid_charge.py` defines `CHARGING_POP = "00"` and
-     `_pop_warning()` warns for anything else. Both were inverted before.
-   - **The low-battery floor is also disabled by POP=02** -- forcing
-     `PCP01` on a low pack does nothing at all in that mode, so that
-     interlock cannot rescue the battery either. This is why the warning
-     is worded loudly.
-   - There is a genuine conflict here with no clean answer yet: `POP=00`
-     charges but leaves the loads on grid; `POP=02` runs the loads from the
-     battery but never recharges it. Using both needs alternating POP,
-     which switches a physical relay each time. Not resolved -- see the
-     open questions section.
+- `webapp/scheduler.py` — time-of-day rules, config `web_schedule.json`.
+- `webapp/grid_charge.py` — charges while the house exports, polling
+  `auto-energy`'s `net_balance`. Config `web_gridcharge.json`.
 
-8. **A real fault event happened 2026-08-24, ~09:03-09:06 local** —
-   continuous beeping, panel showed "Fault 01" (commonly documented as a
-   fan-lock fault on this inverter family, *not verified* against this
-   unit's actual fault-code table). `palacoulo-inverter`'s own kernel log
-   confirms a genuine power interruption at the same time (`hwmon1:
-   Undervoltage detected!` at boot, plus an unclean-shutdown journald
-   message) — this points to a real, if brief, electrical disturbance on
-   the circuit both the Pi and the inverter share, not a software glitch
-   or a stuck display. The persistent `QPIWS` bit 5 (commonly "line fail
-   warning") seen since 2026-08-23 afternoon is probably the same
-   underlying cause, not a separate coincidence. Root cause (loose
-   connection? marginal supply? actual grid blip?) is still unconfirmed —
-   worth physically checking the wiring around the Pi's power adapter and
-   the inverter's AC input if it recurs. The automation's config and the
-   web service both survived the reboot cleanly (systemd auto-restart,
-   `web_gridcharge.json` persisted correctly) — no data or state was lost.
+`grid_charge` has a **`mode`**:
 
-## Zero-export requirement + the two automations (2026-08-24)
+- `"exclusive"` — owns PCP outright; `webapp/app.py` refuses to enable
+  either automation while the other is on (`409 conflicting_automation`).
+- `"override"` — **what this installation uses.** Only writes PCP while
+  exporting; otherwise writes nothing and defers. `is_overriding()` is
+  passed to `Scheduler(override_check=...)` in `serve.py` so the scheduler
+  stands down instead of fighting (they poll at 60s vs 30s). Both clear
+  their cached `_last_applied_pcp` when yielding, so the other's write
+  doesn't leave them thinking "already set".
 
-**Exporting to the grid is not permitted at this installation** (user says
-it's illegal for them). That reframes the grid-export feature entirely: it
-is a *compliance* mechanism (dump load when export appears), not an
-economic optimisation. Do not "simplify" it away on efficiency grounds.
+Both share `apply_low_battery_floor` in `webapp/safety.py` — don't
+duplicate that logic.
 
-Hard numbers measured this day, worth not re-deriving:
+### Why grid-export exists here: compliance, not savings
 
-- Panels: **193 W peak ever**, ~150 W typical, ~106 W peak on a cloudy day.
-- Charger draw: **350-560 W** (13-21 A x 24-28 V), and it does **not**
-  throttle below ~350 W. So the panels can never power the charger.
-- Actual export: **0.0-0.14 kWh/day** (avg 0.13). Solar is ~100%
-  self-consumed already. Whole-month exported 3.15 kWh vs 83 kWh imported.
+**Exporting is not permitted at this installation** and the feed-in tariff
+is `0.0`. This is a legal requirement, not an optimisation — do not
+"simplify" it away on efficiency grounds. Measured numbers:
 
-`webapp/grid_charge.py` now has a `mode`:
+- Panels: **193 W peak ever**, ~150 W typical. Charger draws **350-560 W**
+  and won't throttle below ~350 W — the panels can *never* power it.
+- Export: **0.0-0.14 kWh/day** (~3.2 of 18.7 kWh/month). Solar is already
+  ~100% self-consumed. Capturing all of it is worth roughly **EUR 10/year**.
 
-- `"exclusive"` -- original behaviour, owns PCP outright, mutually
-  exclusive with the scheduler.
-- `"override"` -- **the mode this installation uses**. Only writes PCP
-  while exporting; otherwise writes nothing and lets the scheduler decide.
-  `is_overriding()` is handed to `Scheduler(override_check=...)` in
-  serve.py so the scheduler stands down instead of fighting it (they poll
-  at 30s vs 60s and would otherwise overwrite each other). Both sides clear
-  their cached `_last_applied_pcp` when they yield, so the other one's
-  write doesn't leave them thinking "already set".
+**Known limitation, unsolved:** the override absorbs export by starting the
+charger. Once the battery is full the charger tapers to float and draws
+almost nothing, so there is no way to absorb export at that point via PCP.
+A hard zero-export guarantee needs generation curtailment (the solar Shelly
+at `192.168.188.25` is a Plus 1PM with a controllable relay) or a dump
+load. The user has ruled out cutting the Shelly for now.
 
-Deployed config: schedule `08:00-20:00 -> PCP03` (day: only charge from
-surplus, via the override) and `20:00-08:00 -> PCP01` (night: charge from
-grid so the pack isn't left partially charged); grid-charge in `override`
-with start at **0 W** export, stop at 400 W import, 60 s dwell.
+## Incident log
 
-**Known limitation, not yet solved:** the override can only absorb export
-by *starting the charger*. If the battery is already full the charger
-tapers to float and draws almost nothing, so there is no way to absorb
-export at that point via PCP. Genuinely fixing that needs a dump load or a
-controllable appliance, not this inverter.
-
-## Battery bank + a PBCV format asymmetry (2026-08-24)
-
-The pack is **2 x Xunzel SOLARX 30 (12 V 30 Ah deep-cycle lead-acid) in
-series = 24 V 30 Ah**, i.e. **720 Wh total, ~360 Wh usable** at the 50% DoD
-lead-acid wants. For scale that is ~10% of this house's ~3.5 kWh daily
-import, or 10-15 minutes at the water pump's ~1.5 kW. It is a small UPS,
-not an energy store -- worth remembering before anyone designs another
-"capture the surplus to save money" feature around it.
-
-That also explains the SOC readings: 24 V is the bank's *nominal* name, not
-its full voltage. A 24 V lead-acid rests at ~25.5 V when full and ~24.2 V
-at 50%, so the inverter reporting 50% at 24.1 V is roughly right. The 100%
-it shows at 28.2 V is *not* a real SOC -- that is charging voltage, and
-this unit has no coulomb counter, it just maps voltage to a percentage.
-
-**Charge rate is above spec and could not be fixed over the wire.** The
-charger pushes 18-20 A into a 30 Ah bank (~C/1.5) and barely tapers;
-deep-cycle lead-acid wants C/10-C/5, i.e. 3-6 A. `max_ac_charging_current`
-in QPIRI reads 60 A. But `QCHGC` and `QMCC` both NAK, and `CHGC`/`MCHGC`
-are not in this unit's verified-working set, so the limit likely has to be
-changed from the inverter's front panel. Left as-is, flagged to the user.
-
-**`PBCV` takes the PACK voltage, not the per-12V-block value** -- the
-opposite of how `QPIRI` reports the same setpoint (parsers.py scales the
-read by BATTERY_SETPOINT_SCALE=2). Determined by testing rather than
-assumed:
-
-    PBCV11.0  -> (NAK   <- the per-block value QPIRI currently reports!
-    PBCV12.0  -> (NAK
-    PBCV12.3  -> (NAK
-    PBCV22.0  -> (ACK   <- pack volts, matches the current setting
-    PBCV24.0  -> (ACK
-
-Since 11.0 is exactly what QPIRI reports and it is *rejected*, the
-per-block reading is ruled out. Read per-block, write pack volts. Assume
-the same asymmetry for the other `PBxx`/`PSDV` setpoint writes until
-someone tests them.
-
-**Unverified:** `PBCV24.0` ACKed (intent: recharge at 50% instead of the
-near-flat 22.0 V) but QPIRI still reports 22.0 V, and gotcha #1 says QPIRI
-never reflects a change -- so ACK-but-unconfirmed, exactly the trap that
-caused the original PCP incident. Confirming it needs the pack to actually
-sit near 24 V in battery mode and be seen to start recharging; it was at
-28.2 V on charge at the time, so that could not be tested. **Do not record
-this as "done" until it has been observed behaving.**
-
-## Telemetria persistente (2026-08-24)
-
-`InverterService` grava agora cada leitura bem sucedida em
-`telemetry/telemetry-YYYY-MM-DD.csv` (append-only, um ficheiro por dia,
-gitignored). Antes disto o único histórico do inversor era o deque em
-memória (`/api/history`), que **se perde em cada reinício** -- aconteceu
-duas vezes a 2026-08-24 (reboot por subtensão + reinícios de deploy) e das
-duas apagou exactamente os minutos que era preciso analisar. Falhas de
-escrita são engolidas de propósito: perder uma linha de log é muito menos
-grave do que parar o poller.
-
-`TELEMETRY_COLUMNS` tem ordem fixa -- não reordenar, ou os ficheiros
-antigos deixam de casar com os novos.
-
-**O `ac_output_active_power` do QPIGS só é válido em modo bateria.** Com
-`POP=00` o inversor está em bypass (a rede passa pelo relé de
-transferência) e reporta 1 W constante, independentemente do que esteja
-ligado à saída. Isto levou-me a afirmar, erradamente, que não havia nada
-ligado ao inversor -- quando na verdade tem um frigorífico. Confirmado
-comutando para `POP=02`: a saída passou imediatamente de 1 W para 45-46 W,
-com um pico de 1175 W registado antes (arranque do compressor). Para medir
-a carga real da saída é preciso estar em `POP=02`; em bypass usar antes o
-canal 1 do Shelly (entrada AC do inversor), que o `auto-energy` já
-persiste.
+- **2026-08-24 ~09:03-09:06 local — beeping, panel "Fault 01".** The Pi's
+  own kernel log shows `hwmon1: Undervoltage detected!` at boot plus an
+  unclean-shutdown journald message, so this was a genuine brief electrical
+  disturbance on the shared circuit, not a software glitch. "Fault 01" is
+  *commonly* a fan-lock fault on this family but that was **never verified**
+  against this unit's fault table. The persistent `QPIWS` bit 5 (commonly
+  "line fail warning") seen since 2026-08-23 is probably the same cause.
+  Root cause unconfirmed — check the wiring around the Pi's PSU and the
+  inverter's AC input if it recurs. Config and service survived cleanly.
+- **2026-08-24 — grid-export flapped PCP01<->PCP03 every ~2 min for 5+
+  hours** before anyone noticed. The original -50/+20 W hysteresis was a
+  guess; real `net_balance` swings by hundreds of watts. Widened to
+  -150/+150 W with a 300 s dwell. Battery current stayed 0 A throughout, so
+  nothing was actually being charged — pure wasted SET churn.
+- **2026-08-24 — `auto-energy` was reporting a fabricated 0.0 W** for over
+  an hour while its grid Shelly was powered off, because
+  `fetch_shelly_grid()` returned `0.0` on failure. Fixed there to return
+  `None`; see that project's repo.
 
 ## Related project on this network: `auto-energy`
 
@@ -353,18 +271,43 @@ actually sun, to see whether -150W turns out to need tuning the same way.
 
 ## What's not done / open questions
 
-- The macOS `launchd` plist for the old standalone `charge_schedule.py`
-  still exists but was never loaded — moot now that scheduling lives in
-  the web server; probably delete it next time this is touched.
-- **Grid-export charging is enabled on the deployed server** as of
-  2026-08-23 (thresholds -150W/+150W, 300s dwell — see the flapping
-  incident above). The time-of-day scheduler is available but disabled;
-  per the user's explicit choice grid-export is the intended automation.
-- Grid-export charging's `source_url` defaults to
-  `http://192.168.188.11:8000/api/live` (this machine, `palacoulo-rasp`) —
-  if `auto-energy` ever moves hosts, that default (and the deployed
-  `web_gridcharge.json` if already configured) needs updating.
-- `QPIRI` field 14 (`max_charging_current`) reads as malformed (`06P`) —
-  never resolved, don't trust it.
-- `battery_redischarge_voltage` (field 22, reads `52.0`) doesn't fit either
-  the raw or ×2 scale — unexplained.
+Deployment state as of end of 2026-08-24:
+
+- **`POP=00`, `PCP=01`, schedule disabled, grid-export enabled in
+  `override` mode** (start 0 W export, stop 400 W import, 60 s dwell). The
+  battery charged to full for the first time this session once `POP=00` was
+  set. Grid-export is currently inert because `PCP01` is already set.
+
+Open, roughly by importance:
+
+- **Charge current is ~3x too high** (18-20 A into a 30 Ah bank) and could
+  not be changed over the wire — see gotcha #10. Needs the front panel.
+  This is the item most likely to be shortening the battery's life.
+- **`POP` strategy is undecided.** `POP=00` charges but leaves loads on
+  grid; `POP=02` runs the fridge off the battery but never recharges.
+  Doing both needs alternating `POP`, which throws a physical relay each
+  time. Blocked on measuring the fridge's real daily consumption — a full
+  day of `telemetry/` plus `auto-energy` data was being collected
+  overnight for exactly this.
+- **`PBCV24.0` is ACKed but unverified** (gotcha #2/#5). Intent was to
+  raise the recharge point from a near-flat 22.0 V to 50%. Confirming it
+  needs the pack near 24 V in battery mode and seen to start recharging.
+  **Do not record as done until observed.**
+- **Zero export cannot currently be guaranteed** — see the limitation under
+  "Why grid-export exists here". Options are generation curtailment via the
+  solar Shelly's relay (user has ruled it out for now) or a dump load.
+- Which loads besides the fridge are on the inverter's output is still
+  unconfirmed; the pump is **not** (measured 1 W output while the house
+  drew 1623 W).
+- The macOS `launchd` plist for the standalone `charge_schedule.py` is
+  obsolete now scheduling lives in the server — probably delete it.
+- `grid_charge`'s `source_url` defaults to `http://192.168.188.11:8000`
+  (`palacoulo-rasp`); update it and the deployed `web_gridcharge.json` if
+  `auto-energy` ever moves host.
+- `QPIRI` field 14 (`max_charging_current`) reads malformed (`06P`) — never
+  resolved, don't trust it.
+- `battery_redischarge_voltage` (field 22, reads `52.0`) fits neither the
+  raw nor the x2 scale — unexplained.
+- `POP=01` has never been tested. `QPIWS` bit meanings were never verified
+  against this unit; the "line fail warning" reading is the published
+  convention, not a confirmed fact.
