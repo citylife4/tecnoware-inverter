@@ -68,6 +68,15 @@ HARD_FORBIDDEN = ({"from": "19:00", "to": "21:15", "why": "bomba de água"},)
 # cycle" by any definition and would shorten the pack's life materially.
 ABSOLUTE_FLOOR_V = 24.0
 
+# A below-floor reading only counts while the output load is at or under
+# this, i.e. with the fridge compressor stopped. The pack sags ~0.4 V at just
+# 46 W (measured 2026-08-25), so a sample taken mid-cycle reads well below
+# where the pack actually sits, and a floor set just above the inverter's own
+# switch-back point would latch on it. Missing a genuine crossing this way is
+# the safe direction: program 12 hands the loads back to utility at ~25.4 V
+# regardless, so the hardware backstops us.
+FLOOR_MAX_LOAD_W = 10
+
 FILE_MODE = 0o600
 
 DEFAULT_CONFIG = {
@@ -363,9 +372,11 @@ class BatteryWindow:
             # state of charge -- counting there would latch the window shut
             # before it ever opened. Seen live: the pack read 25.4 V in
             # bypass at 14:30, which a 25.6 V floor would have counted.
-            if in_window and v <= cfg["floor_voltage"]:
+            load = self.service.output_load_w()
+            quiet = load is None or load <= FLOOR_MAX_LOAD_W
+            if in_window and quiet and v <= cfg["floor_voltage"]:
                 self._below_floor += 1
-            elif not in_window or v > cfg["floor_voltage"]:
+            elif not in_window or (quiet and v > cfg["floor_voltage"]):
                 self._below_floor = 0
             if (not self._recovering
                     and self._below_floor >= cfg["floor_confirmations"]):

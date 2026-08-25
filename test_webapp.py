@@ -44,11 +44,13 @@ class FakeService:
     """Stands in for InverterService without touching a serial port."""
 
     def __init__(self, battery_voltage=26.0, allow_writes=True,
-                 min_battery_voltage=24.0, ack=True, pop="00"):
+                 min_battery_voltage=24.0, ack=True, pop="00",
+                 output_load_w=1):
         self.allow_writes = allow_writes
         self.min_battery_voltage = min_battery_voltage
         self.poll_interval = 10.0
         self._battery_voltage = battery_voltage
+        self._output_load_w = output_load_w
         self._ack = ack
         self.sent = []
         self.sent_sources = []
@@ -60,6 +62,9 @@ class FakeService:
 
     def battery_voltage(self):
         return self._battery_voltage
+
+    def output_load_w(self):
+        return self._output_load_w
 
     def last_known_priority(self, prefix):
         if prefix == "POP":
@@ -1459,6 +1464,25 @@ class TestBatteryWindow(unittest.TestCase):
         # ...and the window still opens when its time comes.
         service._battery_voltage = 27.0
         self.assertEqual(bw.tick(now=self.NIGHT)["target"], BATTERY_POP)
+
+    def test_floor_ignores_readings_taken_under_load(self):
+        """The pack sags ~0.4 V at only 46 W, so a sample caught mid
+        compressor-cycle reads far below where it actually sits. With the
+        floor just above the inverter's own 25.4 V switch-back, that would
+        latch the window on a transient."""
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=self.NIGHT, floor_confirmations=2,
+                    floor_voltage=25.6)
+        service._battery_voltage = 25.4      # under the floor...
+        service._output_load_w = 46          # ...but the compressor is running
+        for _ in range(4):
+            self.assertEqual(bw.tick(now=self.NIGHT)["target"], BATTERY_POP)
+        self.assertEqual(bw.get_state()["below_floor_readings"], 0)
+        service._output_load_w = 1           # compressor stops, pack still low
+        bw.tick(now=self.NIGHT)
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertEqual(r["reason"], "floor")
 
     def test_floor_needs_consecutive_confirmations(self):
         """A single dip must not end the night. The pack sags ~0.4 V while

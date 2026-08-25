@@ -423,6 +423,20 @@ class InverterService:
     def history(self) -> list:
         return list(self._history)
 
+    def output_load_w(self):
+        """ac_output_active_power from the cached snapshot, or None.
+
+        Only meaningful in battery mode -- in bypass this field floors at
+        1 W for every ordinary load in this house. BatteryWindow uses it to
+        avoid reading the pack's voltage while the fridge compressor is
+        running, since that sags it ~0.4 V at only 46 W.
+        """
+        snap = self._latest
+        if not snap:
+            return None
+        v = snap.get("ac_output_active_power")
+        return v if isinstance(v, (int, float)) else None
+
     def battery_voltage(self):
         """Best known battery voltage, for the PCP03 safety interlock.
 

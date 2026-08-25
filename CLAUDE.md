@@ -601,10 +601,52 @@ battery's life), and confirm what else is wired to the inverter's output.
 
 Deployment state as of end of 2026-08-24:
 
-- **`POP=00`, `PCP=01`, schedule disabled, grid-export enabled in
-  `override` mode** (start 0 W export, stop 400 W import, 60 s dwell). The
-  battery charged to full for the first time this session once `POP=00` was
-  set. Grid-export is currently inert because `PCP01` is already set.
+Superseded 2026-08-25 — see below.
+
+### Deployed configuration, end of 2026-08-25
+
+Three settings, chosen together to serve one goal the user stated plainly:
+**export mode by day, battery window by night, grid while the pump runs.**
+
+| Setting | Value | Why |
+|---|---|---|
+| `grid_charge.mode` | **`exclusive`** | was `override`, which was inert here |
+| `export_threshold_w` / `import_threshold_w` | **+30 / +150 W** | positive = pre-empt export |
+| `min_battery_voltage` | **25.5 V** | was 24.0 |
+| Battery window | **21:15-08:00** | after the pump, before the sun |
+| `floor_voltage` | **25.6 V** x 3 readings | above the inverter's own 25.4 V |
+
+**Why `exclusive` and not `override`.** In `override` the controller writes
+nothing when there is no surplus, deferring to the scheduler — but the
+scheduler is *disabled* on this installation, so "write nothing" means "leave
+`PCP01` where it is". Measured over one afternoon: **169 ticks, 1 write**, the
+charger drawing 4 A from the grid continuously with no relation to whether
+there was any surplus at all. It was not absorbing export; it was simply
+always on, and it spent the pack's absorption headroom on grid power. Use
+`override` only when a schedule is actually enabled to defer to.
+
+**Why `min_battery_voltage` went to 25.5 V.** `exclusive` writes `PCP03` when
+there is no surplus, which on this unit (no PV connected) means "do not
+charge". Left alone, the pack would sit part-charged for days whenever
+surplus is scarce — it was 0.000 kWh on 2026-08-24 — and lead-acid sulfates
+that way. The interlock now gives two bands: **above 25.5 V** charge only on
+surplus, preserving headroom; **below 25.5 V** charge regardless.
+
+**Why `floor_voltage` is 25.6 V and not lower.** Program 12 hands the loads
+back to utility at **~25.4 V**, so any floor below that never fires — the
+hardware acts first, and what you get is the inverter cycling battery/line
+every 20-40 minutes all night, buying grid power each time. Measured
+2026-08-25: **six cycles in four hours.** At 25.6 V the software decides
+first and the latch closes, giving the intended single shallow discharge.
+
+### What to expect, honestly
+
+About **1.5 h of battery per night**, not the whole night — the pack reached
+25.5 V in 1h33 on 2026-08-25 — creating roughly **100 Wh** of headroom
+against a measured worst-case export day of **140 Wh**. That is adequate but
+has no margin, and once the headroom is spent in the morning the afternoon
+has none. This reduces export substantially; it does not guarantee zero. A
+hard guarantee still needs curtailment or a dump load.
 
 ### Applied but NOT yet verified
 
