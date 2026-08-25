@@ -277,6 +277,42 @@ Two things follow. Always let the surface charge settle before reading
 anything into a voltage, and **never calibrate a resting threshold from a
 number taken while the charger was on.**
 
+`floor_confirmations` (default 3) requires consecutive readings under the
+floor before latching, for two independent reasons: this serial link returns
+corrupt `QPIGS` frames (gotcha #8), and **the pack sags ~0.4 V while the
+fridge compressor runs at only 46 W** (measured below). Either would end a
+night's discharge on a value that was never the pack's real state.
+
+### Measured in battery mode, 2026-08-25 — two field corrections
+
+First live `POP=02` run with the loads actually on the pack:
+
+| Minute | V | Output | What |
+|---|---|---|---|
+| 0 | 26.7 | 1 W | switch to `POP=02` |
+| 1-3 | 26.1 → 25.8 | 1 W | float surface charge collapsing |
+| 4-16 | 25.8 | 1 W | flat — fridge was disconnected for maintenance |
+| 17-19 | 25.5 → 25.4 | **46 W** | fridge compressor running |
+| 20 | 25.7 | 1 W | stops, voltage recovers |
+
+- **`ac_output_active_power` DOES work in battery mode** — it read 46 W,
+  matching the Shelly's independent 45-46 W for this fridge. Combined with
+  the earlier finding that it also reports large pass-through loads in
+  bypass, the field is best described as *floored at 1 W below some
+  threshold*, not as a placeholder.
+- **`battery_discharge_current` does NOT work.** It read **0.0 A while 46 W
+  was leaving the pack** (~1.8 A at 25.5 V). Since `battery_power_w` is
+  derived from `battery_net_current`, the dashboard's battery-power chart is
+  blind in battery mode too. Do not use either to prove a discharge; use the
+  voltage trend and `ac_output_active_power`.
+- **The pack sags 0.4 V under 46 W**, implying an internal resistance around
+  0.2 Ω where a healthy 30 Ah bank would be 0.01-0.02 Ω — an order of
+  magnitude high. Part of that drop may be real discharge rather than pure
+  IR, so this is **not yet a conclusion**, but if it holds it points to an
+  aged pack with far less usable capacity than its nameplate. Worth
+  re-measuring deliberately: note the resting voltage, apply a known load,
+  read the immediate step.
+
 ### The surplus signal — why `grid_charge` no longer chases itself
 
 Changed 2026-08-25. The controller decides on

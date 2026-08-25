@@ -1400,7 +1400,7 @@ class TestBatteryWindow(unittest.TestCase):
 
     def test_floor_sends_back_to_grid(self):
         service, bw = self.make(battery_voltage=27.0)
-        self.enable(bw)
+        self.enable(bw, floor_confirmations=1)
         bw.tick(now=self.NIGHT)
         service._battery_voltage = 25.4        # crosses the floor
         r = bw.tick(now=self.NIGHT)
@@ -1413,7 +1413,7 @@ class TestBatteryWindow(unittest.TestCase):
         recharges. Releasing on voltage alone would give several cycles a
         night, which is the wear this controller exists to prevent."""
         service, bw = self.make(battery_voltage=27.0)
-        self.enable(bw, now=self.NIGHT)
+        self.enable(bw, now=self.NIGHT, floor_confirmations=1)
         self.assertTrue(bw.is_active())
         service._battery_voltage = 25.4               # hits the floor
         r = bw.tick(now=self.NIGHT)
@@ -1425,13 +1425,46 @@ class TestBatteryWindow(unittest.TestCase):
 
     def test_latch_rearms_after_the_window_closes(self):
         service, bw = self.make(battery_voltage=27.0)
-        self.enable(bw, now=self.NIGHT)
+        self.enable(bw, now=self.NIGHT, floor_confirmations=1)
         service._battery_voltage = 25.4
         bw.tick(now=self.NIGHT)
         service._battery_voltage = 27.0
         bw.tick(now=self.DAY)                         # window closed, recovered
         r = bw.tick(now=self.NIGHT)                   # next night
         self.assertEqual(r["target"], BATTERY_POP)
+
+    def test_floor_needs_consecutive_confirmations(self):
+        """A single dip must not end the night. The pack sags ~0.4 V while
+        the fridge compressor runs (measured at only 46 W), and this serial
+        link is documented to return corrupt QPIGS frames -- either would
+        otherwise latch the window on a value that was never real."""
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=self.NIGHT, floor_confirmations=3)
+        self.assertTrue(bw.is_active())
+        service._battery_voltage = 24.9            # dip 1
+        self.assertEqual(bw.tick(now=self.NIGHT)["target"], BATTERY_POP)
+        service._battery_voltage = 24.9            # dip 2
+        self.assertEqual(bw.tick(now=self.NIGHT)["target"], BATTERY_POP)
+        service._battery_voltage = 24.9            # dip 3 -- now it counts
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertEqual(r["reason"], "floor")
+
+    def test_a_recovered_reading_resets_the_count(self):
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=self.NIGHT, floor_confirmations=3)
+        service._battery_voltage = 24.9
+        bw.tick(now=self.NIGHT)
+        bw.tick(now=self.NIGHT)
+        service._battery_voltage = 26.0            # compressor stopped
+        bw.tick(now=self.NIGHT)
+        self.assertEqual(bw.get_state()["below_floor_readings"], 0)
+        service._battery_voltage = 24.9
+        self.assertEqual(bw.tick(now=self.NIGHT)["target"], BATTERY_POP)
+
+    def test_floor_confirmations_must_be_at_least_one(self):
+        with self.assertRaises(ValueError):
+            validate_window_config({"floor_confirmations": 0})
 
     def test_unreadable_voltage_goes_to_grid(self):
         service, bw = self.make(battery_voltage=None)
@@ -1479,7 +1512,8 @@ class TestBatteryWindow(unittest.TestCase):
         """Going back to utility is a safety action and never waits out the
         anti-flap timer -- the pack has no reason to honour a cooldown."""
         service, bw = self.make()
-        self.enable(bw, now=self.NIGHT, min_switch_interval=99999)
+        self.enable(bw, now=self.NIGHT, min_switch_interval=99999,
+                    floor_confirmations=1)
         self.assertTrue(bw.is_active())
         service._battery_voltage = 25.0            # floor -- urgent
         r = bw.tick(now=self.NIGHT)

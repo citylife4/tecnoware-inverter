@@ -698,6 +698,7 @@ const BW_FIELDS = [
   ["bw-resume", "resume_voltage", "num"],
   ["bw-poll-interval", "poll_interval", "num"],
   ["bw-min-switch", "min_switch_interval", "num"],
+  ["bw-floor-confirmations", "floor_confirmations", "num"],
 ];
 
 /* Qual dos travões está a decidir. `detail` já vem em pt-PT do servidor, por
@@ -751,6 +752,10 @@ function renderBatteryWindow(state) {
     const margin = v - cfg.floor_voltage;
     parts.push(`<span class="muted">Bateria:</span> ${v.toFixed(2)} V `
       + `<span class="muted">(${margin >= 0 ? "+" : ""}${margin.toFixed(2)} V do piso)</span>`);
+  }
+  if (state.below_floor_readings) {
+    parts.push(`<span class="muted">Abaixo do piso há</span> `
+      + `${state.below_floor_readings}/${cfg.floor_confirmations} leituras`);
   }
   $("#bw-current").innerHTML = parts.join(" &middot; ") || `<span class="muted">Sem dados.</span>`;
 

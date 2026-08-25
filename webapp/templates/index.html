@@ -310,7 +310,14 @@
             <input type="number" id="bw-poll-interval" min="1" step="1" required></label>
           <label class="field">Mín. de segundos entre comutações
             <input type="number" id="bw-min-switch" min="0" step="1" required></label>
+          <label class="field">Leituras seguidas abaixo do piso
+            <input type="number" id="bw-floor-confirmations" min="1" step="1" required></label>
         </div>
+        <p class="muted small">Uma única leitura abaixo do piso não fecha a janela.
+          O pack cai ~0,4&nbsp;V enquanto o compressor do frigorífico trabalha
+          (medido a apenas 46&nbsp;W), e esta ligação série devolve tramas
+          corrompidas de vez em quando &mdash; qualquer uma das duas terminaria a
+          descarga por causa de um valor que nunca foi real.</p>
         <p class="muted small">Cada comutação do <code>POP</code> atira um relé físico
           &mdash; ouve-se. Por isso o intervalo mínimo aqui é bem mais largo que o do
           <code>PCP</code>. Voltar à rede por segurança ignora-o sempre.</p>

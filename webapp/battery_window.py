@@ -81,6 +81,14 @@ DEFAULT_CONFIG = {
     # Must recover to here before battery mode is allowed again, so the
     # controller doesn't sit at the floor toggling the transfer relay.
     "resume_voltage": 26.8,
+    # How many consecutive readings must be at or below floor_voltage
+    # before the latch closes. One is not enough for two independent
+    # reasons: this serial link is documented to return corrupt QPIGS
+    # frames (gotcha #8), and the pack sags ~0.4 V while the fridge
+    # compressor runs -- measured 2026-08-25 at only 46 W. A single sample
+    # catching either would end the night's discharge on a number that was
+    # never the pack's real state.
+    "floor_confirmations": 3,
     "poll_interval": 60.0,
     # POP throws a physical relay -- audible, and mechanical wear. Much
     # more conservative than the PCP controllers' dwell.
@@ -142,6 +150,13 @@ def validate_config(cfg: dict) -> dict:
         raise ValueError("resume_voltage must be above floor_voltage, "
                          "otherwise the relay would toggle at the floor")
 
+    try:
+        out["floor_confirmations"] = int(out["floor_confirmations"])
+    except (TypeError, ValueError):
+        raise ValueError("floor_confirmations must be an integer")
+    if out["floor_confirmations"] < 1:
+        raise ValueError("floor_confirmations must be at least 1")
+
     for key in ("poll_interval", "min_switch_interval"):
         try:
             out[key] = float(out[key])
@@ -191,6 +206,7 @@ class BatteryWindow:
         self._last_applied_pop = None
         self._last_switch_mono = 0.0
         self._recovering = False      # latched after hitting the floor
+        self._below_floor = 0         # consecutive readings at/under the floor
         self._last_run = None
 
     # ---- persistence ----------------------------------------------------
@@ -223,6 +239,7 @@ class BatteryWindow:
                 "reason": reason,
                 "detail": detail,
                 "recovering": self._recovering,
+                "below_floor_readings": self._below_floor,
                 "battery_voltage": self.service.battery_voltage(),
                 "hard_forbidden": [dict(w) for w in HARD_FORBIDDEN],
                 "absolute_floor_v": ABSOLUTE_FLOOR_V,
@@ -293,6 +310,13 @@ class BatteryWindow:
                 "tensão da bateria ilegível — em POP=02 nada mais protege "
                 "o pack, por isso volta-se à rede")
 
+        # Checked before the latch so the transition reports the more
+        # specific reason: "floor" while the pack is actually under it,
+        # "recovering" once it has come back up but the window stays shut.
+        if self._below_floor >= cfg["floor_confirmations"]:
+            return GRID_POP, "floor", (
+                f"piso atingido: {v:.2f}V <= {cfg['floor_voltage']:.2f}V "
+                f"em {self._below_floor} leituras seguidas")
         if self._recovering:
             # Latched for the rest of this window, deliberately: releasing on
             # voltage alone would discharge to the floor, recharge to
@@ -302,9 +326,6 @@ class BatteryWindow:
             return GRID_POP, "recovering", (
                 f"já descarregou nesta janela ({v:.2f}V) — "
                 f"só volta à bateria na próxima")
-        if v <= cfg["floor_voltage"]:
-            return GRID_POP, "floor", (
-                f"piso atingido: {v:.2f}V <= {cfg['floor_voltage']:.2f}V")
 
         if not rule_active(t, parse_hhmm(cfg["from"]), parse_hhmm(cfg["to"])):
             return GRID_POP, "outside", (
@@ -322,21 +343,29 @@ class BatteryWindow:
     def _tick(self, force: bool = False, now=None) -> dict:
         import time as _time
         cfg = self._config
-        target, reason, detail = self._decide(now=now)
-
-        # Latch/unlatch around the floor. Done here rather than in _decide()
-        # so that get_state() stays a pure read.
+        # Count and latch BEFORE deciding, so a tick acts on the reading it
+        # just took rather than the previous one -- otherwise the floor
+        # always fires one poll late. Kept out of _decide() so that
+        # get_state() stays a pure read with no side effects.
         v = self.service.battery_voltage()
         if isinstance(v, (int, float)):
             when = (now or datetime.now()).time()
             in_window = rule_active(when, parse_hhmm(cfg["from"]),
                                     parse_hhmm(cfg["to"]))
-            if not self._recovering and v <= cfg["floor_voltage"]:
+            if v <= cfg["floor_voltage"]:
+                self._below_floor += 1
+            else:
+                self._below_floor = 0
+            if (not self._recovering
+                    and self._below_floor >= cfg["floor_confirmations"]):
                 self._recovering = True
             elif (self._recovering and not in_window
                     and v >= cfg["resume_voltage"]):
                 # Window closed and the pack is back up: arm for tonight.
                 self._recovering = False
+                self._below_floor = 0
+
+        target, reason, detail = self._decide(now=now)
 
         result = {"at": _utcnow(), "target": target, "reason": reason,
                   "detail": detail, "battery_voltage": v,
@@ -377,9 +406,9 @@ class BatteryWindow:
         return result
 
     TRACE_COLUMNS = ("ts", "target", "reason", "battery_voltage",
-                     "recovering", "applied", "note", "detail")
+                     "below_floor", "recovering", "applied", "note", "detail")
     _TRACE_KEYS = ("at", "target", "reason", "battery_voltage",
-                   "recovering", "applied", "note", "detail")
+                   "below_floor", "recovering", "applied", "note", "detail")
 
     def _append_trace(self, result) -> None:
         if not self.trace_dir:
@@ -389,7 +418,8 @@ class BatteryWindow:
             path = os.path.join(self.trace_dir,
                                 "batterywindow-%s.csv" % result["at"][:10])
             new = not os.path.exists(path)
-            row = dict(result, recovering=self._recovering)
+            row = dict(result, recovering=self._recovering,
+                       below_floor=self._below_floor)
             with open(path, "a", newline="") as fh:
                 w = csv.writer(fh)
                 if new:
