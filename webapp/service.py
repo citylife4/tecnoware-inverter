@@ -157,6 +157,7 @@ class InverterService:
                  history_size: int = 720, min_battery_voltage=None,
                  allow_writes: bool = True, timeout: float = 3.0,
                  priorities_path: str | None = None,
+                 audit_path: str | None = None,
                  telemetry_dir: str | None = None):
         self.port = port
         self.poll_interval = poll_interval
@@ -175,7 +176,8 @@ class InverterService:
         self._device_info = None
         self._ratings = None
         self._history = deque(maxlen=history_size)
-        self._audit = deque(maxlen=200)
+        self._audit_path = audit_path
+        self._audit = deque(self._load_audit(), maxlen=200)
         self._consecutive_failures = 0
         self._last_success_mono = 0.0
 
@@ -210,6 +212,27 @@ class InverterService:
     def _save_last_known(self) -> None:
         if self._priorities_path:
             write_json_atomic(self._priorities_path, self._last_known)
+
+    def _load_audit(self) -> list:
+        if not self._audit_path or not os.path.exists(self._audit_path):
+            return []
+        try:
+            with open(self._audit_path) as fh:
+                value = json.load(fh)
+            return value if isinstance(value, list) else []
+        except (ValueError, OSError):
+            return []
+
+    def _save_audit(self) -> None:
+        if not self._audit_path:
+            return
+        try:
+            write_json_atomic(self._audit_path, list(self._audit))
+        except (OSError, TypeError):
+            # Recording a command must never turn an acknowledged inverter
+            # write into an API failure merely because its audit cannot be
+            # persisted.
+            pass
 
     # Colunas gravadas no CSV diário. Ordem fixa -- não reordenar, senão os
     # ficheiros antigos deixam de casar com os novos.
@@ -325,6 +348,7 @@ class InverterService:
             "at": at, "command": command, "response": response,
             "ok": ok, "source": source,
         })
+        self._save_audit()
         if ok:
             for prefix in self._TRACKED_PRIORITIES:
                 if command.startswith(prefix):

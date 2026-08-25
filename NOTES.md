@@ -94,6 +94,43 @@ First live `POP=02` run with the loads actually on the pack:
   an hour while its grid Shelly was powered off, because
   `fetch_shelly_grid()` returned `0.0` on failure. Fixed there to return
   `None`; see that project's repo.
+- **2026-08-25 night to 2026-08-26 ~00:25 — `grid_charge` flapped
+  PCP03<->PCP01 roughly every 25-30 min all night**, ~10 grid-bought
+  recharge bursts, confirmed in `telemetry-2026-08-25.csv`. Root cause: the
+  previous day's "no sun -> idle" fix (see the surplus-signal section below)
+  only changed the *desired* state — the actual write still routed through
+  `apply_low_battery_floor`, which force-charges below
+  `min_battery_voltage` (25.5 V) with no day/night distinction. The pack
+  rests right at that line overnight (no discharge in bypass, tiny standby
+  draw), so it kept tripping. **Diagnosed and fixed by a second AI session
+  working directly on `palacoulo-inverter`** (the user was out of credits
+  here) while this session was elsewhere: `grid_charge` now sends **no PCP
+  command at all** when solar is below `SOLAR_FLOOR_W`, bypassing the
+  low-battery override entirely at night. Verified safe for this specific
+  installation: there is no PV connected (gotcha #4), so `PCP03` at night
+  was already a no-op, and in bypass the pack neither charges nor
+  discharges regardless of PCP — removing the override loses nothing here.
+  That session also added **persistent write audit** (`web_audit.json`,
+  `InverterService.audit_path`) and **persisted the battery window's
+  recovering/below-floor latch** (`web_battery_window.json.state`) so a
+  restart mid-window can't forget tonight's discharge already happened and
+  re-open the pack to a second cycle.
+  The fix was live and working (`serve.py` restarted 2026-08-26 00:39,
+  confirmed via `/api/grid-charge` showing `desired_state:
+  disabled_no_solar`) but **uncommitted** — found via `git status` on the
+  Pi showing four modified files and three untracked ones. Reviewed,
+  pulled into this repo, given test coverage, and committed. Process note:
+  the pull (`rsync` from the Pi) briefly discarded genuine uncommitted
+  local edits to `README.md`/`test_webapp.py` sitting in *this* machine's
+  working tree — apparently the other session's own local work here,
+  clobbered by not checking `git status` before overwriting. Equivalent
+  coverage was rewritten from scratch; nothing about the fix itself was
+  lost, only that specific draft.
+  **Separately, `battery_window`'s own single-discharge-per-night logic
+  worked exactly as designed** the same night: one discharge 21:15→21:35,
+  latched at the floor, held `POP=00` for the rest of the night since the
+  window can't release mid-window (spans 21:15→08:00). That part was never
+  the problem.
 
 ---
 
@@ -281,6 +318,52 @@ against a measured worst-case export day of **140 Wh**. That is adequate but
 has no margin, and once the headroom is spent in the morning the afternoon
 has none. This reduces export substantially; it does not guarantee zero. A
 hard guarantee still needs curtailment or a dump load.
+
+### The discharge floor, against the manufacturer's own curves — 2026-08-26
+
+The pack is confirmed as **SOLARX-30** (Xunzel datasheet, "12V 30Ah C120",
+`https://media.adeo.com/media/3295588/media.pdf`) — matches the nameplate
+already assumed. Two numbers from it worth keeping:
+
+- **Internal resistance, per the datasheet: 9 mΩ per 12 V unit.** Two in
+  series ≈ 18 mΩ nominal. The 45 mΩ measured live 2026-08-25 (see below)
+  includes cabling, connectors and the inverter's own DC-side drop, so it
+  being roughly 2-2.5× the pure-battery figure is unremarkable, not a sign
+  of wear.
+- **These are true deep-cycle AGM units, explicitly rated to 100% DoD** —
+  "concebidas...para aplicações cíclicas de carga e descarga profunda
+  repetida e contínua", up to 2000 cycles, with the 100% capacity figure in
+  the spec table defined *at* 100% DoD. Going deep is within the design
+  envelope, not an abuse case.
+
+The datasheet's resting open-circuit-voltage-vs-SoC curve (p.5), read
+approximately off the graph and converted from per-cell to this 12-cell
+(2× 12 V series) pack:
+
+| Pack voltage (rest) | ~SoC | ~DoD |
+|---|---|---|
+| 25.6 V | ~86% | ~14% |
+| 24.0 V | ~37% | ~63% |
+
+And the cycles-vs-DoD curve (same page), read the same way:
+
+| DoD | ~cycles | ~years at 1 discharge/night |
+|---|---|---|
+| ~14% (25.6 V) | ~1900-2000 | ~5-5.5 |
+| ~63% (24.0 V) | ~650-700 | ~1.8-1.9 |
+
+**Decision: keep `floor_voltage` at 24.0 V.** The user reviewed the
+datasheet and chose the deeper, shorter-lived cycle deliberately, with the
+trade-off above stated plainly rather than discovered later. Not dangerous
+per the manufacturer's own spec — a real service-life choice, not a safety
+one. `ABSOLUTE_FLOOR_V = 24.0` in `webapp/battery_window.py` is exactly this
+value, so there is no headroom below it; the config validator refuses
+anything lower.
+
+Caveat on precision: both tables above are read off a printed graph, not a
+data sheet of numbers, and the live readings they're compared against are
+under whatever standby load happened to be present, not a clean rested
+measurement. Treat the percentages as approximate, not calibrated.
 
 ### Verified 2026-08-25
 

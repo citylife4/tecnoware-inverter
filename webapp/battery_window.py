@@ -212,10 +212,11 @@ class BatteryWindow:
         self._thread = None
 
         self._config = self._load()
-        self._last_applied_pop = None
+        self._last_applied_pop = self.service.last_known_priority("POP")
         self._last_switch_mono = 0.0
-        self._recovering = False      # latched after hitting the floor
-        self._below_floor = 0         # consecutive readings at/under the floor
+        runtime = self._load_runtime()
+        self._recovering = runtime["recovering"]
+        self._below_floor = runtime["below_floor"]
         self._last_run = None
 
     # ---- persistence ----------------------------------------------------
@@ -236,6 +237,35 @@ class BatteryWindow:
 
     def _save(self) -> None:
         write_json_atomic(self.path, self._config, mode=FILE_MODE)
+
+    @property
+    def _runtime_path(self) -> str:
+        return self.path + ".state"
+
+    def _load_runtime(self) -> dict:
+        if not os.path.exists(self._runtime_path):
+            return {"recovering": False, "below_floor": 0}
+        try:
+            with open(self._runtime_path) as fh:
+                value = json.load(fh)
+            return {
+                "recovering": bool(value.get("recovering", False)),
+                "below_floor": max(0, int(value.get("below_floor", 0))),
+            }
+        except (ValueError, OSError, TypeError, AttributeError):
+            # A corrupt safety latch fails towards utility. It can be cleared
+            # by disabling the window or after a normal recovery outside it.
+            return {"recovering": True,
+                    "below_floor": self._config["floor_confirmations"]}
+
+    def _save_runtime(self) -> None:
+        try:
+            write_json_atomic(self._runtime_path, {
+                "recovering": self._recovering,
+                "below_floor": self._below_floor,
+            }, mode=FILE_MODE)
+        except OSError:
+            pass
 
     # ---- API ------------------------------------------------------------
 
@@ -363,6 +393,7 @@ class BatteryWindow:
         # always fires one poll late. Kept out of _decide() so that
         # get_state() stays a pure read with no side effects.
         v = self.service.battery_voltage()
+        previous_runtime = (self._recovering, self._below_floor)
         if isinstance(v, (int, float)):
             when = (now or datetime.now()).time()
             in_window = rule_active(when, parse_hhmm(cfg["from"]),
@@ -386,6 +417,8 @@ class BatteryWindow:
                 # Window closed and the pack is back up: arm for tonight.
                 self._recovering = False
                 self._below_floor = 0
+        if previous_runtime != (self._recovering, self._below_floor):
+            self._save_runtime()
 
         target, reason, detail = self._decide(now=now)
 

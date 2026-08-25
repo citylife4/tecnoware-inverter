@@ -53,6 +53,9 @@ DEFAULTS = {
     # Last-known POP/PCP values, so InverterService.last_known_priority()
     # survives a restart -- see CLAUDE.md gotcha #7.
     "priorities_config": "web_priorities.json",
+    # Persistent write audit. Unlike telemetry this is a small bounded JSON
+    # list, so the dashboard's "Registo de escritas" survives restarts.
+    "audit_config": "web_audit.json",
     # Telemetria persistente (um CSV por dia). O histórico em memória
     # perde-se em cada reinício -- ver InverterService._append_telemetry.
     "telemetry_dir": "telemetry",
@@ -147,6 +150,7 @@ def main() -> int:
         allow_writes=bool(cfg["allow_writes"]),
         timeout=float(cfg["serial_timeout"]),
         priorities_path=cfg["priorities_config"],
+        audit_path=cfg["audit_config"],
         telemetry_dir=cfg["telemetry_dir"],
     )
     service.start()

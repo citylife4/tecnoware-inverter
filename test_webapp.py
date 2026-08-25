@@ -23,6 +23,10 @@ from webapp.energy_view import BATTERY, GRID, describe_energy
 from webapp.battery_window import (
     ABSOLUTE_FLOOR_V, BATTERY_POP, GRID_POP, BatteryWindow,
     validate_config as validate_window_config)
+
+
+def bw_runtime_path(config_path: str) -> str:
+    return config_path + ".state"
 from webapp.grid_charge import GridChargeController, validate_config
 from webapp.safety import CommandRejected
 from webapp.scheduler import Scheduler, validate_rules
@@ -363,6 +367,42 @@ class TestApi(unittest.TestCase):
         self.assertIn("Estado atual".encode(), r.data)
         self.assertIn(b'lang="pt-PT"', r.data)
 
+
+class TestPersistedAudit(unittest.TestCase):
+    """2026-08-26: the audit log (/api/audit) was in-memory-only, so a
+    restart -- which happens often here, given the Pi is powered from the
+    inverter -- lost the write history the dashboard shows. It now persists
+    to a small bounded JSON file, separate from priorities_path."""
+
+    def make_service(self, audit_path):
+        from webapp.service import InverterService
+        return InverterService(port="/dev/null", audit_path=audit_path)
+
+    def test_audit_log_survives_a_restart(self):
+        path = os.path.join(tempfile.mkdtemp(), "web_audit.json")
+        first = self.make_service(path)
+        first._record_audit("POP02", "(ACK", source="manual")
+        first._record_audit("PCP01", "(ACK", source="grid_export")
+
+        restarted = self.make_service(path)
+        log = restarted.audit_log()
+        self.assertEqual(len(log), 2)
+        self.assertEqual(log[0]["command"], "PCP01")   # appendleft -- newest first
+
+    def test_no_audit_path_stays_in_memory_only(self):
+        """Existing deployments without audit_path configured must not
+        break -- persistence is opt-in via serve.py's config."""
+        from webapp.service import InverterService
+        svc = InverterService(port="/dev/null")
+        svc._record_audit("POP02", "(ACK", source="manual")
+        self.assertEqual(len(svc.audit_log()), 1)   # still works in memory
+
+    def test_corrupt_audit_file_starts_empty_rather_than_crash(self):
+        path = os.path.join(tempfile.mkdtemp(), "web_audit.json")
+        with open(path, "w") as fh:
+            fh.write("{not a list")
+        svc = self.make_service(path)
+        self.assertEqual(svc.audit_log(), [])
 
 class TestLastKnownPrioritiesInStatus(unittest.TestCase):
     """/api/status carries the persisted POP/PCP so the dashboard can
@@ -1038,21 +1078,58 @@ class TestGridChargeController(unittest.TestCase):
         self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
         self.assertFalse(gc.is_overriding())   # ...but nothing to absorb
 
-    def test_no_sun_means_no_surplus_whatever_the_band_says(self):
+    def test_no_sun_disables_the_controller_entirely(self):
         """After dark the signal settles inside the dead-band on this house
         (~80-100 W), so the band would hold whatever the day ended on. A day
         ending in "charging" would leave PCP01 set all night, charging the
         pack from the grid and destroying the headroom the battery window
-        exists to create."""
+        exists to create.
+
+        2026-08-26 refinement: idling still routed through
+        apply_low_battery_floor, which force-charges below
+        min_battery_voltage regardless of the hour. On the live
+        installation, with the pack resting right at that threshold
+        overnight, this produced a real PCP03<->PCP01 flap roughly every
+        25-30 minutes all night -- confirmed in telemetry. No solar now
+        means no PCP command AT ALL, bypassing that override too: battery
+        maintenance at night is not this controller's job."""
         service, stub, gc = self.make(net_balance=-200)     # exporting, sunny
         gc.set_config({"enabled": True, "min_switch_interval": 0})
         self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
+        service.sent.clear()
         stub.net_balance = 90        # dusk: inside the 30-150 dead-band...
         stub.ac_solar_w = 0.0        # ...and the sun has gone
         gc.tick()
-        self.assertEqual(gc.get_state()["current"]["desired_state"], "idle")
+        self.assertEqual(gc.get_state()["current"]["desired_state"], "disabled_no_solar")
+        self.assertEqual(service.sent, [])   # no PCP write, not even PCP03
 
-    def test_missing_solar_reading_does_not_force_idle(self):
+    def test_low_battery_does_not_force_a_charge_at_night(self):
+        """The low-battery floor exists for daytime idling (PCP03 with no
+        surplus). At night the controller is disabled outright, so a low
+        pack does not trigger a grid-bought recharge here -- that is what
+        caused the overnight flap."""
+        service, stub, gc = self.make(net_balance=200,      # importing
+                                      battery_voltage=24.0)  # under min_battery_voltage
+        stub.ac_solar_w = 0.0     # set before set_config's own forced tick
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        service.sent.clear()
+        gc.tick()
+        self.assertEqual(service.sent, [])
+
+    def test_resumes_automatically_once_the_sun_returns(self):
+        """The controller must not stay latched off after dawn -- and the
+        first daylight decision has to be applied, not skipped as an
+        idempotent no-op against a stale cached PCP."""
+        service, stub, gc = self.make(net_balance=-200)
+        stub.ac_solar_w = 0.0     # set before set_config's own forced tick
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        self.assertEqual(service.sent, [])
+        stub.ac_solar_w = 500.0      # sunrise
+        gc.tick()
+        self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
+        self.assertEqual(service.sent, ["PCP01"])
+
+    def test_missing_solar_reading_does_not_disable_the_controller(self):
         """A meter that stops reporting solar must not be read as nightfall."""
         service, stub, gc = self.make(net_balance=-200)
         gc.set_config({"enabled": True, "min_switch_interval": 0})
@@ -1389,9 +1466,17 @@ class TestBatteryWindow(unittest.TestCase):
     def enable(self, bw, now=None, **over):
         cfg = {"enabled": True, "min_switch_interval": 0}
         cfg.update(over)
-        # set_config force-ticks at the real wall clock; clear whatever that
-        # sent so each test asserts only on its own explicit tick.
-        bw.set_config(cfg, now=now)
+        # set_config force-ticks immediately. Default that tick to self.DAY
+        # (outside the window) rather than the real wall clock: since
+        # __init__ seeds _last_applied_pop from the device's own last-known
+        # POP (2026-08-26, so a restart doesn't forget an already-open
+        # window), an unpinned real-clock tick landing inside the mostly
+        # nocturnal default window can silently apply POP02 here and leave
+        # a later test tick reading "already applied" instead of sending --
+        # exactly the flakiness this pin exists to remove. Callers that
+        # want the setup tick itself inside the window still pass `now`
+        # explicitly.
+        bw.set_config(cfg, now=now or self.DAY)
         bw.service.sent.clear()
         bw.service.sent_sources.clear()
         return cfg
@@ -1647,6 +1732,31 @@ class TestBatteryWindow(unittest.TestCase):
         self.enable(bw)
         mode = stat.S_IMODE(os.stat(self.path).st_mode)
         self.assertEqual(mode, 0o600)
+
+
+    def test_latch_survives_a_restart(self):
+        """2026-08-26: recovering/below_floor now persist to <path>.state, so
+        a service restart mid-window doesn't forget that tonight's discharge
+        already happened and re-open the pack to a second cycle."""
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=self.NIGHT, floor_confirmations=1)
+        service._battery_voltage = 25.4      # crosses the floor, latches
+        bw.tick(now=self.NIGHT)
+        self.assertTrue(bw.get_state()["recovering"])
+
+        restarted = BatteryWindow(FakeService(battery_voltage=27.0), self.path)
+        self.assertTrue(restarted.get_state()["recovering"])
+        service2 = restarted.service
+        r = restarted.tick(now=self.NIGHT)
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertEqual(service2.sent, [])   # does not re-open the window
+
+    def test_corrupt_runtime_state_fails_towards_utility(self):
+        with open(bw_runtime_path(self.path), "w") as fh:
+            fh.write("{not json")
+        bw = BatteryWindow(FakeService(battery_voltage=27.0), self.path)
+        state = bw.get_state()
+        self.assertTrue(state["recovering"])
 
 
 class TestBatteryWindowValidation(unittest.TestCase):

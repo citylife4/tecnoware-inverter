@@ -30,8 +30,10 @@ this never causes the inverter to pull additional grid power beyond what
 was already being exported.
 
 Runs the exact same low-battery floor as webapp/scheduler.py
-(apply_low_battery_floor in safety.py) -- a battery that's actually low
-still gets utility charging regardless of grid export state.
+(apply_low_battery_floor in safety.py) while solar generation is available.
+At night the export controller is inactive and sends no PCP commands: there
+is no export to control, and battery maintenance belongs to the inverter or
+another explicitly enabled controller rather than this one.
 """
 
 from __future__ import annotations
@@ -68,15 +70,11 @@ MODES = ("exclusive", "override")
 # e NÃO carrega; POP=01 não foi testado.
 CHARGING_POP = "00"
 
-# Below this much solar generation there is, by definition, nothing to
-# absorb, and the controller idles regardless of what the hysteresis band
-# would otherwise hold. This is physics rather than tuning, and it fixes a
-# real hole: after dark the surplus signal settles around 80-100 W on this
-# house, which is INSIDE the 30-150 W dead-band, so the band would hold
-# whatever the day ended on. A day ending in "charging" would leave PCP01 set
-# all night and the charger topping the pack up from the grid -- destroying
-# exactly the absorption headroom the nightly battery window exists to
-# create.
+# Below this much solar generation there is, by definition, no export to
+# control. The controller becomes inactive and sends no PCP command at all.
+# In particular it must not alternate idle_pcp with the low-battery override
+# through the night -- that caused repeated PCP03 -> PCP01 -> PCP03 charger
+# cycles on the live installation on 2026-08-26.
 SOLAR_FLOOR_W = 5.0
 
 DEFAULT_CONFIG = {
@@ -178,7 +176,8 @@ class GridChargeController:
         self._thread = None
 
         self._config = self._load()
-        self._desired = None            # "charging" | "idle" | None (unknown, startup)
+        # "charging" | "idle" | "disabled_no_solar" | None (startup)
+        self._desired = None
         self._last_applied_pcp = None
         self._last_switch_mono = 0.0
         self._last_fetch_ok_mono = None
@@ -382,10 +381,12 @@ class GridChargeController:
             balance = self._last_signal
             solar = self._last_solar
             if solar is not None and solar < SOLAR_FLOOR_W:
-                # No generation, so no surplus can exist. Decided before the
-                # hysteresis, which would otherwise hold the day's last state
-                # right through the night.
-                desired = "idle"
+                # No generation means no export-control work exists. This is
+                # distinct from "idle", which owns PCP03 in exclusive mode.
+                # Returning no target also bypasses the low-battery PCP01
+                # override: battery maintenance is outside this controller's
+                # job while the sun is down.
+                return "disabled_no_solar", None, None, known
             elif balance <= cfg["export_threshold_w"]:
                 desired = "charging"
             elif balance >= cfg["import_threshold_w"]:
@@ -422,6 +423,13 @@ class GridChargeController:
 
         if not cfg["enabled"]:
             result["note"] = "grid-export charging disabled"
+        elif desired == "disabled_no_solar":
+            # Forget the cached PCP because another controller or a person
+            # may change it overnight. The first daylight decision must be
+            # applied to the inverter rather than incorrectly treated as an
+            # idempotent no-op.
+            self._last_applied_pcp = None
+            result["note"] = "no solar generation — grid-export control inactive"
         elif cfg["mode"] == "override" and desired != "charging":
             # Modo "override": sem excedente não escrevemos nada -- quem
             # manda é o agendamento. Limpamos o último PCP aplicado para

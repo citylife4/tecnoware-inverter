@@ -29,3 +29,13 @@ telemetry/
 # saida do teste supervisionado de bateria (battery_test.py) -- execucao, nao fonte
 battery_test.csv
 battery_test.log
+
+# nightly battery window's config + runtime latch state -- instance-specific
+web_battery_window.json
+web_battery_window.json.tmp
+web_battery_window.json.state
+web_battery_window.json.state.tmp
+
+# persistent write audit -- instance-specific runtime state
+web_audit.json
+web_audit.json.tmp
