@@ -25,3 +25,7 @@ web_priorities.json.tmp
 
 # telemetria persistente (CSV diario) -- dados de execucao, nao fonte
 telemetry/
+
+# saida do teste supervisionado de bateria (battery_test.py) -- execucao, nao fonte
+battery_test.csv
+battery_test.log
