@@ -363,6 +363,54 @@ would trip it, killing the output and with it the Pi — which is precisely
 what the kernel log shows. That is a better fit than the "brief electrical
 disturbance" originally guessed, though it remains unproven.
 
+## Measured 2026-08-25 — the POP question is answered
+
+A full 32 h of Shelly channel 1 (`inverter_input_w`) plus the inverter's own
+telemetry, with **no reboots** (Pi up 15 h, service since 2026-08-24 16:43)
+and nothing touched on the hardware. This is better data than the planned
+`POP=02` test would have produced, and at zero risk.
+
+**Note the clocks differ:** `telemetry/*.csv` timestamps are **UTC**;
+`auto-energy`'s history buckets are **local (WEST, UTC+1)**. Cross-referencing
+the two without the shift will misplace every event by an hour.
+
+| Measure | Value |
+|---|---|
+| Protected output, base load (fridge + Pi + light) | **~66 W → 1.59 kWh/day** |
+| Pump, 19:30-20:30 local | ~1200-1300 W running, 0.36 kWh/day |
+| Grid charger, 09:10-11:50 local | 250-596 W (the morning recharge) |
+| Solar generated | ~0.39 kWh/day |
+| **Exported to grid** | **0.000 kWh — zero negative `net_balance` blocks in 32 h** |
+| Battery | 27.0-27.1 V, 100%, discharge current **0.0 A throughout** |
+
+**Decision: stay on `POP=00`. Do not build alternating POP.** The entire
+case for it was capturing surplus solar, and there is no surplus — solar is
+already 100% self-consumed, so every watt-hour put into the pack would be
+bought from the grid. Round-tripping ~0.36 kWh through lead-acid at ~75%
+costs ~0.12 kWh, about **EUR 10/year thrown away**, plus cycle wear on a
+30 Ah bank, to move consumption that has no cheaper window to move it to
+(flat 0.22 EUR/kWh, no bi-horário). The battery's job here is backup, and
+backup wants a full float pack, which is exactly what `POP=00` gives.
+
+Autonomy on the base load: 360 Wh / 66 W = **~5.5 h**, if the pump is not
+on the output.
+
+### Refinement to gotcha #3 — the 1 W is a floor, not a constant
+
+`ac_output_active_power` reported a sustained **1160-1293 W** for 26 samples
+at 19h local and 32 at 20h — the pump, passing through the transfer relay.
+It was **not** inverting: discharge current stayed 0.0 A and the pack held
+27.0 V, which 1200 W from 24 V (50 A) could not do for a second. So the
+field does report real pass-through load in bypass, above some threshold
+between ~90 W and ~1160 W. It reads 1 W for everything below — which covers
+the fridge, so **the operational advice is unchanged: use Shelly channel 1
+for load in bypass.** 98.9% of samples were still exactly 1 W. The
+threshold has not been located and the mechanism is a guess.
+
+Also: the pump's *running* draw is ~1200-1300 W, not the ~2 kW estimated.
+The trip risk stands anyway — a 1200 W motor's starting surge is several
+times that, against a 3600 VA unit.
+
 ## Planned next session (2026-08-25)
 
 Data is accumulating on its own overnight: `telemetry/` on the Pi (battery,
@@ -409,10 +457,19 @@ Both were accepted by the inverter and neither has been *seen* working.
 Do not record either as done until observed:
 
 - **Charge current 20 A -> 10 A** (front panel, program 11; done by the
-  user 2026-08-24). The pack was already at float when it changed, so
-  nothing has been observed capping at 10 A. **Check the first time the
-  battery accepts real charge** — `battery_charging_current` should stop
-  at 10 rather than climbing to 20.
+  user 2026-08-24). Still unverified as of 2026-08-25, and the overnight
+  data could not settle it: the only real recharge was 09:10-11:50 local on
+  2026-08-24, which is *before* both the setting change and the start of
+  `telemetry-2026-08-24.csv` (11:08 **UTC** = 12:08 local). The inverter's
+  own log never saw it.
+  **What the Shelly did see, and what to compare against:** that recharge
+  drew up to **596 W AC**, i.e. roughly 18-19 A DC at 27 V — consistent with
+  the old 20 A limit. So the next real recharge should cap the charger's AC
+  draw around **~320 W** instead of ~600 W. That is checkable from
+  `auto-energy`'s `inverter_input_w` alone, with no inverter telemetry and
+  nothing to switch — just look at the next morning recharge after an
+  outage. `battery_charging_current` capping at 10 rather than 20 would
+  confirm it directly if the logger happens to be up for it.
 - **`PBCV24.0`** — ACKed, intent was to raise the recharge point from a
   near-flat 22.0 V to ~50%. `QPIRI` still reports 22.0 V, which proves
   nothing either way (gotcha #2). Confirming it needs the pack near 24 V
