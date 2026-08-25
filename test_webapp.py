@@ -1521,6 +1521,21 @@ class TestBatteryWindow(unittest.TestCase):
         self.assertEqual(service.sent, ["POP00"])
         self.assertTrue(r["applied"])
 
+    def test_yielding_to_export_ignores_the_dwell(self):
+        """Handing POP=00 to the export controller is a compliance action.
+        Observed live 2026-08-25: the house exported for minutes because
+        this decision waited out the 600 s anti-flap timer."""
+        overriding = {"now": False}
+        service, bw = self.make(override=lambda: overriding["now"])
+        self.enable(bw, now=self.NIGHT, min_switch_interval=99999)
+        self.assertTrue(bw.is_active())          # entered battery mode
+        overriding["now"] = True                 # surplus appears
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertEqual(r["reason"], "yielding")
+        self.assertTrue(r["applied"], "must not wait out the dwell")
+        self.assertEqual(service.sent[-1], "POP00")
+
     def test_is_active_reflects_last_applied(self):
         service, bw = self.make()
         self.enable(bw)

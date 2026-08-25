@@ -259,7 +259,13 @@ output as the loads:
    battery.
 4. **Yields to `grid_charge`** via `override_check` — the charger only runs
    at `POP=00`, so absorbing export and running loads off the pack are
-   mutually exclusive.
+   mutually exclusive. **That yield bypasses the anti-flap dwell**, like the
+   other three. It did not at first, and the consequence was live on
+   2026-08-25: the house exported at -19 W, the export controller correctly
+   decided to charge, this controller correctly decided to hand over
+   `POP=00`, and then held that decision for the full 600 s while the export
+   continued. Injecting is not permitted here, so absorbing it outranks
+   relay wear. Only *entering* battery mode is debounced.
 
 `ABSOLUTE_FLOOR_V = 24.0` is refused at validation: below that is a deep
 discharge, not a shallow cycle.
@@ -328,6 +334,11 @@ construction: battery mode removes the only load available to absorb surplus.
 This is why the window belongs at **21:15-08:00** and not merely "some hours".
 It is not just about the pump — a battery window overlapping daylight works
 directly against the compliance goal it exists to serve. Keep it nocturnal.
+
+Demonstrated the same afternoon. With the window closed back to 21:15, the
+inverter went to `POP=00` on the next tick, the charger came up at **10 A**,
+and the grid balance went from **-19 W (exporting) to 0 W** immediately. The
+daytime window was the only thing preventing that.
 
 ### The surplus signal — why `grid_charge` no longer chases itself
 

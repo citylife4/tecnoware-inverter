@@ -374,9 +374,19 @@ class BatteryWindow:
         now_mono = _time.monotonic()
         dwell_ok = (now_mono - self._last_switch_mono) >= cfg["min_switch_interval"]
         # Going back to utility is a safety action; it never waits out the
-        # anti-flap timer. Only entering battery mode is debounced.
+        # anti-flap timer. Only ENTERING battery mode is debounced -- that is
+        # the direction that costs a relay throw for no safety benefit.
+        #
+        # "yielding" belongs on this list, and its absence was a live fault.
+        # Observed 2026-08-25 14:2x: the house was exporting (-19 W), the
+        # export controller had correctly decided to charge, and this
+        # controller had correctly decided to hand it POP=00 -- and then sat
+        # on that decision for the full 600 s dwell while the export
+        # continued. Injecting into the grid is not permitted at this
+        # installation, so absorbing it is a compliance action, not a
+        # preference, and the relay-wear argument does not outrank it.
         urgent = target == GRID_POP and reason in (
-            "floor", "recovering", "unknown_voltage", "forbidden")
+            "floor", "recovering", "unknown_voltage", "forbidden", "yielding")
 
         if target is None:
             result["note"] = "desligado"
