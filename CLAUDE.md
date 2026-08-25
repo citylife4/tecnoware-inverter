@@ -311,13 +311,25 @@ First live `POP=02` run with the loads actually on the pack:
   derived from `battery_net_current`, the dashboard's battery-power chart is
   blind in battery mode too. Do not use either to prove a discharge; use the
   voltage trend and `ac_output_active_power`.
-- **The pack sags 0.4 V under 46 W**, implying an internal resistance around
-  0.2 Ω where a healthy 30 Ah bank would be 0.01-0.02 Ω — an order of
-  magnitude high. Part of that drop may be real discharge rather than pure
-  IR, so this is **not yet a conclusion**, but if it holds it points to an
-  aged pack with far less usable capacity than its nameplate. Worth
-  re-measuring deliberately: note the resting voltage, apply a known load,
-  read the immediate step.
+- **Internal resistance is around 0.045 Ω** — roughly double what a healthy
+  30 Ah bank should show, not the order of magnitude first feared. The
+  0.2 Ω figure derived from "0.4 V of sag at 46 W" was wrong: most of that
+  0.4 V was real discharge accumulating over minutes, not an ohmic step. The
+  usable measurement came from the fridge compressor's inrush, which is
+  instantaneous: **1150 W took the pack from 25.7 V to 23.5 V**, i.e. ~49 A
+  for 2.2 V. Aged but serviceable.
+- **That 23.5 V matters operationally.** Program 12 hands the loads back to
+  utility at ~23.0 V, so a 46 W fridge's *starting* surge comes within half a
+  volt of tripping the changeover. It is direct evidence for the pump
+  argument: if ~1.2 kW gets that close, a ~2 kW motor will not start from
+  this pack.
+- **A voltage read while the charger is on says nothing about state of
+  charge, and neither does the percentage.** Watched live: `POP` went to
+  utility and within 5 minutes the pack read 27.0 V / 100% having been
+  25.4 V / 80% — no meaningful energy went in, the terminal voltage simply
+  rose under charge and the SoC readout, being voltage-derived, followed it.
+  This is the same trap as the float-vs-resting one above and it was fallen
+  into twice in one day. **Only read the pack with the charger off.**
 
 ### A daytime battery window can CAUSE export
 
@@ -658,29 +670,85 @@ has no margin, and once the headroom is spent in the morning the afternoon
 has none. This reduces export substantially; it does not guarantee zero. A
 hard guarantee still needs curtailment or a dump load.
 
+### Verified 2026-08-25
+
+- **Charge current 20 A -> 10 A** (front panel, program 11). **Confirmed on
+  hardware**, two independent ways, while the inverter cycled itself in and
+  out of battery mode: `battery_charging_current` capped at **10 A (max 11)**
+  where it previously reached 18-20, and the Shelly showed the charger's AC
+  draw at **~320 W while actually charging** against the 596 W measured under
+  the old limit. Nothing further to check.
+
 ### Applied but NOT yet verified
 
-Both were accepted by the inverter and neither has been *seen* working.
-Do not record either as done until observed:
-
-- **Charge current 20 A -> 10 A** (front panel, program 11; done by the
-  user 2026-08-24). Still unverified as of 2026-08-25, and the overnight
-  data could not settle it: the only real recharge was 09:10-11:50 local on
-  2026-08-24, which is *before* both the setting change and the start of
-  `telemetry-2026-08-24.csv` (11:08 **UTC** = 12:08 local). The inverter's
-  own log never saw it.
-  **What the Shelly did see, and what to compare against:** that recharge
-  drew up to **596 W AC**, i.e. roughly 18-19 A DC at 27 V — consistent with
-  the old 20 A limit. So the next real recharge should cap the charger's AC
-  draw around **~320 W** instead of ~600 W. That is checkable from
-  `auto-energy`'s `inverter_input_w` alone, with no inverter telemetry and
-  nothing to switch — just look at the next morning recharge after an
-  outage. `battery_charging_current` capping at 10 rather than 20 would
-  confirm it directly if the logger happens to be up for it.
 - **`PBCV24.0`** — ACKed, intent was to raise the recharge point from a
   near-flat 22.0 V to ~50%. `QPIRI` still reports 22.0 V, which proves
-  nothing either way (gotcha #2). Confirming it needs the pack near 24 V
-  in battery mode and seen to start recharging.
+  nothing either way (gotcha #2).
+  **Complicated by an observation on 2026-08-25:** left in `POP=02`, the unit
+  handed the loads back to utility at **~25.4-25.5 V**, repeatedly and
+  consistently (six times in four hours). That matches neither 22.0 nor the
+  24.0 that was written, and it is well above the 23.0 V the manual gives as
+  program 12's default. So either `PBCV` is not the setting that governs this
+  changeover, or the value in effect is neither of the two known candidates.
+  Unresolved — but **25.4 V is the number that actually governs behaviour**,
+  and `webapp/battery_window.py` is configured against it, not against
+  `QPIRI`.
+
+### Planned: merge the two dashboards, leave this Pi headless
+
+Agreed in principle 2026-08-25, **not started**. There are two web UIs on
+this network and they describe halves of one system:
+
+| | |
+|---|---|
+| `palacoulo-rasp:8000` | `auto-energy` — panels, grid meter, weather |
+| `palacoulo-inverter:8080` | this project — inverter, battery, automations |
+
+Answering any real question today means opening both, and `webapp/energy_view.py`
+already stitches them by hand. Three reasons to merge, strongest first:
+
+1. **`palacoulo-inverter` is powered BY the inverter; `palacoulo-rasp` is
+   not.** When the inverter trips, its own dashboard dies with it — precisely
+   when you want to look. Moving the UI to a machine on separate power makes
+   the failure observable.
+2. One place showing solar, grid, battery and inverter together.
+3. `palacoulo-rasp` is aarch64 with Docker and a modern Python;
+   `palacoulo-inverter` is armv7/Python 3.9 and constrains every line of UI
+   written for it.
+
+**What must NOT move.** The three automations (`scheduler.py`,
+`grid_charge.py`, `battery_window.py`) stay on `palacoulo-inverter`. They own
+the serial port and must keep working with the network down — routing house
+power control through a LAN hop would make a switch failure into a control
+failure. "Headless" here means *the UI leaves*; the API and the automations
+stay.
+
+**Two risks to decide on before starting, not after:**
+
+- **The local emergency control disappears.** Today, if `palacoulo-rasp`
+  dies, you can still open the inverter's own dashboard and switch the
+  battery window off. After the move you could not. Keep a stripped local
+  page — status plus a kill switch for the automations. Cheap, and the kind
+  of thing only missed on the wrong day.
+- **The API token moves to another machine.** It can change the house's power
+  priorities. Decide deliberately where it lives and how it is stored.
+
+**Rough shape of the work**, in order:
+
+1. `palacoulo-inverter`: keep `serve.py` serving `/api/*`, bind it beyond
+   localhost, confirm the token flow works cross-host.
+2. `auto-energy`: add a client for that API and render the inverter panels —
+   status, priorities, the three automations, the energy-provenance box.
+   `webapp/ui_labels.py` and `webapp/energy_view.py` port across; the API is
+   deliberately English so the contract is stable.
+3. `palacoulo-inverter`: cut the full UI down to the fallback page.
+4. Decide whether `webapp/` keeps serving templates at all, or becomes
+   API-only with the templates moving to the other repo.
+
+Note `grid_charge` **already** depends on `palacoulo-rasp` being reachable
+(it polls `/api/live`), and that dependency fails safe — a stale reading
+means idle, never "charge blind". The merge does not add a new class of
+failure there; it does add one for the UI.
 
 ### Open, roughly by importance
 
