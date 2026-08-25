@@ -27,6 +27,7 @@ from flask import (Flask, jsonify, render_template, request, session,
 from commands import QUERY_COMMANDS, SET_COMMANDS, VERIFIED_WORKING_QUERIES
 from transport import InverterError
 from webapp import safety, ui_labels
+from webapp.energy_view import describe_energy
 from webapp.safety import CommandRejected
 
 # Endpoints reachable without a token: liveness probing and the login flow.
@@ -156,6 +157,8 @@ def create_app(service, scheduler=None, grid_charge=None,
             except InverterError as e:
                 return _fail(str(e), code="read_failed", status=503)
         payload = service.latest()
+        live = grid_charge.last_live_payload() if grid_charge is not None else None
+        payload["energy"] = describe_energy(payload.get("status"), live)
         payload["ok"] = True
         return jsonify(payload)
 

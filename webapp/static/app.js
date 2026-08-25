@@ -230,6 +230,7 @@ async function tick() {
   const data = await api("/api/status");
   if (!data.ok) { setConn(false, "erro do servidor"); showError(data.error || "falha ao obter estado"); return; }
 
+  renderEnergy(data.energy);
   if (data.status) {
     latestStatus = data.status;
     renderTiles(data.status);
@@ -835,7 +836,55 @@ function wireBatteryWindow() {
   });
 }
 
+/* ---------- de onde vem a energia ---------- */
+
+const ENERGY_SOURCE_PT = { grid: "Rede", battery: "Bateria" };
+
+/* `null` significa "não sabemos" e tem de aparecer como tal. Escrever 0 W ou
+   omitir a linha faria passar uma leitura em falta por uma medição -- o erro
+   que este quadro existe para não repetir. */
+function fmtW(v) {
+  return (v === null || v === undefined) ? null : `${Math.round(v)} W`;
+}
+
+function renderEnergy(energy) {
+  const box = document.querySelector("#energy-box");
+  if (!box || !energy) return;
+
+  const src = energy.output_source;
+  const srcEl = $("#energy-source");
+  srcEl.textContent = ENERGY_SOURCE_PT[src] || "desconhecida";
+  srcEl.className = `energy-source ${src || "unknown"}`;
+
+  const load = fmtW(energy.output_load_w);
+  $("#energy-load").textContent = load
+    ? `\u2014 ${load}`
+    : "\u2014 carga desconhecida";
+
+  const bits = [];
+  if (energy.output_load_from === "shelly") bits.push("medido à entrada (Shelly)");
+  else if (energy.output_load_from === "inverter") bits.push("medido pelo inversor");
+  if (energy.output_load_note) bits.push(energy.output_load_note);
+  $("#energy-note").textContent = bits.join(" · ");
+
+  // Lado da casa. O sinal do balanço: positivo = a comprar, negativo = a vender.
+  const split = [];
+  const solar = fmtW(energy.solar_w);
+  if (solar) split.push(`<span>Solar <b>${solar}</b></span>`);
+  const g = energy.grid_w;
+  if (g !== null && g !== undefined) {
+    const dir = g > 0 ? "a importar" : (g < 0 ? "a exportar" : "equilibrada");
+    split.push(`<span>Rede <b>${dir}${g === 0 ? "" : " " + fmtW(Math.abs(g))}</b></span>`);
+  }
+  const house = fmtW(energy.house_w);
+  if (house) split.push(`<span>Casa <b>${house}</b></span>`);
+  const inv = fmtW(energy.inverter_input_w);
+  if (inv) split.push(`<span>Entrada do inversor <b>${inv}</b></span>`);
+  $("#energy-split").innerHTML = split.join("");
+}
+
 /* ---------- boot ---------- */
+
 
 
 document.addEventListener("DOMContentLoaded", async () => {

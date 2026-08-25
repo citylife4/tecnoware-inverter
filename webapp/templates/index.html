@@ -41,6 +41,25 @@
 
   <!-- Valores em tempo real -->
   <section aria-labelledby="h-live">
+    <h2 id="h-energy">De onde vem a energia</h2>
+    <div class="energy-box" id="energy-box">
+      <div class="energy-main">
+        <span class="energy-label">Saída protegida</span>
+        <span class="energy-source" id="energy-source">&mdash;</span>
+        <span class="energy-load" id="energy-load"></span>
+      </div>
+      <p class="muted small" id="energy-note"></p>
+      <div class="energy-split" id="energy-split"></div>
+      <p class="muted small">A saída protegida tem o frigorífico, a luz, o portão,
+        a bomba e o próprio Raspberry Pi. O inversor só sabe medir essa carga quando
+        está a funcionar da bateria; em bypass o valor vem do contador Shelly à
+        entrada, e por isso inclui o consumo próprio do aparelho. Enquanto o
+        carregador estiver a trabalhar não é possível separar as duas coisas, e
+        aparece &laquo;desconhecida&raquo; em vez de um número inventado.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-live">
     <h2 id="h-live">Estado atual</h2>
     <div class="tiles" id="tiles"></div>
   </section>

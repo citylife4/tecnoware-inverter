@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 import serve
 from webapp import safety
 from webapp.app import create_app
+from webapp.energy_view import BATTERY, GRID, describe_energy
 from webapp.battery_window import (
     ABSOLUTE_FLOOR_V, BATTERY_POP, GRID_POP, BatteryWindow,
     validate_config as validate_window_config)
@@ -1637,6 +1638,74 @@ class TestBatteryWindowApi(unittest.TestCase):
     def test_endpoints_503_when_not_configured(self):
         client = client_for(FakeService())
         self.assertEqual(client.get("/api/battery-window", headers=AUTH).status_code, 503)
+
+
+class TestEnergyView(unittest.TestCase):
+    """Where the power is coming from, assembled from two instruments that
+    each see half of it. The rule that matters: never print a number that
+    looks measured when it was inferred from a field known to be wrong."""
+
+    def test_battery_mode_uses_the_inverters_own_reading(self):
+        e = describe_energy({"mode": "B", "ac_output_active_power": 46})
+        self.assertEqual(e["output_source"], BATTERY)
+        self.assertEqual(e["output_load_w"], 46)
+        self.assertEqual(e["output_load_from"], "inverter")
+
+    def test_battery_mode_floor_is_not_reported_as_a_measurement(self):
+        """1 W means "less than 1 W-ish", not "1 W" -- the mistake that has
+        been made three times on this installation."""
+        e = describe_energy({"mode": "B", "ac_output_active_power": 1})
+        self.assertIsNone(e["output_load_w"])
+        self.assertIn("limiar", e["output_load_note"])
+
+    def test_bypass_without_charging_uses_the_shelly(self):
+        e = describe_energy({"mode": "L", "battery_charging_current": 0},
+                            {"inverter_input_w": 63.2})
+        self.assertEqual(e["output_source"], GRID)
+        self.assertEqual(e["output_load_w"], 63.2)
+        self.assertEqual(e["output_load_from"], "shelly")
+
+    def test_bypass_while_charging_reports_unknown(self):
+        """battery_charging_current read a flat 4.0 A at 27 V (108 W) in
+        windows where the whole inverter drew 72 W, so it cannot be
+        subtracted to recover the load."""
+        e = describe_energy({"mode": "L", "battery_charging_current": 4.0,
+                             "battery_voltage": 27.0},
+                            {"inverter_input_w": 72.0})
+        self.assertIsNone(e["output_load_w"])
+        self.assertIsNone(e["output_load_from"])
+        self.assertIn("carregador", e["output_load_note"])
+
+    def test_bypass_without_a_meter_reading_reports_unknown(self):
+        e = describe_energy({"mode": "L", "battery_charging_current": 0}, None)
+        self.assertIsNone(e["output_load_w"])
+        self.assertIn("contador", e["output_load_note"])
+
+    def test_house_split_is_passed_through(self):
+        e = describe_energy({"mode": "L", "battery_charging_current": 0},
+                            {"inverter_input_w": 50, "ac_solar_w": 120.5,
+                             "house_power_w": 200.0, "net_balance": 79.5})
+        self.assertEqual(e["solar_w"], 120.5)
+        self.assertEqual(e["grid_w"], 79.5)
+        self.assertEqual(e["house_w"], 200.0)
+
+    def test_unknown_mode_is_not_guessed(self):
+        e = describe_energy({"mode": None}, {"inverter_input_w": 50})
+        self.assertIsNone(e["output_source"])
+        self.assertIsNone(e["output_load_w"])
+
+    def test_empty_inputs_do_not_raise(self):
+        e = describe_energy(None, None)
+        self.assertIsNone(e["output_source"])
+        self.assertIsNone(e["solar_w"])
+
+    def test_charging_current_is_only_trusted_above_the_float_range(self):
+        low = describe_energy({"mode": "L", "battery_charging_current": 4.0,
+                               "battery_voltage": 27.0})
+        high = describe_energy({"mode": "L", "battery_charging_current": 18.0,
+                                "battery_voltage": 27.0})
+        self.assertFalse(low["charging_trusted"])
+        self.assertTrue(high["charging_trusted"])
 
 
 if __name__ == "__main__":

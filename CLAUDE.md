@@ -313,6 +313,22 @@ First live `POP=02` run with the loads actually on the pack:
   re-measuring deliberately: note the resting voltage, apply a known load,
   read the immediate step.
 
+### A daytime battery window can CAUSE export
+
+Observed 2026-08-25 while the test window was open in daylight: with the
+protected loads on the pack, `inverter_input_w` fell to **0 W** and the whole
+house dropped to importing **11.6 W** against 75 W of solar. A little more sun
+or one appliance switching off and that goes negative — **exporting, which is
+the thing this installation must not do.**
+
+And `grid_charge` cannot correct it, because the charger does not run at
+`POP=02` (gotcha #1). The two mechanisms are mutually exclusive by
+construction: battery mode removes the only load available to absorb surplus.
+
+This is why the window belongs at **21:15-08:00** and not merely "some hours".
+It is not just about the pump — a battery window overlapping daylight works
+directly against the compliance goal it exists to serve. Keep it nocturnal.
+
 ### The surplus signal — why `grid_charge` no longer chases itself
 
 Changed 2026-08-25. The controller decides on

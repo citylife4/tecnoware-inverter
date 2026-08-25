@@ -174,6 +174,7 @@ class GridChargeController:
         self._last_net_balance = None
         self._last_inverter_input = None
         self._last_signal = None
+        self._last_payload = None
         self._last_remote_ts = None
         self._last_run = None
 
@@ -257,6 +258,12 @@ class GridChargeController:
                 self._tick(force=True)
         return self.get_state()
 
+    def last_live_payload(self):
+        """The most recent auto-energy `latest` dict, or None. Read-only
+        view for the dashboard -- see webapp/energy_view.py."""
+        with self._lock:
+            return dict(self._last_payload) if self._last_payload else None
+
     def is_overriding(self) -> bool:
         """True quando este controlador está, neste momento, a impor o
         carregamento e o agendamento deve ficar de fora.
@@ -310,6 +317,12 @@ class GridChargeController:
             resp = requests.get(cfg["source_url"], timeout=cfg["http_timeout"])
             resp.raise_for_status()
             latest = resp.json()["latest"]
+            # Stashed whole for webapp/energy_view.py. The control path only
+            # needs two numbers, but the dashboard wants the solar/house
+            # split too, and re-polling the same endpoint for it would be
+            # a second HTTP call to say the same thing.
+            with self._lock:
+                self._last_payload = latest
             inv = latest.get("inverter_input_w")
             return (float(latest["net_balance"]),
                     None if inv is None else float(inv),
