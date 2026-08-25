@@ -43,6 +43,7 @@ absorbing export and running loads off the battery cannot both happen.
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import threading
@@ -169,9 +170,15 @@ class BatteryWindow:
     """Owns POP scheduling. Writes go through InverterService, sharing its
     lock, retries and audit log with every other write source."""
 
-    def __init__(self, service, path: str, override_check=None):
+    def __init__(self, service, path: str, override_check=None,
+                 trace_dir=None):
         self.service = service
         self.path = path
+        # One CSV per day of what was decided and why. The telemetry log
+        # already shows the voltage curve and the mode; this says which
+        # interlock produced it, which is the part that is otherwise
+        # invisible after the fact.
+        self.trace_dir = trace_dir
         # Callable returning True while grid_charge is absorbing export.
         # The charger only works at POP=00, so battery mode has to yield.
         self._override_check = override_check
@@ -366,7 +373,32 @@ class BatteryWindow:
                 result["note"] = f"erro: {e}"
 
         self._last_run = result
+        self._append_trace(result)
         return result
+
+    TRACE_COLUMNS = ("ts", "target", "reason", "battery_voltage",
+                     "recovering", "applied", "note", "detail")
+    _TRACE_KEYS = ("at", "target", "reason", "battery_voltage",
+                   "recovering", "applied", "note", "detail")
+
+    def _append_trace(self, result) -> None:
+        if not self.trace_dir:
+            return
+        try:
+            os.makedirs(self.trace_dir, exist_ok=True)
+            path = os.path.join(self.trace_dir,
+                                "batterywindow-%s.csv" % result["at"][:10])
+            new = not os.path.exists(path)
+            row = dict(result, recovering=self._recovering)
+            with open(path, "a", newline="") as fh:
+                w = csv.writer(fh)
+                if new:
+                    w.writerow(self.TRACE_COLUMNS)
+                w.writerow([row.get(k) for k in self._TRACE_KEYS])
+        except OSError:
+            # Losing the trace must never take down the controller that is
+            # the pack's only guard while the window is open.
+            pass
 
     # ---- lifecycle --------------------------------------------------------
 

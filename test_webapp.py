@@ -1014,6 +1014,20 @@ class TestGridChargeController(unittest.TestCase):
         self.assertEqual(gc.get_state()["export_threshold_w"], -77)
         self.assertEqual(service.sent, ["PCP01"])
 
+    def test_is_overriding_needs_a_live_surplus_not_a_held_state(self):
+        """The dead-band holds the previous state by design. At night the
+        signal settles inside it, so a day ending in "charging" would keep
+        overriding until morning and the battery window would yield all
+        night without ever using the pack."""
+        service, stub, gc = self.make(net_balance=-200)      # exporting
+        gc.set_config({"enabled": True, "mode": "override",
+                       "min_switch_interval": 0})
+        self.assertTrue(gc.is_overriding())
+        stub.net_balance = 150      # dead-band: desired state is held...
+        gc.tick()
+        self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
+        self.assertFalse(gc.is_overriding())   # ...but nothing to absorb
+
     def test_trace_records_the_decision_with_a_timestamp(self):
         """The tick result calls it "at"; the CSV column is "ts". Getting
         that mapping wrong silently writes a blank timestamp column, which
@@ -1479,6 +1493,20 @@ class TestBatteryWindow(unittest.TestCase):
         self.assertTrue(bw.is_active())
         bw.tick(now=self.DAY)
         self.assertFalse(bw.is_active())
+
+    def test_trace_records_which_interlock_fired(self):
+        import csv as _csv
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        service = FakeService(battery_voltage=27.0)
+        bw = BatteryWindow(service, self.path, trace_dir=d.name)
+        bw.set_config({"enabled": True, "min_switch_interval": 0},
+                      now=self.PUMP)
+        with open(os.path.join(d.name, os.listdir(d.name)[0])) as fh:
+            rows = list(_csv.DictReader(fh))
+        self.assertTrue(rows[-1]["ts"])
+        self.assertEqual(rows[-1]["reason"], "forbidden")
+        self.assertEqual(rows[-1]["target"], GRID_POP)
 
     def test_config_round_trips(self):
         service, bw = self.make()

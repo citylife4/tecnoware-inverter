@@ -266,11 +266,22 @@ class GridChargeController:
         por isso o valor está sempre fresco, e assim evita-se um pedido HTTP
         extra (e uma possível divergência) a cada verificação do
         agendamento.
+
+        `_desired` sozinho NÃO chega. A banda morta segura o estado anterior
+        por desenho, e à noite -- sem sol -- o sinal assenta lá dentro (~80-95W
+        nesta casa). Um dia que acabasse em "charging" ficaria a impor o
+        carregamento até de manhã, e a janela de bateria cederia a noite
+        inteira sem nunca chegar a usar o pack. Impor exige portanto um
+        excedente REAL na leitura atual, não uma intenção retida.
         """
         with self._lock:
-            return (self._config["enabled"]
+            if not (self._config["enabled"]
                     and self._config["mode"] == "override"
-                    and self._desired == "charging")
+                    and self._desired == "charging"):
+                return False
+            signal = self._last_signal
+            return (signal is not None
+                    and signal <= self._config["export_threshold_w"])
 
     def set_enabled(self, enabled: bool) -> dict:
         """Flip the enabled flag alone, keeping every other setting --

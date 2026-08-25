@@ -162,7 +162,8 @@ def main() -> int:
     # não funciona em POP=02, por isso a janela cede ao excedente em vez de
     # lutarem pelo mesmo relé. Mesmo padrão que o agendamento usa acima.
     battery_window = BatteryWindow(service, path=cfg["battery_window_config"],
-                                   override_check=grid_charge.is_overriding)
+                                   override_check=grid_charge.is_overriding,
+                                   trace_dir=cfg.get("gridcharge_trace_dir"))
 
     scheduler = Scheduler(service, path=cfg["schedule_config"],
                           poll_interval=float(cfg["schedule_poll_interval"]),
