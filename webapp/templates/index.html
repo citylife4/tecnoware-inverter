@@ -250,6 +250,75 @@
   </section>
   {% endif %}
 
+  {% if battery_window_available %}
+  <!-- Janela noturna de bateria -->
+  <section aria-labelledby="h-batwin">
+    <h2 id="h-batwin">Janela noturna de bateria</h2>
+    <p class="muted small">Passa as cargas para a bateria durante uma janela horária,
+      em vez de a deixar em flutuação permanente. A razão principal <strong>não é
+      poupar</strong> &mdash; é criar espaço: uma bateria cheia não absorve nada, por
+      isso sem esta descarga o carregamento por excedente acima fica sem para onde
+      mandar o excedente do dia seguinte. Controla o <code>POP</code>, não o
+      <code>PCP</code>.</p>
+    <div class="control-card">
+      <div class="sched-toolbar">
+        <label class="chk"><input type="checkbox" id="bw-enabled"> Ativado</label>
+        <span class="badge" id="bw-status">&mdash;</span>
+      </div>
+      <p class="small" id="bw-current"></p>
+      <p class="warn small" id="bw-latched" hidden></p>
+
+      <h3>Definições principais</h3>
+      <div class="control-grid">
+        <label class="field">Início da janela
+          <input type="time" id="bw-from" required></label>
+        <label class="field">Fim da janela
+          <input type="time" id="bw-to" required></label>
+        <label class="field">Voltar à rede abaixo de (V)
+          <input type="number" id="bw-floor" min="24" step="0.1" required></label>
+        <label class="field">Só repetir acima de (V)
+          <input type="number" id="bw-resume" min="24" step="0.1" required></label>
+      </div>
+      <p class="muted small">O piso limita a profundidade da descarga. Um banco de
+        chumbo-ácido levado a 50% dura algumas centenas de ciclos; a 20&ndash;30% dura
+        milhares. Abaixo de <strong><span id="bw-abs-floor">&mdash;</span>&nbsp;V</strong>
+        o servidor recusa a configuração.</p>
+      <p class="muted small"><strong>Uma descarga por janela.</strong> Depois de tocar
+        no piso, só volta à bateria na janela seguinte &mdash; libertar apenas por
+        tensão daria descarga, recarga e nova descarga várias vezes por noite, que é
+        precisamente o desgaste que isto existe para evitar.</p>
+
+      <div class="btnrow sched-actions">
+        <button id="bw-save">Guardar definições</button>
+        <button class="ghost" id="bw-apply-now">Aplicar agora</button>
+      </div>
+
+      <p class="warn small" id="bw-hard-forbidden"></p>
+      <p class="warn small">Em modo bateria a proteção habitual de bateria fraca
+        <strong>não funciona</strong>: essa escreve <code>PCP</code>, que não tem
+        efeito nenhum com <code>POP=02</code>. Enquanto a janela está aberta, o piso
+        aqui em cima é a única coisa a proteger o pack &mdash; e o Raspberry Pi que
+        corre este servidor está na mesma saída.</p>
+      <p class="muted small">Cede ao carregamento por excedente: o carregador só
+        funciona com <code>POP=00</code>, por isso absorver excedente e alimentar as
+        cargas pela bateria não podem acontecer ao mesmo tempo.</p>
+
+      <details class="gc-advanced">
+        <summary>Definições avançadas</summary>
+        <div class="control-grid">
+          <label class="field">Verificar a cada (s)
+            <input type="number" id="bw-poll-interval" min="1" step="1" required></label>
+          <label class="field">Mín. de segundos entre comutações
+            <input type="number" id="bw-min-switch" min="0" step="1" required></label>
+        </div>
+        <p class="muted small">Cada comutação do <code>POP</code> atira um relé físico
+          &mdash; ouve-se. Por isso o intervalo mínimo aqui é bem mais largo que o do
+          <code>PCP</code>. Voltar à rede por segurança ignora-o sempre.</p>
+      </details>
+    </div>
+  </section>
+  {% endif %}
+
   <!-- Consola de comandos -->
   <section aria-labelledby="h-console">
     <h2 id="h-console">Consola de comandos</h2>

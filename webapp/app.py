@@ -134,7 +134,8 @@ def create_app(service, scheduler=None, grid_charge=None,
                                battery_type_labels=ui_labels.BATTERY_TYPE_LABELS_PT,
                                allow_writes=service.allow_writes,
                                scheduler_available=scheduler is not None,
-                               grid_charge_available=grid_charge is not None)
+                               grid_charge_available=grid_charge is not None,
+                               battery_window_available=battery_window is not None)
 
     # ---- API: read -----------------------------------------------------
 

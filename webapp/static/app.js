@@ -262,6 +262,7 @@ async function tick() {
   loadAudit();
   loadSchedule();
   loadGridCharge();
+  loadBatteryWindow();
 }
 
 async function loadAudit() {
@@ -686,7 +687,151 @@ function wireGridCharge() {
   });
 }
 
+/* ---------- janela noturna de bateria ---------- */
+
+let batteryWindowState = null;
+
+const BW_FIELDS = [
+  ["bw-from", "from", "str"],
+  ["bw-to", "to", "str"],
+  ["bw-floor", "floor_voltage", "num"],
+  ["bw-resume", "resume_voltage", "num"],
+  ["bw-poll-interval", "poll_interval", "num"],
+  ["bw-min-switch", "min_switch_interval", "num"],
+];
+
+/* Qual dos travões está a decidir. `detail` já vem em pt-PT do servidor, por
+   isso não se duplica aqui a tabela de razões -- só a cor. */
+const BW_REASON_TONE = {
+  window: "ok",
+  outside: "muted",
+  disabled: "muted",
+  forbidden: "err",
+  floor: "err",
+  recovering: "warn",
+  unknown_voltage: "err",
+  yielding: "warn",
+};
+
+function renderBatteryWindow(state) {
+  if (!document.querySelector("#bw-enabled")) return;   // secção não renderizada
+  const cfg = state.config || {};
+  $("#bw-enabled").checked = cfg.enabled;
+  $("#bw-status").textContent = cfg.enabled ? "ativada" : "desativada";
+  $("#bw-status").className = `badge ${cfg.enabled ? "" : "muted"}`;
+
+  BW_FIELDS.forEach(([id, key]) => {
+    const el = document.querySelector(`#${id}`);
+    if (!el || document.activeElement === el) return;
+    el.value = cfg[key];
+  });
+
+  const absEl = document.querySelector("#bw-abs-floor");
+  if (absEl && state.absolute_floor_v !== undefined) absEl.textContent = state.absolute_floor_v;
+
+  const hf = document.querySelector("#bw-hard-forbidden");
+  if (hf) {
+    const list = (state.hard_forbidden || [])
+      .map((w) => `${w.from}\u2013${w.to} (${w.why})`).join(", ");
+    hf.textContent = list
+      ? `\u26a0 Janela(s) sempre recusadas, fixas no servidor e não alteráveis aqui: ${list}. `
+        + `Nessas horas as cargas ficam na rede aconteça o que acontecer.`
+      : "";
+    hf.hidden = !list;
+  }
+
+  // Estado atual: o alvo, a razão, e a tensão contra o piso.
+  const v = state.battery_voltage;
+  const parts = [];
+  if (state.detail) {
+    const tone = BW_REASON_TONE[state.reason] || "muted";
+    parts.push(`<span class="${tone === "muted" ? "muted" : ""}">${state.detail}</span>`);
+  }
+  if (v !== null && v !== undefined && cfg.floor_voltage !== undefined) {
+    const margin = v - cfg.floor_voltage;
+    parts.push(`<span class="muted">Bateria:</span> ${v.toFixed(2)} V `
+      + `<span class="muted">(${margin >= 0 ? "+" : ""}${margin.toFixed(2)} V do piso)</span>`);
+  }
+  $("#bw-current").innerHTML = parts.join(" &middot; ") || `<span class="muted">Sem dados.</span>`;
+
+  const latched = document.querySelector("#bw-latched");
+  if (latched) {
+    latched.textContent = state.recovering
+      ? "\u26a0 Já descarregou nesta janela. Só volta à bateria na janela seguinte, "
+        + "depois de a atual fechar e o pack recuperar."
+      : "";
+    latched.hidden = !state.recovering;
+  }
+}
+
+async function loadBatteryWindow() {
+  const d = await api("/api/battery-window");
+  if (!d.ok) return;
+  batteryWindowState = d;
+  renderBatteryWindow(d);
+}
+
+function readBatteryWindowForm() {
+  const out = { enabled: (batteryWindowState.config || {}).enabled };
+  const invalid = [];
+  BW_FIELDS.forEach(([id, key, type]) => {
+    const el = document.querySelector(`#${id}`);
+    if (!el) return;
+    const raw = String(el.value).trim();
+    if (type === "str") {
+      if (!raw) invalid.push(id); else out[key] = raw;
+      return;
+    }
+    const n = Number(raw);
+    if (raw === "" || !Number.isFinite(n)) { invalid.push(id); return; }
+    out[key] = n;
+  });
+  return { values: out, invalid };
+}
+
+async function saveBatteryWindow(overrides) {
+  const { values, invalid } = readBatteryWindowForm();
+  if (invalid.length) {
+    logConsole(`janela de bateria não guardada — campos por preencher: ${invalid.join(", ")}`, "err");
+    renderBatteryWindow(batteryWindowState);
+    return { ok: false, code: "invalid_form" };
+  }
+  const body = { ...values, ...overrides, forbidden: (batteryWindowState.config || {}).forbidden || [] };
+  const d = await api("/api/battery-window", { method: "PUT", body: JSON.stringify(body) });
+  if (d.ok) { batteryWindowState = d; renderBatteryWindow(d); }
+  else {
+    logConsole(`falha ao guardar a janela de bateria: ${d.error}`, "err");
+    renderBatteryWindow(batteryWindowState);
+  }
+  return d;
+}
+
+function wireBatteryWindow() {
+  const enabledBox = $("#bw-enabled");
+  if (!enabledBox) return;   // battery_window_available era falso
+
+  enabledBox.addEventListener("change", () => {
+    saveBatteryWindow({ enabled: enabledBox.checked });
+  });
+
+  $("#bw-save").addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try { await saveBatteryWindow({}); }
+    finally { e.target.disabled = false; }
+  });
+
+  $("#bw-apply-now").addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      const d = await api("/api/battery-window/apply-now", { method: "POST", body: JSON.stringify({ force: true }) });
+      if (d.ok) logConsole(`janela de bateria — aplicar agora: ${d.result.note}`, d.result.applied ? "ok" : "err");
+      await loadBatteryWindow();
+    } finally { e.target.disabled = false; }
+  });
+}
+
 /* ---------- boot ---------- */
+
 
 document.addEventListener("DOMContentLoaded", async () => {
   $("#console-form").addEventListener("submit", async (e) => {
@@ -712,6 +857,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireControls();
   wireSchedule();
   wireGridCharge();
+  wireBatteryWindow();
   await tick();
   loadDevice();
   loadRatings();

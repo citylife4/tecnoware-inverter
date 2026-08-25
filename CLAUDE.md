@@ -250,7 +250,7 @@ output as the loads:
    is configured and not reachable from the API, so a config edit cannot
    put the loads on battery while the pump runs. Delete it only if the pump
    is physically moved off the protected output.
-2. **`floor_voltage` (25.5 V), latched.** The latch releases only once the
+2. **`floor_voltage`, latched.** The latch releases only once the
    window has *closed* and the pack is back above `resume_voltage` — i.e.
    **one discharge per night**. Releasing on voltage alone would discharge
    to the floor, recharge, and discharge again: several cycles a night,
@@ -263,6 +263,19 @@ output as the loads:
 
 `ABSOLUTE_FLOOR_V = 24.0` is refused at validation: below that is a deep
 discharge, not a shallow cycle.
+
+**Calibrating `floor_voltage` — the first estimate was wrong.** It shipped at
+25.5 V, which is a *float* voltage, not a *resting* one. On this 24 V
+lead-acid bank the resting full voltage is only ~25.4-25.6 V, so 25.5 V is
+roughly "still full" and the floor fired almost immediately. Observed live
+2026-08-25: the moment `POP=02` was applied the pack read 26.7 V and fell to
+25.8 V within 3.6 minutes — that is the float surface charge collapsing, not
+capacity leaving the battery. Lowered to **25.0 V** (~20% DoD by the standard
+lead-acid table: 25.4 V = 100%, 24.8 V = 75%, 24.4 V = 50%).
+
+Two things follow. Always let the surface charge settle before reading
+anything into a voltage, and **never calibrate a resting threshold from a
+number taken while the charger was on.**
 
 ### The surplus signal — why `grid_charge` no longer chases itself
 
