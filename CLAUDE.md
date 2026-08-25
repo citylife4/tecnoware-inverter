@@ -311,18 +311,28 @@ First live `POP=02` run with the loads actually on the pack:
   derived from `battery_net_current`, the dashboard's battery-power chart is
   blind in battery mode too. Do not use either to prove a discharge; use the
   voltage trend and `ac_output_active_power`.
-- **Internal resistance is around 0.045 Ω** — roughly double what a healthy
-  30 Ah bank should show, not the order of magnitude first feared. The
-  0.2 Ω figure derived from "0.4 V of sag at 46 W" was wrong: most of that
-  0.4 V was real discharge accumulating over minutes, not an ohmic step. The
-  usable measurement came from the fridge compressor's inrush, which is
-  instantaneous: **1150 W took the pack from 25.7 V to 23.5 V**, i.e. ~49 A
-  for 2.2 V. Aged but serviceable.
+- **Internal resistance is around 0.045 Ω, which is NORMAL for this pack.**
+  Measured from the fridge compressor's inrush, which is instantaneous and
+  therefore actually ohmic: **1150 W took the pack from 25.7 V to 23.5 V**,
+  i.e. ~49 A for 2.2 V.
+  Two earlier readings of this number were wrong and are corrected here.
+  First, 0.2 Ω, derived from "0.4 V of sag at 46 W" — but most of that 0.4 V
+  was real discharge accumulating over minutes, not an ohmic step. Second,
+  "roughly double what is healthy, aged but serviceable" — that compared a
+  **pack** figure against a **single-battery** one. This is two SOLARX 30 in
+  **series**, so their resistances add: the right reference is ~0.02-0.04 Ω,
+  and the measurement is taken at the *inverter terminals*, so it also
+  includes cabling, connections and the unit's own DC-side drop. **The pack
+  is new and nothing here suggests otherwise.** Do not cite this number as
+  evidence of degradation.
+  Its real use is the surge headroom below, not battery health.
 - **That 23.5 V matters operationally.** Program 12 hands the loads back to
   utility at ~23.0 V, so a 46 W fridge's *starting* surge comes within half a
   volt of tripping the changeover. It is direct evidence for the pump
   argument: if ~1.2 kW gets that close, a ~2 kW motor will not start from
-  this pack.
+  this pack. Note this is a statement about **pack size versus surge**, not
+  about pack condition — a healthy 30 Ah bank simply cannot deliver a 2 kW
+  motor's starting current without the voltage collapsing.
 - **A voltage read while the charger is on says nothing about state of
   charge, and neither does the percentage.** Watched live: `POP` went to
   utility and within 5 minutes the pack read 27.0 V / 100% having been
