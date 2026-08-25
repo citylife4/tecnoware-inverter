@@ -68,6 +68,17 @@ MODES = ("exclusive", "override")
 # e NÃO carrega; POP=01 não foi testado.
 CHARGING_POP = "00"
 
+# Below this much solar generation there is, by definition, nothing to
+# absorb, and the controller idles regardless of what the hysteresis band
+# would otherwise hold. This is physics rather than tuning, and it fixes a
+# real hole: after dark the surplus signal settles around 80-100 W on this
+# house, which is INSIDE the 30-150 W dead-band, so the band would hold
+# whatever the day ended on. A day ending in "charging" would leave PCP01 set
+# all night and the charger topping the pack up from the grid -- destroying
+# exactly the absorption headroom the nightly battery window exists to
+# create.
+SOLAR_FLOOR_W = 5.0
+
 DEFAULT_CONFIG = {
     "enabled": False,
     "mode": "exclusive",
@@ -174,6 +185,7 @@ class GridChargeController:
         self._last_net_balance = None
         self._last_inverter_input = None
         self._last_signal = None
+        self._last_solar = None
         self._last_payload = None
         self._last_remote_ts = None
         self._last_run = None
@@ -210,6 +222,7 @@ class GridChargeController:
                     "net_balance_w": self._last_net_balance,
                     "inverter_input_w": self._last_inverter_input,
                     "surplus_signal_w": self._last_signal,
+                    "solar_w": self._last_solar,
                     "remote_timestamp": self._last_remote_ts,
                     "age_s": age,
                     "desired_state": self._desired,
@@ -324,15 +337,17 @@ class GridChargeController:
             with self._lock:
                 self._last_payload = latest
             inv = latest.get("inverter_input_w")
+            sol = latest.get("ac_solar_w")
             return (float(latest["net_balance"]),
                     None if inv is None else float(inv),
+                    None if sol is None else float(sol),
                     latest.get("timestamp"))
         except (requests.RequestException, ValueError, KeyError, TypeError):
-            return None, None, None
+            return None, None, None, None
 
     def _evaluate(self):
         cfg = self._config
-        net, inverter_w, remote_ts = self._fetch_fn()
+        net, inverter_w, solar_w, remote_ts = self._fetch_fn()
         now_mono = time.monotonic()
 
         # The signal is the grid balance the house would show if this
@@ -351,6 +366,7 @@ class GridChargeController:
             self._last_net_balance = net
             self._last_inverter_input = inverter_w
             self._last_signal = signal
+            self._last_solar = solar_w
             self._last_remote_ts = remote_ts
 
         known = (self._last_fetch_ok_mono is not None and
@@ -364,7 +380,13 @@ class GridChargeController:
             desired = "idle"
         else:
             balance = self._last_signal
-            if balance <= cfg["export_threshold_w"]:
+            solar = self._last_solar
+            if solar is not None and solar < SOLAR_FLOOR_W:
+                # No generation, so no surplus can exist. Decided before the
+                # hysteresis, which would otherwise hold the day's last state
+                # right through the night.
+                desired = "idle"
+            elif balance <= cfg["export_threshold_w"]:
                 desired = "charging"
             elif balance >= cfg["import_threshold_w"]:
                 desired = "idle"

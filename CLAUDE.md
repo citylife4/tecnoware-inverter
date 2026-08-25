@@ -354,6 +354,16 @@ the number that switched it on** — which is what made the 2026-08-24 flap
 possible in the first place. A reading missing either field is treated as
 unknown (→ idle), never as a fallback to raw `net_balance`.
 
+**No generation means no surplus, whatever the band says.** Below
+`SOLAR_FLOOR_W` (5 W) the controller idles unconditionally, decided before
+the hysteresis. Without that rule the design had a hole big enough to defeat
+itself: after dark the surplus signal settles around **80-100 W** on this
+house, which is *inside* the 30-150 W dead-band, so the band holds whatever
+the day ended on. A day ending in "charging" left `PCP01` set all night with
+the charger topping the pack up from the grid — destroying exactly the
+absorption headroom the nightly battery window exists to create. A *missing*
+solar reading is not treated as nightfall.
+
 Thresholds are now **positive** (+50 W start, +250 W stop) and that is
 deliberate: waiting for `net_balance` to go negative means export has
 already happened by the time it is detected, PCP is written (seconds on this

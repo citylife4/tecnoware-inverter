@@ -133,17 +133,21 @@ class FetchStub:
     names. Set it to exercise the subtraction itself."""
 
     def __init__(self, net_balance=None, timestamp="2026-01-01 00:00:00",
-                 inverter_input_w=0.0):
+                 inverter_input_w=0.0, ac_solar_w=500.0):
         self.net_balance = net_balance
         self.inverter_input_w = inverter_input_w
+        # Daylight by default: the sun is not what most of these tests are
+        # about, and below SOLAR_FLOOR_W the controller idles unconditionally.
+        self.ac_solar_w = ac_solar_w
         self.timestamp = timestamp
         self.calls = 0
 
     def __call__(self):
         self.calls += 1
         if self.net_balance is None:
-            return None, None, None
-        return self.net_balance, self.inverter_input_w, self.timestamp
+            return None, None, None, None
+        return (self.net_balance, self.inverter_input_w, self.ac_solar_w,
+                self.timestamp)
 
 
 def window_around_now(pad_minutes=3):
@@ -1033,6 +1037,28 @@ class TestGridChargeController(unittest.TestCase):
         gc.tick()
         self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
         self.assertFalse(gc.is_overriding())   # ...but nothing to absorb
+
+    def test_no_sun_means_no_surplus_whatever_the_band_says(self):
+        """After dark the signal settles inside the dead-band on this house
+        (~80-100 W), so the band would hold whatever the day ended on. A day
+        ending in "charging" would leave PCP01 set all night, charging the
+        pack from the grid and destroying the headroom the battery window
+        exists to create."""
+        service, stub, gc = self.make(net_balance=-200)     # exporting, sunny
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
+        stub.net_balance = 90        # dusk: inside the 30-150 dead-band...
+        stub.ac_solar_w = 0.0        # ...and the sun has gone
+        gc.tick()
+        self.assertEqual(gc.get_state()["current"]["desired_state"], "idle")
+
+    def test_missing_solar_reading_does_not_force_idle(self):
+        """A meter that stops reporting solar must not be read as nightfall."""
+        service, stub, gc = self.make(net_balance=-200)
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        stub.ac_solar_w = None
+        gc.tick()
+        self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
 
     def test_trace_records_the_decision_with_a_timestamp(self):
         """The tick result calls it "at"; the CSV column is "ts". Getting
