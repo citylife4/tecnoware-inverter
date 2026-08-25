@@ -1,7 +1,26 @@
 # Tecnoware/Voltronic inverter project — continuation notes
 
-Read this first in a new session. Full protocol writeup is in [README.md](README.md) —
-this file is orientation + gotchas, not a duplicate of it.
+Read this first in a new session. This file is **orientation and gotchas**,
+deliberately kept short because it loads into context every time.
+
+- [README.md](README.md) — the protocol writeup: commands, CRC, capability matrix.
+- [NOTES.md](NOTES.md) — **field notes**: everything measured on this
+  installation, which telemetry fields lie, the incident log, the deployed
+  configuration and why, plans and open questions. Look there when you need a
+  specific number or some history; don't copy it back into this file.
+
+## Language
+
+**Talk to the developer in English.** That is their preference for
+conversation, commit messages, code comments and these notes.
+
+**The application itself is pt-PT**, with one deliberate exception: the
+**REST API stays English**. Display strings live in `webapp/ui_labels.py`,
+kept separate from what the API returns so that scripts have a stable
+contract while the dashboard reads naturally to the people using it. The
+tests assert those label tables stay in step with the code tables they
+mirror. Anything a person reads in the browser is Portuguese; anything a
+program parses is English.
 
 ## What this is
 
@@ -286,60 +305,8 @@ number taken while the charger was on.**
 `floor_confirmations` (default 3) requires consecutive readings under the
 floor before latching, for two independent reasons: this serial link returns
 corrupt `QPIGS` frames (gotcha #8), and **the pack sags ~0.4 V while the
-fridge compressor runs at only 46 W** (measured below). Either would end a
+fridge compressor runs at only 46 W** (measured — see NOTES.md). Either would end a
 night's discharge on a value that was never the pack's real state.
-
-### Measured in battery mode, 2026-08-25 — two field corrections
-
-First live `POP=02` run with the loads actually on the pack:
-
-| Minute | V | Output | What |
-|---|---|---|---|
-| 0 | 26.7 | 1 W | switch to `POP=02` |
-| 1-3 | 26.1 → 25.8 | 1 W | float surface charge collapsing |
-| 4-16 | 25.8 | 1 W | flat — fridge was disconnected for maintenance |
-| 17-19 | 25.5 → 25.4 | **46 W** | fridge compressor running |
-| 20 | 25.7 | 1 W | stops, voltage recovers |
-
-- **`ac_output_active_power` DOES work in battery mode** — it read 46 W,
-  matching the Shelly's independent 45-46 W for this fridge. Combined with
-  the earlier finding that it also reports large pass-through loads in
-  bypass, the field is best described as *floored at 1 W below some
-  threshold*, not as a placeholder.
-- **`battery_discharge_current` does NOT work.** It read **0.0 A while 46 W
-  was leaving the pack** (~1.8 A at 25.5 V). Since `battery_power_w` is
-  derived from `battery_net_current`, the dashboard's battery-power chart is
-  blind in battery mode too. Do not use either to prove a discharge; use the
-  voltage trend and `ac_output_active_power`.
-- **Internal resistance is around 0.045 Ω, which is NORMAL for this pack.**
-  Measured from the fridge compressor's inrush, which is instantaneous and
-  therefore actually ohmic: **1150 W took the pack from 25.7 V to 23.5 V**,
-  i.e. ~49 A for 2.2 V.
-  Two earlier readings of this number were wrong and are corrected here.
-  First, 0.2 Ω, derived from "0.4 V of sag at 46 W" — but most of that 0.4 V
-  was real discharge accumulating over minutes, not an ohmic step. Second,
-  "roughly double what is healthy, aged but serviceable" — that compared a
-  **pack** figure against a **single-battery** one. This is two SOLARX 30 in
-  **series**, so their resistances add: the right reference is ~0.02-0.04 Ω,
-  and the measurement is taken at the *inverter terminals*, so it also
-  includes cabling, connections and the unit's own DC-side drop. **The pack
-  is new and nothing here suggests otherwise.** Do not cite this number as
-  evidence of degradation.
-  Its real use is the surge headroom below, not battery health.
-- **That 23.5 V matters operationally.** Program 12 hands the loads back to
-  utility at ~23.0 V, so a 46 W fridge's *starting* surge comes within half a
-  volt of tripping the changeover. It is direct evidence for the pump
-  argument: if ~1.2 kW gets that close, a ~2 kW motor will not start from
-  this pack. Note this is a statement about **pack size versus surge**, not
-  about pack condition — a healthy 30 Ah bank simply cannot deliver a 2 kW
-  motor's starting current without the voltage collapsing.
-- **A voltage read while the charger is on says nothing about state of
-  charge, and neither does the percentage.** Watched live: `POP` went to
-  utility and within 5 minutes the pack read 27.0 V / 100% having been
-  25.4 V / 80% — no meaningful energy went in, the terminal voltage simply
-  rose under charge and the SoC readout, being voltage-derived, followed it.
-  This is the same trap as the float-vs-resting one above and it was fallen
-  into twice in one day. **Only read the pack with the charger off.**
 
 ### A daytime battery window can CAUSE export
 
@@ -426,30 +393,6 @@ A hard zero-export guarantee needs generation curtailment (the solar Shelly
 at `192.168.188.25` is a Plus 1PM with a controllable relay) or a dump
 load. The user has ruled out cutting the Shelly for now.
 
-## Incident log
-
-- **2026-08-24 ~09:03-09:06 local — beeping, panel "Fault 01".** The
-  manual (section 5.5) confirms **Fault 01 = "Fan is locked when inverter
-  is off"** — the earlier guess was right but was unverified at the time.
-  Worth physically checking the fan spins freely. The Pi's
-  own kernel log shows `hwmon1: Undervoltage detected!` at boot plus an
-  unclean-shutdown journald message, so this was a genuine brief electrical
-  disturbance on the shared circuit, not a software glitch. "Fault 01" is
-  *commonly* a fan-lock fault on this family but that was **never verified**
-  against this unit's fault table. The persistent `QPIWS` bit 5 (commonly
-  "line fail warning") seen since 2026-08-23 is probably the same cause.
-  Root cause unconfirmed — check the wiring around the Pi's PSU and the
-  inverter's AC input if it recurs. Config and service survived cleanly.
-- **2026-08-24 — grid-export flapped PCP01<->PCP03 every ~2 min for 5+
-  hours** before anyone noticed. The original -50/+20 W hysteresis was a
-  guess; real `net_balance` swings by hundreds of watts. Widened to
-  -150/+150 W with a 300 s dwell. Battery current stayed 0 A throughout, so
-  nothing was actually being charged — pure wasted SET churn.
-- **2026-08-24 — `auto-energy` was reporting a fabricated 0.0 W** for over
-  an hour while its grid Shelly was powered off, because
-  `fetch_shelly_grid()` returned `0.0` on failure. Fixed there to return
-  `None`; see that project's repo.
-
 ## Related project on this network: `auto-energy`
 
 `~/dev/auto-energy` on `palacoulo-rasp` (this machine) — a Flask dashboard
@@ -495,325 +438,16 @@ data has been observed yet (fixed after sunset the same day). Worth
 checking `/api/audit` for `grid_export` entries the next time there's
 actually sun, to see whether -150W turns out to need tuning the same way.
 
-## Loads on this installation
+## Where the rest went
 
-Everything below is on the inverter's **protected output** — stated by the
-user 2026-08-24:
+Deliberately **not** in this file, to keep it short enough to load every
+session — all in [NOTES.md](NOTES.md):
 
-| Load | Notes |
-|---|---|
-| Fridge | ~45-46 W idle, ~1223 W compressor inrush |
-| **Water pump + remote** | **~2 kW, every ~10 min from 20:00-21:00. TRIPS THE INVERTER if run from battery.** |
-| Light | small |
-| Remote garage door | intermittent |
-| **Raspberry Pi** | the logger itself — see the topology warning above |
+- what has actually been measured here (loads, battery behaviour, export)
+- which `QPIGS` fields are trustworthy and which are not
+- the incident log, and the corrections history behind several numbers
+- the deployed configuration and the reasoning for each setting
+- planned work, including merging the two dashboards, and open questions
 
-**An earlier note here claimed the pump was NOT on the output. That was
-wrong.** It came from reading `ac_output_active_power` as 1 W at 20:58
-while the house drew 1623 W — but the inverter was in bypass, where that
-field is a fixed placeholder (gotcha #3). The measurement proved nothing;
-the conclusion was invented. Third time the bypass placeholder caused a
-wrong call, which is why the dashboard now renders it as "—".
-
-### The pump is a latent fault, not just an inconvenience
-
-The inverter is rated **3600 VA**. A ~2 kW motor's starting surge is
-several times its running draw, so the inverter cannot start it from
-battery — the user reports it trips.
-
-That risk is **not avoided by staying on `POP=00`**. In utility-first mode
-the inverter still transfers to battery automatically when the grid fails.
-So *any* grid outage between 20:00 and 21:00 will have the pump attempt to
-start on battery, trip the inverter, and drop the whole protected output —
-**fridge, light, garage door and the Pi included**. The backup is
-guaranteed to fail in exactly the window it is most likely to be tested.
-
-**Recommendation: move the pump off the protected output.** It is the one
-change that makes this battery do its job. The remaining loads (fridge +
-light + Pi, ~50-60 W) are a comfortable fit for ~360 Wh usable — roughly
-6 hours — and none of them have a surge the inverter can't handle.
-
-This also very likely explains the 2026-08-24 09:05 Fault 01: the unit was
-in `POP=02` (battery priority) at the time, so any large load starting
-would trip it, killing the output and with it the Pi — which is precisely
-what the kernel log shows. That is a better fit than the "brief electrical
-disturbance" originally guessed, though it remains unproven.
-
-## Measured 2026-08-25 — the POP question is answered
-
-A full 32 h of Shelly channel 1 (`inverter_input_w`) plus the inverter's own
-telemetry, with **no reboots** (Pi up 15 h, service since 2026-08-24 16:43)
-and nothing touched on the hardware. This is better data than the planned
-`POP=02` test would have produced, and at zero risk.
-
-**Note the clocks differ:** `telemetry/*.csv` timestamps are **UTC**;
-`auto-energy`'s history buckets are **local (WEST, UTC+1)**. Cross-referencing
-the two without the shift will misplace every event by an hour.
-
-| Measure | Value |
-|---|---|
-| Protected output, base load (fridge + Pi + light) | **~66 W → 1.59 kWh/day** |
-| Pump, 19:30-20:30 local | ~1200-1300 W running, 0.36 kWh/day |
-| Grid charger, 09:10-11:50 local | 250-596 W (the morning recharge) |
-| Solar generated | ~0.39 kWh/day |
-| **Exported to grid** | **0.000 kWh — zero negative `net_balance` blocks in 32 h** |
-| Battery | 27.0-27.1 V, 100%, discharge current **0.0 A throughout** |
-
-**On the economics: alternating POP saves nothing.** The case for it was
-capturing surplus solar, and there is no surplus — solar is already 100%
-self-consumed, so every watt-hour put into the pack is bought from the grid.
-Round-tripping ~0.36 kWh through lead-acid at ~75% costs ~0.12 kWh, about
-**EUR 10/year thrown away**, plus cycle wear, to move consumption that has
-no cheaper window to move it to (flat 0.22 EUR/kWh, no bi-horário).
-
-**The user decided to use the pack anyway, and for a reason the economics
-miss: compliance.** Exporting is not permitted here, and *a full battery
-absorbs nothing* — `PCP01` into a floated pack draws a trickle while the
-surplus goes to the grid. Discharging overnight is what creates somewhere
-to dump the next day. The measured worst export day is 0.14 kWh against
-~0.36 kWh of headroom, so the capacity is sufficient with margin.
-
-That is what `webapp/battery_window.py` implements, with the depth limited
-to a shallow cycle (see its four interlocks above). Do not "simplify" it
-back to permanent float on the grounds that it saves no money — saving
-money was never the point, and permanent float is not ideal for lead-acid
-either.
-
-Autonomy on the base load: 360 Wh / 66 W = **~5.5 h**, if the pump is not
-on the output.
-
-### Refinement to gotcha #3 — the 1 W is a floor, not a constant
-
-`ac_output_active_power` reported a sustained **1160-1293 W** for 26 samples
-at 19h local and 32 at 20h — the pump, passing through the transfer relay.
-It was **not** inverting: discharge current stayed 0.0 A and the pack held
-27.0 V, which 1200 W from 24 V (50 A) could not do for a second. So the
-field does report real pass-through load in bypass, above some threshold
-between ~90 W and ~1160 W. It reads 1 W for everything below — which covers
-the fridge, so **the operational advice is unchanged: use Shelly channel 1
-for load in bypass.** 98.9% of samples were still exactly 1 W. The
-threshold has not been located and the mechanism is a guess.
-
-Also: the pump's *running* draw is ~1200-1300 W, not the ~2 kW estimated.
-The trip risk stands anyway — a 1200 W motor's starting surge is several
-times that, against a 3600 VA unit.
-
-## Planned next session (2026-08-25)
-
-Data is accumulating on its own overnight: `telemetry/` on the Pi (battery,
-mode, charging) and `auto-energy`'s DB (grid, solar, inverter AC input).
-Nothing needs to be left running on the assistant side.
-
-1. **Read what was collected** (no risk): fridge/inverter draw over 24 h
-   from the Shelly's channel 1, battery behaviour, whether any export
-   happened and when. Note the inverter's own output column is blind while
-   in bypass — use channel 1 for load.
-2. **Supervised battery-mode test** (~1-2 h, user present): switch to
-   `POP=02`, measure real fridge consumption and duty cycle and the actual
-   discharge rate, then back to `POP=00`.
-   - **Never inside 20:00-21:00** — the pump would try to start on battery
-     and trip the inverter, dropping the fridge, the light, the garage door
-     and the Pi at once.
-   - **Do not leave `POP=02` unattended.** The pack only recharges once it
-     falls to program 12's threshold (~23 V), the software low-battery
-     floor is dead in that mode (gotcha #1), and the Pi is on the same
-     output — so a flat battery takes the logger down with it.
-3. **Decide the POP strategy** with real numbers: if the fridge's daily
-   draw is small enough that ~0.13 kWh/day of surplus meaningfully refills
-   the pack, alternating POP is worth building; if it drains far faster
-   than solar can refill, that is just buying grid power at night to run a
-   fridge at ~90% efficiency, and `POP=00` stays correct.
-4. **Re-verify `PBCV24.0`** once the pack is resting rather than charging.
-
-User's own jobs, independent of the above: set the charge current from the
-**front panel** (gotcha #10 — the single change most likely to extend the
-battery's life), and confirm what else is wired to the inverter's output.
-
-## What's not done / open questions
-
-Deployment state as of end of 2026-08-24:
-
-Superseded 2026-08-25 — see below.
-
-### Deployed configuration, end of 2026-08-25
-
-Three settings, chosen together to serve one goal the user stated plainly:
-**export mode by day, battery window by night, grid while the pump runs.**
-
-| Setting | Value | Why |
-|---|---|---|
-| `grid_charge.mode` | **`exclusive`** | was `override`, which was inert here |
-| `export_threshold_w` / `import_threshold_w` | **+30 / +150 W** | positive = pre-empt export |
-| `min_battery_voltage` | **25.5 V** | was 24.0 |
-| Battery window | **21:15-08:00** | after the pump, before the sun |
-| `floor_voltage` | **25.6 V** x 3 readings | above the inverter's own 25.4 V |
-
-**Why `exclusive` and not `override`.** In `override` the controller writes
-nothing when there is no surplus, deferring to the scheduler — but the
-scheduler is *disabled* on this installation, so "write nothing" means "leave
-`PCP01` where it is". Measured over one afternoon: **169 ticks, 1 write**, the
-charger drawing 4 A from the grid continuously with no relation to whether
-there was any surplus at all. It was not absorbing export; it was simply
-always on, and it spent the pack's absorption headroom on grid power. Use
-`override` only when a schedule is actually enabled to defer to.
-
-**Why `min_battery_voltage` went to 25.5 V.** `exclusive` writes `PCP03` when
-there is no surplus, which on this unit (no PV connected) means "do not
-charge". Left alone, the pack would sit part-charged for days whenever
-surplus is scarce — it was 0.000 kWh on 2026-08-24 — and lead-acid sulfates
-that way. The interlock now gives two bands: **above 25.5 V** charge only on
-surplus, preserving headroom; **below 25.5 V** charge regardless.
-
-**Why `floor_voltage` is 25.6 V and not lower.** Program 12 hands the loads
-back to utility at **~25.4 V**, so any floor below that never fires — the
-hardware acts first, and what you get is the inverter cycling battery/line
-every 20-40 minutes all night, buying grid power each time. Measured
-2026-08-25: **six cycles in four hours.** At 25.6 V the software decides
-first and the latch closes, giving the intended single shallow discharge.
-
-### What to expect, honestly
-
-About **1.5 h of battery per night**, not the whole night — the pack reached
-25.5 V in 1h33 on 2026-08-25 — creating roughly **100 Wh** of headroom
-against a measured worst-case export day of **140 Wh**. That is adequate but
-has no margin, and once the headroom is spent in the morning the afternoon
-has none. This reduces export substantially; it does not guarantee zero. A
-hard guarantee still needs curtailment or a dump load.
-
-### Verified 2026-08-25
-
-- **Charge current 20 A -> 10 A** (front panel, program 11). **Confirmed on
-  hardware**, two independent ways, while the inverter cycled itself in and
-  out of battery mode: `battery_charging_current` capped at **10 A (max 11)**
-  where it previously reached 18-20, and the Shelly showed the charger's AC
-  draw at **~320 W while actually charging** against the 596 W measured under
-  the old limit. Nothing further to check.
-
-### Applied but NOT yet verified
-
-- **`PBCV24.0`** — ACKed, intent was to raise the recharge point from a
-  near-flat 22.0 V to ~50%. `QPIRI` still reports 22.0 V, which proves
-  nothing either way (gotcha #2).
-  **Complicated by an observation on 2026-08-25:** left in `POP=02`, the unit
-  handed the loads back to utility at **~25.4-25.5 V**, repeatedly and
-  consistently (six times in four hours). That matches neither 22.0 nor the
-  24.0 that was written, and it is well above the 23.0 V the manual gives as
-  program 12's default. So either `PBCV` is not the setting that governs this
-  changeover, or the value in effect is neither of the two known candidates.
-  Unresolved — but **25.4 V is the number that actually governs behaviour**,
-  and `webapp/battery_window.py` is configured against it, not against
-  `QPIRI`.
-
-### Planned: merge the two dashboards, leave this Pi headless
-
-Agreed in principle 2026-08-25, **not started**. There are two web UIs on
-this network and they describe halves of one system:
-
-| | |
-|---|---|
-| `palacoulo-rasp:8000` | `auto-energy` — panels, grid meter, weather |
-| `palacoulo-inverter:8080` | this project — inverter, battery, automations |
-
-Answering any real question today means opening both, and `webapp/energy_view.py`
-already stitches them by hand. Three reasons to merge, strongest first:
-
-1. **`palacoulo-inverter` is powered BY the inverter; `palacoulo-rasp` is
-   not.** When the inverter trips, its own dashboard dies with it — precisely
-   when you want to look. Moving the UI to a machine on separate power makes
-   the failure observable.
-2. One place showing solar, grid, battery and inverter together.
-3. `palacoulo-rasp` is aarch64 with Docker and a modern Python;
-   `palacoulo-inverter` is armv7/Python 3.9 and constrains every line of UI
-   written for it.
-
-**What must NOT move.** The three automations (`scheduler.py`,
-`grid_charge.py`, `battery_window.py`) stay on `palacoulo-inverter`. They own
-the serial port and must keep working with the network down — routing house
-power control through a LAN hop would make a switch failure into a control
-failure. "Headless" here means *the UI leaves*; the API and the automations
-stay.
-
-**Two risks to decide on before starting, not after:**
-
-- **The local emergency control disappears.** Today, if `palacoulo-rasp`
-  dies, you can still open the inverter's own dashboard and switch the
-  battery window off. After the move you could not. Keep a stripped local
-  page — status plus a kill switch for the automations. Cheap, and the kind
-  of thing only missed on the wrong day.
-- **The API token moves to another machine.** It can change the house's power
-  priorities. Decide deliberately where it lives and how it is stored.
-
-**Rough shape of the work**, in order:
-
-1. `palacoulo-inverter`: keep `serve.py` serving `/api/*`, bind it beyond
-   localhost, confirm the token flow works cross-host.
-2. `auto-energy`: add a client for that API and render the inverter panels —
-   status, priorities, the three automations, the energy-provenance box.
-   `webapp/ui_labels.py` and `webapp/energy_view.py` port across; the API is
-   deliberately English so the contract is stable.
-3. `palacoulo-inverter`: cut the full UI down to the fallback page.
-4. Decide whether `webapp/` keeps serving templates at all, or becomes
-   API-only with the templates moving to the other repo.
-
-Note `grid_charge` **already** depends on `palacoulo-rasp` being reachable
-(it polls `/api/live`), and that dependency fails safe — a stale reading
-means idle, never "charge blind". The merge does not add a new class of
-failure there; it does add one for the UI.
-
-### Open, roughly by importance
-
-- **`POP` strategy is undecided.** `POP=00` charges but leaves loads on
-  grid; `POP=02` runs the fridge off the battery but never recharges.
-  Doing both needs alternating `POP`, which throws a physical relay each
-  time. Blocked on measuring the fridge's real daily consumption — a full
-  day of `telemetry/` plus `auto-energy` data was being collected
-  overnight for exactly this.
-- **`PBCV24.0` is ACKed but unverified** (gotcha #2/#5). Intent was to
-  raise the recharge point from a near-flat 22.0 V to 50%. Confirming it
-  needs the pack near 24 V in battery mode and seen to start recharging.
-  **Do not record as done until observed.**
-- **Zero export cannot currently be guaranteed** — see the limitation under
-  "Why grid-export exists here". Options are generation curtailment via the
-  solar Shelly's relay (user has ruled it out for now) or a dump load.
-- **The pump shares the protected output and trips the inverter on
-  battery** — see "Loads on this installation". Moving it off is the
-  highest-value physical change available and blocks any reliable backup
-  until done.
-- The macOS `launchd` plist for the standalone `charge_schedule.py` is
-  obsolete now scheduling lives in the server — probably delete it.
-- `grid_charge`'s `source_url` defaults to `http://192.168.188.11:8000`
-  (`palacoulo-rasp`); update it and the deployed `web_gridcharge.json` if
-  `auto-energy` ever moves host.
-- `QPIRI` field 14 (`max_charging_current`) reads malformed (`06P`) — never
-  resolved, don't trust it.
-- `battery_redischarge_voltage` (field 22, reads `52.0`) fits neither the
-  raw nor the x2 scale — unexplained.
-- `POP=01` has never been tested. `QPIWS` *warning-bit* meanings were never
-  verified against this unit; the "line fail warning" reading is the
-  published convention, not a confirmed fact. (The *fault* codes are
-  different and ARE documented — see below.)
-- The charge rate is still ~C/3, above the C/10-C/5 deep-cycle lead-acid
-  wants. Program 11's only lower option is 2 A (~C/15), which would make a
-  full recharge take most of a day. 10 A was the pragmatic choice, not the
-  ideal one.
-
-### Source documents
-
-The user supplied the official manual (**"ATA SOLAR INVERTER 3.5KW/5.5KW
-User's Manual"**, Tecnoware) on 2026-08-24. It is not in this repo, but it
-settled several things that had been guesswork:
-
-- **Fault code table (section 5.5).** `01 = "Fan is locked when inverter is
-  off"`, `02` over temperature, `03/04` battery voltage too high/low,
-  `07` overload timeout, `51` over current or surge, `59` PV over
-  limitation. This is the *fault* table, not the `QPIWS` warning bits.
-- **Front-panel program list (section 5.4)** — program 01 output priority,
-  02 total max charging current (10-100 A), **11 max utility charging
-  current (2 A, then 10-80 A)**, 12/13 the SBU switch-back voltages,
-  16 charger source priority, 26/27/29 bulk/float/cut-off voltages.
-- **"All settings must be modified in battery mode and must be rebooted to
-  be valid."** Worth remembering before concluding a front-panel change
-  didn't take.
-- Programs **12 (default 23.0 V)** and **13 (default 27.0 V / FUL)** are
-  the SBU switch-back points — which is why `POP=02` does eventually
-  recharge, just not until the pack falls to ~23 V. See gotcha #1's note.
+If you learn something new about this installation, it belongs there. Only
+add to this file if forgetting it would break something.
