@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from webapp.app import create_app, generate_token          # noqa: E402
 from webapp.atomic_write import write_json_atomic          # noqa: E402
+from webapp.battery_window import BatteryWindow            # noqa: E402
 from webapp.grid_charge import GridChargeController         # noqa: E402
 from webapp.scheduler import Scheduler                     # noqa: E402
 from webapp.service import InverterService                 # noqa: E402
@@ -55,6 +56,13 @@ DEFAULTS = {
     # Telemetria persistente (um CSV por dia). O histórico em memória
     # perde-se em cada reinício -- ver InverterService._append_telemetry.
     "telemetry_dir": "telemetry",
+    # Nightly POP window (see webapp/battery_window.py). Drives the output
+    # priority, not PCP, so it does not conflict with the two above.
+    "battery_window_config": "web_battery_window.json",
+    # Decision trace for the grid-export controller, one CSV per day. Its
+    # thresholds have been guessed wrong twice; this is so the next revision
+    # is argued from recorded numbers.
+    "gridcharge_trace_dir": "telemetry",
 }
 
 
@@ -147,18 +155,27 @@ def main() -> int:
     # agendamento lhe possa perguntar, a cada tick, se está a sobrepor-se
     # -- sem isso os dois escreviam PCP em cadências diferentes e ficavam
     # a lutar um com o outro. Ver GridChargeController.is_overriding().
-    grid_charge = GridChargeController(service, path=cfg["gridcharge_config"])
+    grid_charge = GridChargeController(service, path=cfg["gridcharge_config"],
+                                       trace_dir=cfg.get("gridcharge_trace_dir"))
+
+    # A bateria só é usada quando não há excedente a absorver: o carregador
+    # não funciona em POP=02, por isso a janela cede ao excedente em vez de
+    # lutarem pelo mesmo relé. Mesmo padrão que o agendamento usa acima.
+    battery_window = BatteryWindow(service, path=cfg["battery_window_config"],
+                                   override_check=grid_charge.is_overriding)
 
     scheduler = Scheduler(service, path=cfg["schedule_config"],
                           poll_interval=float(cfg["schedule_poll_interval"]),
                           override_check=grid_charge.is_overriding)
     scheduler.start()
     grid_charge.start()
+    battery_window.start()
 
-    app = create_app(service, scheduler, grid_charge, token=cfg["token"],
-                     secret_key=cfg["secret_key"])
+    app = create_app(service, scheduler, grid_charge, battery_window,
+                     token=cfg["token"], secret_key=cfg["secret_key"])
 
     def _shutdown(signum, frame):
+        battery_window.stop()
         scheduler.stop()
         grid_charge.stop()
         service.stop()
@@ -175,6 +192,7 @@ def main() -> int:
         app.run(host=cfg["host"], port=int(cfg["http_port"]),
                 threaded=True, use_reloader=False)
     finally:
+        battery_window.stop()
         scheduler.stop()
         grid_charge.stop()
         service.stop()

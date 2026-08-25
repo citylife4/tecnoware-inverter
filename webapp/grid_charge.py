@@ -36,6 +36,7 @@ still gets utility charging regardless of grid export state.
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import threading
@@ -75,27 +76,23 @@ DEFAULT_CONFIG = {
     "source_url": "http://192.168.188.11:8000/api/live",
     "poll_interval": 30.0,       # matches the dashboard's own refresh cadence
     "http_timeout": 5.0,
-    # Hysteresis band, in watts of net_balance (negative = exporting).
-    # Must export past this to start charging...
+    # Hysteresis band, in watts of the SURPLUS SIGNAL -- which is
+    # net_balance minus inverter_input_w, i.e. what the grid balance would
+    # be if the inverter drew nothing. See _evaluate() for why that matters:
+    # the charger's own 350-560W draw is inside inverter_input_w, so
+    # subtracting it means turning the charger ON no longer moves the number
+    # that decided to turn it on. Without that, the signal chases itself --
+    # which is exactly the 5-hour PCP01<->PCP03 flap of 2026-08-24.
     #
-    # -50/+20 (a 70W band) was the original guess and it was wrong: live on
-    # this house, net_balance swings by hundreds of watts routinely (10-min
-    # averages from 80W up to 1400W import, one instantaneous spike over
-    # 2500W -- ordinary appliances cycling, not a fault) with battery
-    # charging current staying at 0A the whole time (the pack was already
-    # above its recharge threshold), so none of that flapping even charged
-    # anything. It re-triggered every ~120s for 5+ hours before anyone
-    # noticed. 150/150 (a 300W band) is sized off that real data.
-    "export_threshold_w": -150.0,
-    # ...and come back up to this before stopping. The gap between the two
-    # absorbs normal household load noise without flapping.
-    "import_threshold_w": 150.0,
-    # Don't flip state more than once per this many seconds, even if the
-    # hysteresis says to -- PCP writes take up to ~10s on this hardware and
-    # rapid toggling serves no purpose. The low-battery safety override
-    # bypasses this deliberately (see _tick). Widened from 120s alongside
-    # the thresholds above, as a second line of defense against the same
-    # flapping incident.
+    # Positive, not negative, and deliberately so. Waiting for net_balance
+    # to actually go negative means export has ALREADY happened by the time
+    # we detect it, write PCP (seconds on this hardware) and the charger
+    # spins up. Starting while the house is still importing ~50W pre-empts
+    # it. Exporting is a legal problem at this installation; over-importing
+    # is merely wasteful, so the asymmetry is on purpose.
+    "export_threshold_w": 50.0,
+    # ...and come back up to this before stopping.
+    "import_threshold_w": 250.0,
     "min_switch_interval": 300.0,
     # If no successful read in this long, treat the export state as
     # unknown rather than trusting a stale number.
@@ -138,8 +135,8 @@ def validate_config(cfg: dict) -> dict:
     if out["poll_interval"] < 5:
         raise ValueError("poll_interval must be at least 5 seconds")
     if out["export_threshold_w"] >= out["import_threshold_w"]:
-        raise ValueError("export_threshold_w must be lower (more negative) "
-                         "than import_threshold_w -- they define a hysteresis band")
+        raise ValueError("export_threshold_w must be lower than "
+                         "import_threshold_w -- they define a hysteresis band")
 
     for key in ("charge_pcp", "idle_pcp"):
         if out[key] not in PCP_VALUES:
@@ -153,9 +150,14 @@ class GridChargeController:
     thread. Writes go through InverterService, sharing its lock, retry
     behaviour, and audit log with every other write source."""
 
-    def __init__(self, service, path: str, fetch_fn=None):
+    def __init__(self, service, path: str, fetch_fn=None, trace_dir=None):
         self.service = service
         self.path = path
+        # Where to append the decision trace (one CSV per day), or None to
+        # keep none. The thresholds in DEFAULT_CONFIG have now been guessed
+        # wrong twice on this installation; the point of this file is that
+        # the next revision is argued from recorded numbers instead.
+        self.trace_dir = trace_dir
         # Defaults to the real HTTP call; tests inject a fake so they don't
         # need network access or a running auto-energy instance.
         self._fetch_fn = fetch_fn or self._http_fetch
@@ -170,6 +172,8 @@ class GridChargeController:
         self._last_switch_mono = 0.0
         self._last_fetch_ok_mono = None
         self._last_net_balance = None
+        self._last_inverter_input = None
+        self._last_signal = None
         self._last_remote_ts = None
         self._last_run = None
 
@@ -203,6 +207,8 @@ class GridChargeController:
                 "pop_warning": self._pop_warning(),
                 "current": {
                     "net_balance_w": self._last_net_balance,
+                    "inverter_input_w": self._last_inverter_input,
+                    "surplus_signal_w": self._last_signal,
                     "remote_timestamp": self._last_remote_ts,
                     "age_s": age,
                     "desired_state": self._desired,
@@ -278,25 +284,49 @@ class GridChargeController:
     # ---- evaluation ---------------------------------------------------------
 
     def _http_fetch(self):
-        """Return (net_balance_watts, remote_timestamp), or (None, None) if
-        the auto-energy dashboard couldn't be reached or answered oddly."""
+        """Return (net_balance_w, inverter_input_w, remote_timestamp), or
+        (None, None, None) if the auto-energy dashboard couldn't be reached
+        or answered oddly.
+
+        inverter_input_w is Shelly channel 1 -- the feed into this
+        inverter's AC input, which includes whatever the charger is drawing.
+        It is what makes the surplus signal immune to its own effect; see
+        _evaluate(). A reading without it is treated as unknown rather than
+        falling back to raw net_balance, because that fallback is precisely
+        the self-chasing signal that flapped for five hours."""
         cfg = self._config
         try:
             resp = requests.get(cfg["source_url"], timeout=cfg["http_timeout"])
             resp.raise_for_status()
             latest = resp.json()["latest"]
-            return float(latest["net_balance"]), latest.get("timestamp")
+            inv = latest.get("inverter_input_w")
+            return (float(latest["net_balance"]),
+                    None if inv is None else float(inv),
+                    latest.get("timestamp"))
         except (requests.RequestException, ValueError, KeyError, TypeError):
-            return None, None
+            return None, None, None
 
     def _evaluate(self):
         cfg = self._config
-        net, remote_ts = self._fetch_fn()
+        net, inverter_w, remote_ts = self._fetch_fn()
         now_mono = time.monotonic()
 
-        if net is not None:
+        # The signal is the grid balance the house would show if this
+        # inverter drew nothing: net_balance already equals
+        # (house_power - solar), so subtracting the inverter's own feed
+        # leaves the rest of the house's balance. Charging then cannot move
+        # its own input -- the property the old raw-net_balance version
+        # lacked. Both numbers must be present; a missing one is unknown,
+        # never a fallback to the self-chasing signal.
+        signal = None
+        if net is not None and inverter_w is not None:
+            signal = net - inverter_w
+
+        if signal is not None:
             self._last_fetch_ok_mono = now_mono
             self._last_net_balance = net
+            self._last_inverter_input = inverter_w
+            self._last_signal = signal
             self._last_remote_ts = remote_ts
 
         known = (self._last_fetch_ok_mono is not None and
@@ -309,7 +339,7 @@ class GridChargeController:
             # blind".
             desired = "idle"
         else:
-            balance = self._last_net_balance
+            balance = self._last_signal
             if balance <= cfg["export_threshold_w"]:
                 desired = "charging"
             elif balance >= cfg["import_threshold_w"]:
@@ -334,7 +364,9 @@ class GridChargeController:
 
         result = {
             "at": _utcnow(), "desired_state": desired, "target": target,
-            "net_balance_w": self._last_net_balance, "known": known,
+            "net_balance_w": self._last_net_balance,
+            "inverter_input_w": self._last_inverter_input,
+            "surplus_signal_w": self._last_signal, "known": known,
             "why": override, "applied": False, "note": "",
             "pop_warning": self._pop_warning(),
         }
@@ -377,7 +409,39 @@ class GridChargeController:
                 result["note"] = f"error: {e}"
 
         self._last_run = result
+        self._append_trace(result)
         return result
+
+    # Header names, and the result-dict keys they come from. The timestamp
+    # lives under "at" in the tick result but is called "ts" everywhere the
+    # telemetry is read, so the two are mapped rather than assumed equal.
+    TRACE_COLUMNS = ("ts", "net_balance_w", "inverter_input_w",
+                     "surplus_signal_w", "known", "desired_state", "target",
+                     "applied", "note")
+    _TRACE_KEYS = ("at", "net_balance_w", "inverter_input_w",
+                   "surplus_signal_w", "known", "desired_state", "target",
+                   "applied", "note")
+
+    def _append_trace(self, result) -> None:
+        """One row per tick. Plain append, like the telemetry CSV -- this
+        machine loses power without warning, so read it back with
+        read_telemetry.py, which tolerates the NUL runs that causes."""
+        if not self.trace_dir:
+            return
+        try:
+            os.makedirs(self.trace_dir, exist_ok=True)
+            day = result["at"][:10]
+            path = os.path.join(self.trace_dir, "gridcharge-%s.csv" % day)
+            new = not os.path.exists(path)
+            with open(path, "a", newline="") as fh:
+                w = csv.writer(fh)
+                if new:
+                    w.writerow(self.TRACE_COLUMNS)
+                w.writerow([result.get(k) for k in self._TRACE_KEYS])
+        except OSError:
+            # Losing the trace must never take down the controller that is
+            # holding the export down.
+            pass
 
     # ---- lifecycle ----------------------------------------------------------
 

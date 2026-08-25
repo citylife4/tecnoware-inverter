@@ -210,9 +210,9 @@ protocol code, deployed to `palacoulo-inverter` under systemd
    happened twice on 2026-08-24 and both times erased the window worth
    analysing. `TELEMETRY_COLUMNS` order is fixed.
 
-### The two automations
+### The three automations
 
-Both drive PCP, so they must not write at the same time.
+Two drive PCP and must not write at the same time; the third drives POP.
 
 - `webapp/scheduler.py` — time-of-day rules, config `web_schedule.json`.
 - `webapp/grid_charge.py` — charges while the house exports, polling
@@ -229,8 +229,66 @@ Both drive PCP, so they must not write at the same time.
   their cached `_last_applied_pcp` when yielding, so the other's write
   doesn't leave them thinking "already set".
 
-Both share `apply_low_battery_floor` in `webapp/safety.py` — don't
-duplicate that logic.
+- `webapp/battery_window.py` — **nightly POP window**, config
+  `web_battery_window.json`, added 2026-08-25. Puts the loads on the pack
+  overnight so it is not on permanent float, and — the real reason —
+  **creates the headroom the charger needs to absorb export the next day.**
+  A full battery absorbs nothing: `PCP01` into a floated pack draws a
+  trickle and the surplus goes to the grid regardless.
+
+Both PCP controllers share `apply_low_battery_floor` in `webapp/safety.py`
+— don't duplicate that logic. **It does nothing for `battery_window`**: it
+works by writing PCP, and PCP is a no-op while `POP=02` (gotcha #1), so in
+battery mode `BatteryWindow` is the *only* thing protecting the pack.
+
+### `battery_window` — the four interlocks
+
+All fail towards utility, and all exist because the Pi is on the same
+output as the loads:
+
+1. **`HARD_FORBIDDEN` (19:00-21:15)** — the pump. Applied on top of whatever
+   is configured and not reachable from the API, so a config edit cannot
+   put the loads on battery while the pump runs. Delete it only if the pump
+   is physically moved off the protected output.
+2. **`floor_voltage` (25.5 V), latched.** The latch releases only once the
+   window has *closed* and the pack is back above `resume_voltage` — i.e.
+   **one discharge per night**. Releasing on voltage alone would discharge
+   to the floor, recharge, and discharge again: several cycles a night,
+   which is the exact wear the controller exists to prevent.
+3. **Unreadable battery voltage** → utility. Never a reason to stay on
+   battery.
+4. **Yields to `grid_charge`** via `override_check` — the charger only runs
+   at `POP=00`, so absorbing export and running loads off the pack are
+   mutually exclusive.
+
+`ABSOLUTE_FLOOR_V = 24.0` is refused at validation: below that is a deep
+discharge, not a shallow cycle.
+
+### The surplus signal — why `grid_charge` no longer chases itself
+
+Changed 2026-08-25. The controller decides on
+
+    surplus_signal = net_balance - inverter_input_w
+
+not on `net_balance` alone. `net_balance` is already
+`house_power - solar`, so subtracting Shelly channel 1 leaves what the rest
+of the house would import if this inverter drew nothing. **The charger's own
+350-560 W is inside `inverter_input_w`, so switching it on no longer moves
+the number that switched it on** — which is what made the 2026-08-24 flap
+possible in the first place. A reading missing either field is treated as
+unknown (→ idle), never as a fallback to raw `net_balance`.
+
+Thresholds are now **positive** (+50 W start, +250 W stop) and that is
+deliberate: waiting for `net_balance` to go negative means export has
+already happened by the time it is detected, PCP is written (seconds on this
+hardware) and the charger spins up. Starting while the house still imports
+~50 W pre-empts it. Over-importing is merely wasteful; exporting is a legal
+problem here, so the asymmetry is on purpose.
+
+Every tick is appended to `telemetry/gridcharge-YYYY-MM-DD.csv`
+(`trace_dir` in `serve.py`). These thresholds have been guessed wrong twice
+— the point of that file is that the next revision is argued from recorded
+numbers. Read it with `read_telemetry.py`.
 
 ### Why grid-export exists here: compliance, not savings
 
@@ -383,14 +441,25 @@ the two without the shift will misplace every event by an hour.
 | **Exported to grid** | **0.000 kWh — zero negative `net_balance` blocks in 32 h** |
 | Battery | 27.0-27.1 V, 100%, discharge current **0.0 A throughout** |
 
-**Decision: stay on `POP=00`. Do not build alternating POP.** The entire
-case for it was capturing surplus solar, and there is no surplus — solar is
-already 100% self-consumed, so every watt-hour put into the pack would be
-bought from the grid. Round-tripping ~0.36 kWh through lead-acid at ~75%
-costs ~0.12 kWh, about **EUR 10/year thrown away**, plus cycle wear on a
-30 Ah bank, to move consumption that has no cheaper window to move it to
-(flat 0.22 EUR/kWh, no bi-horário). The battery's job here is backup, and
-backup wants a full float pack, which is exactly what `POP=00` gives.
+**On the economics: alternating POP saves nothing.** The case for it was
+capturing surplus solar, and there is no surplus — solar is already 100%
+self-consumed, so every watt-hour put into the pack is bought from the grid.
+Round-tripping ~0.36 kWh through lead-acid at ~75% costs ~0.12 kWh, about
+**EUR 10/year thrown away**, plus cycle wear, to move consumption that has
+no cheaper window to move it to (flat 0.22 EUR/kWh, no bi-horário).
+
+**The user decided to use the pack anyway, and for a reason the economics
+miss: compliance.** Exporting is not permitted here, and *a full battery
+absorbs nothing* — `PCP01` into a floated pack draws a trickle while the
+surplus goes to the grid. Discharging overnight is what creates somewhere
+to dump the next day. The measured worst export day is 0.14 kWh against
+~0.36 kWh of headroom, so the capacity is sufficient with margin.
+
+That is what `webapp/battery_window.py` implements, with the depth limited
+to a shallow cycle (see its four interlocks above). Do not "simplify" it
+back to permanent float on the grounds that it saves no money — saving
+money was never the point, and permanent float is not ideal for lead-acid
+either.
 
 Autonomy on the base load: 360 Wh / 66 W = **~5.5 h**, if the pump is not
 on the output.

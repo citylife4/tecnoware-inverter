@@ -39,7 +39,8 @@ def _fail(message, code="error", status=400, **extra):
     return jsonify(payload), status
 
 
-def create_app(service, scheduler=None, grid_charge=None, *,
+def create_app(service, scheduler=None, grid_charge=None,
+               battery_window=None, *,
                token: str, secret_key: str) -> Flask:
     app = Flask(__name__)
     app.config.update(
@@ -320,6 +321,41 @@ def create_app(service, scheduler=None, grid_charge=None, *,
             return _no_grid_charge()
         body = request.get_json(silent=True) or {}
         result = grid_charge.tick(force=bool(body.get("force", True)))
+        return jsonify({"ok": True, "result": result})
+
+    def _no_battery_window():
+        return _fail("battery window controller is not configured",
+                     code="no_battery_window", status=503)
+
+    @app.route("/api/battery-window")
+    def api_battery_window_get():
+        if battery_window is None:
+            return _no_battery_window()
+        return jsonify({"ok": True, **battery_window.get_state()})
+
+    @app.route("/api/battery-window", methods=["PUT"])
+    @require_json_write
+    def api_battery_window_put():
+        """Nightly POP window. Note there is no conflict check against the
+        PCP automations here, unlike the schedule/grid-charge pair: this
+        drives a different setting, and BatteryWindow yields on its own via
+        the override_check wired in serve.py."""
+        if battery_window is None:
+            return _no_battery_window()
+        body = request.get_json(silent=True) or {}
+        try:
+            state = battery_window.set_config(body)
+        except ValueError as e:
+            return _fail(str(e), code="invalid_config", status=400)
+        return jsonify({"ok": True, **state})
+
+    @app.route("/api/battery-window/apply-now", methods=["POST"])
+    @require_json_write
+    def api_battery_window_apply_now():
+        if battery_window is None:
+            return _no_battery_window()
+        body = request.get_json(silent=True) or {}
+        result = battery_window.tick(force=bool(body.get("force", True)))
         return jsonify({"ok": True, "result": result})
 
     # ---- API: write ----------------------------------------------------

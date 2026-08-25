@@ -19,6 +19,9 @@ from datetime import datetime, timedelta
 import serve
 from webapp import safety
 from webapp.app import create_app
+from webapp.battery_window import (
+    ABSOLUTE_FLOOR_V, BATTERY_POP, GRID_POP, BatteryWindow,
+    validate_config as validate_window_config)
 from webapp.grid_charge import GridChargeController, validate_config
 from webapp.safety import CommandRejected
 from webapp.scheduler import Scheduler, validate_rules
@@ -104,9 +107,10 @@ class FakeService:
         return parse_qpigs(SAMPLE_QPIGS)
 
 
-def client_for(service, scheduler=None, grid_charge=None):
-    app = create_app(service, scheduler, grid_charge, token=TOKEN,
-                     secret_key="unit-test-secret")
+def client_for(service, scheduler=None, grid_charge=None,
+               battery_window=None):
+    app = create_app(service, scheduler, grid_charge, battery_window,
+                     token=TOKEN, secret_key="unit-test-secret")
     app.config["TESTING"] = True
     return app.test_client()
 
@@ -115,18 +119,25 @@ class FetchStub:
     """Stands in for GridChargeController's real HTTP poll of the
     auto-energy dashboard. `net_balance = None` simulates the dashboard
     being unreachable; mutate `.net_balance` between ticks to simulate the
-    reading changing over time without needing a real server or sleeps."""
+    reading changing over time without needing a real server or sleeps.
 
-    def __init__(self, net_balance=None, timestamp="2026-01-01 00:00:00"):
+    `inverter_input_w` defaults to 0.0 so that the surplus signal the
+    controller actually decides on (net_balance - inverter_input_w) equals
+    net_balance -- which keeps every threshold test reading as the number it
+    names. Set it to exercise the subtraction itself."""
+
+    def __init__(self, net_balance=None, timestamp="2026-01-01 00:00:00",
+                 inverter_input_w=0.0):
         self.net_balance = net_balance
+        self.inverter_input_w = inverter_input_w
         self.timestamp = timestamp
         self.calls = 0
 
     def __call__(self):
         self.calls += 1
         if self.net_balance is None:
-            return None, None
-        return self.net_balance, self.timestamp
+            return None, None, None
+        return self.net_balance, self.inverter_input_w, self.timestamp
 
 
 def window_around_now(pad_minutes=3):
@@ -957,7 +968,7 @@ class TestGridChargeController(unittest.TestCase):
         service, stub, gc = self.make(net_balance=-200)   # exporting
         gc.set_config({"enabled": True, "min_switch_interval": 0})
         self.assertEqual(service.sent, ["PCP01"])
-        stub.net_balance = -10   # inside the -150..150 dead-band
+        stub.net_balance = 150   # inside the 50..250 dead-band
         gc.tick()
         # Desired state carries over ("charging"), so target is unchanged
         # and nothing new is sent -- this is the hysteresis, not a bug.
@@ -1003,11 +1014,36 @@ class TestGridChargeController(unittest.TestCase):
         self.assertEqual(gc.get_state()["export_threshold_w"], -77)
         self.assertEqual(service.sent, ["PCP01"])
 
+    def test_trace_records_the_decision_with_a_timestamp(self):
+        """The tick result calls it "at"; the CSV column is "ts". Getting
+        that mapping wrong silently writes a blank timestamp column, which
+        is exactly what the trace exists to avoid."""
+        import csv as _csv
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        service = FakeService()
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200),
+                                  trace_dir=d.name)
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        files = os.listdir(d.name)
+        self.assertEqual(len(files), 1)
+        with open(os.path.join(d.name, files[0])) as fh:
+            rows = list(_csv.DictReader(fh))
+        self.assertTrue(rows)
+        self.assertTrue(rows[-1]["ts"], "timestamp column must not be blank")
+        self.assertEqual(rows[-1]["surplus_signal_w"], "-200.0")
+        self.assertEqual(rows[-1]["desired_state"], "charging")
+
+    def test_trace_is_optional(self):
+        service = FakeService()
+        gc = GridChargeController(service, self.path, fetch_fn=FetchStub(-200))
+        gc.set_config({"enabled": True, "min_switch_interval": 0})   # no trace_dir
+
     def test_force_bypasses_dwell_time(self):
         service, stub, gc = self.make(net_balance=-200)
         gc.set_config({"enabled": True, "min_switch_interval": 99999})
         self.assertEqual(service.sent, ["PCP01"])
-        stub.net_balance = 200   # now importing
+        stub.net_balance = 400   # now importing, clear of the dead-band
         gc.tick(force=True)
         self.assertEqual(service.sent, ["PCP01", "PCP03"])
 
@@ -1015,7 +1051,7 @@ class TestGridChargeController(unittest.TestCase):
         service, stub, gc = self.make(net_balance=-200)
         gc.set_config({"enabled": True, "min_switch_interval": 99999})
         self.assertEqual(service.sent, ["PCP01"])
-        stub.net_balance = 200
+        stub.net_balance = 400   # a importar, fora da banda morta
         gc.tick()
         self.assertEqual(service.sent, ["PCP01"])   # held, not resent
         self.assertIn("anti-flap", gc.get_state()["last_run"]["note"])
@@ -1173,7 +1209,7 @@ class TestGridChargeApi(unittest.TestCase):
             {"enabled": True, "min_switch_interval": 0}),
             content_type="application/json", headers=AUTH)
         service.sent.clear()
-        stub.net_balance = 100
+        stub.net_balance = 400   # a importar, fora da banda morta
         r = post(client, "/api/grid-charge/apply-now", {"force": True})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(service.sent, ["PCP03"])
@@ -1280,6 +1316,265 @@ class TestConfigDurability(unittest.TestCase):
             serve.save_config(self.path, cfg)
         self.assertEqual(open(self.path).read(), original)
         self.assertEqual(sorted(os.listdir(self.dir)), ["web.json"])
+
+
+class TestBatteryWindow(unittest.TestCase):
+    """The nightly POP window. Every interlock here has to fail towards
+    utility: in POP=02 the usual PCP-based low-battery floor is a no-op
+    (gotcha #1), so this class is the only thing guarding the pack -- and
+    the Pi that runs this server hangs off the same output."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.tmp.name, "win.json")
+        self.addCleanup(self.tmp.cleanup)
+
+    def make(self, battery_voltage=27.0, override=None, **kw):
+        service = FakeService(battery_voltage=battery_voltage, **kw)
+        bw = BatteryWindow(service, self.path, override_check=override)
+        return service, bw
+
+    # A time comfortably inside the default 21:15->08:00 window and clear of
+    # the 19:00-21:15 pump block.
+    NIGHT = datetime(2026, 8, 25, 23, 0)
+    DAY = datetime(2026, 8, 25, 12, 0)
+    PUMP = datetime(2026, 8, 25, 20, 0)
+
+    def enable(self, bw, now=None, **over):
+        cfg = {"enabled": True, "min_switch_interval": 0}
+        cfg.update(over)
+        # set_config force-ticks at the real wall clock; clear whatever that
+        # sent so each test asserts only on its own explicit tick.
+        bw.set_config(cfg, now=now)
+        bw.service.sent.clear()
+        bw.service.sent_sources.clear()
+        return cfg
+
+    def test_disabled_writes_nothing(self):
+        service, bw = self.make()
+        bw.tick(now=self.NIGHT)
+        self.assertEqual(service.sent, [])
+
+    def test_inside_window_goes_to_battery(self):
+        service, bw = self.make()
+        self.enable(bw)
+        service.sent.clear()
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(r["target"], BATTERY_POP)
+        self.assertEqual(service.sent, ["POP02"])
+        self.assertEqual(service.sent_sources, ["battery_window"])
+
+    def test_outside_window_goes_to_grid(self):
+        service, bw = self.make()
+        self.enable(bw)
+        service.sent.clear()
+        r = bw.tick(now=self.DAY)
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertEqual(r["reason"], "outside")
+
+    def test_pump_window_is_refused_even_if_configured(self):
+        """HARD_FORBIDDEN is applied on top of any config. A window that
+        covers the pump must still not put the loads on battery -- the pump
+        trips the inverter and drops the fridge, the light and the Pi."""
+        service, bw = self.make()
+        self.enable(bw, **{"from": "00:00", "to": "23:59"})
+        service.sent.clear()
+        r = bw.tick(now=self.PUMP)
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertEqual(r["reason"], "forbidden")
+        self.assertNotIn("POP02", service.sent)
+
+    def test_floor_sends_back_to_grid(self):
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw)
+        bw.tick(now=self.NIGHT)
+        service._battery_voltage = 25.4        # crosses the floor
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertEqual(r["reason"], "floor")
+        self.assertEqual(service.sent[-1], "POP00")
+
+    def test_one_discharge_per_night(self):
+        """Once the floor is hit the window stays closed even after the pack
+        recharges. Releasing on voltage alone would give several cycles a
+        night, which is the wear this controller exists to prevent."""
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=self.NIGHT)
+        self.assertTrue(bw.is_active())
+        service._battery_voltage = 25.4               # hits the floor
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(r["target"], GRID_POP)
+        service._battery_voltage = 27.0               # fully recharged...
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(r["target"], GRID_POP)       # ...still latched
+        self.assertEqual(r["reason"], "recovering")
+
+    def test_latch_rearms_after_the_window_closes(self):
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=self.NIGHT)
+        service._battery_voltage = 25.4
+        bw.tick(now=self.NIGHT)
+        service._battery_voltage = 27.0
+        bw.tick(now=self.DAY)                         # window closed, recovered
+        r = bw.tick(now=self.NIGHT)                   # next night
+        self.assertEqual(r["target"], BATTERY_POP)
+
+    def test_unreadable_voltage_goes_to_grid(self):
+        service, bw = self.make(battery_voltage=None)
+        self.enable(bw)
+        service.sent.clear()
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertEqual(r["reason"], "unknown_voltage")
+
+    def test_yields_while_grid_charge_absorbs_export(self):
+        """The charger only runs at POP=00, so battery mode and absorbing
+        export are mutually exclusive -- see CLAUDE.md gotcha #1."""
+        service, bw = self.make(override=lambda: True)
+        self.enable(bw)
+        service.sent.clear()
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertEqual(r["reason"], "yielding")
+
+    def test_override_check_raising_does_not_decide_anything(self):
+        def boom():
+            raise RuntimeError("auto-energy down")
+        service, bw = self.make(override=boom)
+        self.enable(bw)
+        service.sent.clear()
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(r["target"], BATTERY_POP)
+
+    def test_read_only_service_never_writes(self):
+        service, bw = self.make(allow_writes=False)
+        self.enable(bw)
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(service.sent, [])
+        self.assertFalse(r["applied"])
+
+    def test_dwell_blocks_entering_battery(self):
+        """Entering battery mode is debounced: POP throws a physical relay."""
+        service, bw = self.make()
+        self.enable(bw, now=self.DAY, min_switch_interval=99999)
+        r = bw.tick(now=self.NIGHT)                # wants battery, debounced
+        self.assertIn("anti-flap", r["note"])
+        self.assertEqual(service.sent, [])
+
+    def test_safety_exit_ignores_dwell(self):
+        """Going back to utility is a safety action and never waits out the
+        anti-flap timer -- the pack has no reason to honour a cooldown."""
+        service, bw = self.make()
+        self.enable(bw, now=self.NIGHT, min_switch_interval=99999)
+        self.assertTrue(bw.is_active())
+        service._battery_voltage = 25.0            # floor -- urgent
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(service.sent, ["POP00"])
+        self.assertTrue(r["applied"])
+
+    def test_is_active_reflects_last_applied(self):
+        service, bw = self.make()
+        self.enable(bw)
+        bw.tick(now=self.NIGHT)
+        self.assertTrue(bw.is_active())
+        bw.tick(now=self.DAY)
+        self.assertFalse(bw.is_active())
+
+    def test_config_round_trips(self):
+        service, bw = self.make()
+        self.enable(bw, floor_voltage=25.9, resume_voltage=26.9)
+        reloaded = BatteryWindow(FakeService(), self.path)
+        self.assertEqual(reloaded.get_state()["config"]["floor_voltage"], 25.9)
+
+    def test_config_file_is_owner_only(self):
+        service, bw = self.make()
+        self.enable(bw)
+        mode = stat.S_IMODE(os.stat(self.path).st_mode)
+        self.assertEqual(mode, 0o600)
+
+
+class TestBatteryWindowValidation(unittest.TestCase):
+
+    def test_floor_below_absolute_limit_is_refused(self):
+        with self.assertRaises(ValueError) as cm:
+            validate_window_config({"floor_voltage": ABSOLUTE_FLOOR_V - 0.1,
+                                    "resume_voltage": 26.8})
+        self.assertIn("hard limit", str(cm.exception))
+
+    def test_resume_must_exceed_floor(self):
+        with self.assertRaises(ValueError):
+            validate_window_config({"floor_voltage": 26.0, "resume_voltage": 25.0})
+
+    def test_unknown_key_is_refused(self):
+        with self.assertRaises(ValueError):
+            validate_window_config({"nonsense": 1})
+
+    def test_bad_time_is_refused(self):
+        with self.assertRaises(ValueError):
+            validate_window_config({"from": "25:99"})
+
+    def test_forbidden_windows_validated(self):
+        with self.assertRaises(ValueError):
+            validate_window_config({"forbidden": [{"from": "x", "to": "y"}]})
+        ok = validate_window_config(
+            {"forbidden": [{"from": "01:00", "to": "02:00", "why": "t"}]})
+        self.assertEqual(ok["forbidden"][0]["why"], "t")
+
+    def test_defaults_keep_the_pump_out_of_the_window(self):
+        """The shipped window must not start before the pump is done."""
+        from webapp.battery_window import DEFAULT_CONFIG, HARD_FORBIDDEN
+        self.assertEqual(DEFAULT_CONFIG["from"], HARD_FORBIDDEN[0]["to"])
+
+
+class TestBatteryWindowApi(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.tmp.name, "win.json")
+        self.addCleanup(self.tmp.cleanup)
+        self.service = FakeService()
+        self.bw = BatteryWindow(self.service, self.path)
+        self.client = client_for(self.service, battery_window=self.bw)
+
+    def put(self, body):
+        return self.client.put("/api/battery-window", data=json.dumps(body),
+                               content_type="application/json", headers=AUTH)
+
+    def test_get_returns_config_and_limits(self):
+        r = self.client.get("/api/battery-window", headers=AUTH)
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        self.assertEqual(body["absolute_floor_v"], ABSOLUTE_FLOOR_V)
+        self.assertTrue(body["hard_forbidden"])
+
+    def test_put_stores_config(self):
+        r = self.put({"enabled": True, "floor_voltage": 25.8,
+                      "resume_voltage": 26.9, "min_switch_interval": 0})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["config"]["floor_voltage"], 25.8)
+
+    def test_put_rejects_dangerous_floor(self):
+        r = self.put({"floor_voltage": 22.0})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["code"], "invalid_config")
+
+    def test_put_rejects_unknown_key(self):
+        self.assertEqual(self.put({"nope": 1}).status_code, 400)
+
+    def test_write_requires_auth(self):
+        r = self.client.put("/api/battery-window", data=json.dumps({}),
+                            content_type="application/json")
+        self.assertIn(r.status_code, (401, 403))
+
+    def test_apply_now_returns_a_decision(self):
+        self.put({"enabled": True, "min_switch_interval": 0})
+        r = post(self.client, "/api/battery-window/apply-now", {"force": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("reason", r.get_json()["result"])
+
+    def test_endpoints_503_when_not_configured(self):
+        client = client_for(FakeService())
+        self.assertEqual(client.get("/api/battery-window", headers=AUTH).status_code, 503)
 
 
 if __name__ == "__main__":
