@@ -350,6 +350,16 @@ hardware) and the charger spins up. Starting while the house still imports
 ~50 W pre-empts it. Over-importing is merely wasteful; exporting is a legal
 problem here, so the asymmetry is on purpose.
 
+**The dashboard used to flip the sign of `export_threshold_w`.** Its field
+had type `negnum`, from when the threshold was negative: it displayed the
+absolute value and stored the negation, so the user would not have to type a
+minus. Once the thresholds became deliberately positive that made a positive
+one **unreachable from the UI** — typing `30` stored `-30`, and the
+automation then never fired, because a signal of +3 W is not below -30 W.
+Hit on the live installation 2026-08-25. The field is now a plain signed
+number and the label explains both directions. If another threshold ever
+changes sign convention, check `GC_FIELDS` in `webapp/static/app.js` first.
+
 Every tick is appended to `telemetry/gridcharge-YYYY-MM-DD.csv`
 (`trace_dir` in `serve.py`). These thresholds have been guessed wrong twice
 — the point of that file is that the next revision is argued from recorded

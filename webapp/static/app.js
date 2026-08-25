@@ -539,20 +539,24 @@ function wireSchedule() {
    trigger is the auto-energy dashboard's grid-meter reading instead of a
    time window. Config has many fields, so unlike the schedule table
    (which auto-saves every edit) this uses an explicit "Save settings"
-   button -- only the enabled toggle and "Apply now" act immediately. */
+   button -- only the enabled toggle and "Apply now" act immedi/* Campos do formulário de excedente.
 
-let gridChargeState = null;
+   O tipo "negnum" existia aqui para o limiar de exportação: quando a
+   automação disparava com net_balance negativo, o campo mostrava o valor
+   absoluto e gravava-o com sinal trocado, para o utilizador não ter de
+   escrever um menos.
 
-/* export_threshold_w is stored negative internally (net_balance < 0 means
-   exporting) but shown to the user as a plain positive "watts exported"
-   number -- "start once exporting more than 50W" reads far better than
-   "start once net balance drops below -50W". Type "negnum" flips the sign
-   on the way in and out; everything else passes straight through. */
+   Deixou de servir a 2026-08-25, quando os limiares passaram a ser
+   POSITIVOS de propósito (arrancar o carregador enquanto a casa ainda
+   importa ~50W, para a exportação nunca chegar a acontecer). Com a troca de
+   sinal ainda aplicada, escrever 30 gravava -30 e a automação nunca mais
+   disparava -- foi o que aconteceu na instalação. O campo é agora um número
+   com sinal, e a etiqueta explica os dois lados. */
 const GC_FIELDS = [
   ["gc-mode", "mode", "str"],
   ["gc-source-url", "source_url", "str"],
   ["gc-poll-interval", "poll_interval", "num"],
-  ["gc-export-threshold", "export_threshold_w", "negnum"],
+  ["gc-export-threshold", "export_threshold_w", "num"],
   ["gc-import-threshold", "import_threshold_w", "num"],
   ["gc-min-switch", "min_switch_interval", "num"],
   ["gc-stale-after", "stale_after", "num"],
@@ -580,7 +584,7 @@ function renderGridCharge(state) {
   GC_FIELDS.forEach(([id, key, type]) => {
     const el = document.querySelector(`#${id}`);
     if (!el || document.activeElement === el) return;
-    el.value = type === "negnum" ? Math.abs(state[key]) : state[key];
+    el.value = state[key];
   });
 
   const c = state.current || {};
@@ -642,7 +646,7 @@ function readGridChargeForm() {
     }
     const n = Number(raw);
     if (raw === "" || !Number.isFinite(n)) { invalid.push(id); return; }
-    out[key] = type === "negnum" ? -Math.abs(n) : n;
+    out[key] = n;
   });
   return { values: out, invalid };
 }
