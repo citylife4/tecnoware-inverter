@@ -1434,6 +1434,32 @@ class TestBatteryWindow(unittest.TestCase):
         r = bw.tick(now=self.NIGHT)                   # next night
         self.assertEqual(r["target"], BATTERY_POP)
 
+    def test_outside_the_window_beats_every_other_reason(self):
+        """Outside the window the answer is GRID_POP whatever else is true,
+        so reporting some other cause is misleading. The live trace showed
+        33 ticks of "yielding" across an afternoon when the window was shut
+        and nothing was being yielded."""
+        service, bw = self.make(override=lambda: True)   # export controller active
+        self.enable(bw, now=self.DAY)
+        r = bw.tick(now=self.DAY)
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertEqual(r["reason"], "outside")
+
+    def test_floor_is_not_counted_outside_the_window(self):
+        """Outside the window the pack sits on the charger and its terminal
+        voltage says nothing about state of charge. Counting there would
+        latch the window shut before it ever opened -- seen live, the pack
+        read 25.4 V in bypass while a 25.6 V floor was under discussion."""
+        service, bw = self.make(battery_voltage=24.5)     # well under the floor
+        self.enable(bw, now=self.DAY, floor_confirmations=2)
+        for _ in range(5):
+            bw.tick(now=self.DAY)
+        self.assertEqual(bw.get_state()["below_floor_readings"], 0)
+        self.assertFalse(bw.get_state()["recovering"])
+        # ...and the window still opens when its time comes.
+        service._battery_voltage = 27.0
+        self.assertEqual(bw.tick(now=self.NIGHT)["target"], BATTERY_POP)
+
     def test_floor_needs_consecutive_confirmations(self):
         """A single dip must not end the night. The pack sags ~0.4 V while
         the fridge compressor runs (measured at only 46 W), and this serial
@@ -1550,8 +1576,10 @@ class TestBatteryWindow(unittest.TestCase):
         self.addCleanup(d.cleanup)
         service = FakeService(battery_voltage=27.0)
         bw = BatteryWindow(service, self.path, trace_dir=d.name)
-        bw.set_config({"enabled": True, "min_switch_interval": 0},
-                      now=self.PUMP)
+        # A window spanning the pump hours, so the hard block is what fires
+        # -- outside the window "outside" would win, and rightly.
+        bw.set_config({"enabled": True, "min_switch_interval": 0,
+                       "from": "00:00", "to": "23:59"}, now=self.PUMP)
         with open(os.path.join(d.name, os.listdir(d.name)[0])) as fh:
             rows = list(_csv.DictReader(fh))
         self.assertTrue(rows[-1]["ts"])

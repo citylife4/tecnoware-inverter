@@ -288,6 +288,16 @@ class BatteryWindow:
         if not cfg["enabled"]:
             return None, "disabled", "janela de bateria desligada"
 
+        # Window membership is checked FIRST, before every other reason.
+        # Outside it the answer is GRID_POP whatever else is true, and
+        # reporting some other cause is actively misleading -- the trace
+        # showed 33 ticks of "yielding" during an afternoon when the window
+        # was shut and nothing was being yielded. Everything below this line
+        # therefore only applies when the window is genuinely open.
+        if not rule_active(t, parse_hhmm(cfg["from"]), parse_hhmm(cfg["to"])):
+            return GRID_POP, "outside", (
+                f"fora da janela {cfg['from']}-{cfg['to']}")
+
         blocked = _in_any(t, HARD_FORBIDDEN)
         if blocked is not None:
             return GRID_POP, "forbidden", (
@@ -327,10 +337,6 @@ class BatteryWindow:
                 f"já descarregou nesta janela ({v:.2f}V) — "
                 f"só volta à bateria na próxima")
 
-        if not rule_active(t, parse_hhmm(cfg["from"]), parse_hhmm(cfg["to"])):
-            return GRID_POP, "outside", (
-                f"fora da janela {cfg['from']}-{cfg['to']}")
-
         return BATTERY_POP, "window", (
             f"janela {cfg['from']}-{cfg['to']}, bateria {v:.2f}V")
 
@@ -352,9 +358,14 @@ class BatteryWindow:
             when = (now or datetime.now()).time()
             in_window = rule_active(when, parse_hhmm(cfg["from"]),
                                     parse_hhmm(cfg["to"]))
-            if v <= cfg["floor_voltage"]:
+            # Only count while the window is open. Outside it the pack is
+            # on the charger and its terminal voltage says nothing about
+            # state of charge -- counting there would latch the window shut
+            # before it ever opened. Seen live: the pack read 25.4 V in
+            # bypass at 14:30, which a 25.6 V floor would have counted.
+            if in_window and v <= cfg["floor_voltage"]:
                 self._below_floor += 1
-            else:
+            elif not in_window or v > cfg["floor_voltage"]:
                 self._below_floor = 0
             if (not self._recovering
                     and self._below_floor >= cfg["floor_confirmations"]):
