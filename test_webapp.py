@@ -49,12 +49,18 @@ class FakeService:
 
     def __init__(self, battery_voltage=26.0, allow_writes=True,
                  min_battery_voltage=24.0, ack=True, pop="00",
-                 output_load_w=1):
+                 output_load_w=1, device_mode=None):
         self.allow_writes = allow_writes
         self.min_battery_voltage = min_battery_voltage
         self.poll_interval = 10.0
         self._battery_voltage = battery_voltage
         self._output_load_w = output_load_w
+        # The device's own reported QMOD letter, independent of what this
+        # fake has been *told* to set via send_set() -- lets tests simulate
+        # the inverter disagreeing with what battery_window last applied.
+        # None by default: most tests don't care and get_state()'s
+        # reconciliation check treats None as "say nothing".
+        self._device_mode = device_mode
         self._ack = ack
         self.sent = []
         self.sent_sources = []
@@ -69,6 +75,9 @@ class FakeService:
 
     def output_load_w(self):
         return self._output_load_w
+
+    def mode(self):
+        return self._device_mode
 
     def last_known_priority(self, prefix):
         if prefix == "POP":
@@ -1720,6 +1729,69 @@ class TestBatteryWindow(unittest.TestCase):
         self.assertTrue(rows[-1]["ts"])
         self.assertEqual(rows[-1]["reason"], "forbidden")
         self.assertEqual(rows[-1]["target"], GRID_POP)
+
+    def test_detects_hardware_taking_itself_off_battery(self):
+        """2026-08-26: the inverter switched itself from B to L at 05:46,
+        mid-compressor-run -- exactly the load level the floor debounce
+        excludes -- so the software never decided anything and kept
+        reporting "already applied" for two hours while it was wrong."""
+        service, bw = self.make(battery_voltage=27.0, device_mode="B")
+        self.enable(bw, now=self.NIGHT)
+        self.assertTrue(bw.is_active())
+        service.sent.clear()
+        service._device_mode = "L"          # hardware switched on its own
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(r["reason"], "hardware_override")
+        self.assertEqual(r["device_mismatch"], "hardware_override")
+        self.assertTrue(bw.get_state()["recovering"])
+        # And it converges: the next decision issues a real POP00 write
+        # rather than trusting the stale "already POP02" belief.
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertEqual(service.sent, ["POP00"])
+
+    def test_stays_latched_for_the_rest_of_the_window_after_override(self):
+        service, bw = self.make(battery_voltage=27.0, device_mode="B")
+        self.enable(bw, now=self.NIGHT)
+        service._device_mode = "L"
+        bw.tick(now=self.NIGHT)
+        service._battery_voltage = 27.0     # even if the pack looks fine...
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(r["target"], GRID_POP)   # ...no second discharge tonight
+
+    def test_hardware_override_write_ignores_dwell(self):
+        service, bw = self.make(battery_voltage=27.0, device_mode="B")
+        self.enable(bw, now=self.NIGHT, min_switch_interval=99999)
+        service._device_mode = "L"
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(service.sent, ["POP00"])
+        self.assertTrue(r["applied"])
+
+    def test_flags_but_does_not_fight_an_unexpected_battery_transfer(self):
+        """Loads on battery while we believe grid is most likely a real
+        grid outage. Forcing POP00 would do nothing useful while the grid
+        is actually down, so this only has to be visible, not acted on."""
+        service, bw = self.make(battery_voltage=26.0, device_mode="L")
+        self.enable(bw, now=self.DAY)       # outside window -> target GRID_POP
+        service.sent.clear()
+        service._device_mode = "B"          # grid apparently failed
+        r = bw.tick(now=self.DAY)
+        self.assertEqual(r["reason"], "unexpected_battery")
+        self.assertEqual(r["device_mismatch"], "unexpected_battery")
+        self.assertEqual(service.sent, [])            # not fought
+        self.assertFalse(bw.get_state()["recovering"])  # and not misread as ours
+
+    def test_unreadable_device_mode_is_not_treated_as_a_mismatch(self):
+        service, bw = self.make(battery_voltage=27.0, device_mode=None)
+        self.enable(bw, now=self.NIGHT)
+        r = bw.tick(now=self.NIGHT)
+        self.assertIsNone(r["device_mismatch"])
+
+    def test_agreement_produces_no_mismatch(self):
+        service, bw = self.make(battery_voltage=27.0, device_mode="B")
+        self.enable(bw, now=self.NIGHT)
+        r = bw.tick(now=self.NIGHT)
+        self.assertIsNone(r["device_mismatch"])
+        self.assertEqual(r["reason"], "window")
 
     def test_config_round_trips(self):
         service, bw = self.make()

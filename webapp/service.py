@@ -447,6 +447,20 @@ class InverterService:
     def history(self) -> list:
         return list(self._history)
 
+    def mode(self):
+        """The device's own last-polled QMOD letter (see DEVICE_MODES), or
+        None if unknown. This is ground truth for what the inverter is
+        actually doing -- unlike last_known_priority(), which only records
+        what this server last *wrote* and has no way to notice the device
+        overriding it on its own (program 12's SBU switch-back, an
+        internal low-battery protection, or a genuine grid outage forcing
+        automatic transfer to battery regardless of POP). Used by
+        battery_window to reconcile its assumption against reality --
+        see CLAUDE.md "the dashboard used to silently disagree with the
+        device" incident, 2026-08-26."""
+        snap = self._latest
+        return snap.get("mode") if snap else None
+
     def output_load_w(self):
         """ac_output_active_power from the cached snapshot, or None.
 

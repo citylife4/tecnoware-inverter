@@ -131,6 +131,34 @@ First live `POP=02` run with the loads actually on the pack:
   latched at the floor, held `POP=00` for the rest of the night since the
   window can't release mid-window (spans 21:15→08:00). That part was never
   the problem.
+- **2026-08-26 ~01:11-07:57 — the 24.0 V floor was reached, but not by the
+  software, and the class had no way to notice.** The window was manually
+  re-armed at 01:11 (user request, to get a clean overnight test after the
+  restart above ate the first attempt) and discharged cleanly for 4.5 hours
+  down to **23.9 V** — deeper than the ~25.4-25.6 V ceiling seen on prior
+  nights, confirming the floor genuinely is reachable. But the switch back
+  to utility at **05:46:22** was the inverter's own decision, not
+  `battery_window`'s: the fridge compressor ran continuously for the ~4.5
+  minutes leading up to it, which is exactly the load level
+  `FLOOR_MAX_LOAD_W` excludes from the floor count (by design, to avoid
+  latching on the compressor's own 0.4 V sag) — so `below_floor` stayed at
+  0 throughout and the software's own `floor` reason never fired. For the
+  next **two hours**, `battery_window` kept reporting `target=02, reason:
+  window, "already POP02; nothing to do"`, because it only tracks what it
+  last *wrote*, with no check against what the device is actually doing.
+  Not dangerous (grid is the safe side), but the dashboard was silently
+  wrong for two hours. **Fixed the same day**: `InverterService.mode()`
+  exposes the live `QMOD` letter, and `BatteryWindow._reconcile_with_device()`
+  compares it against what was last applied on every tick, before deciding
+  anything else. A mismatch where we believe battery but the device says
+  otherwise closes the latch immediately (matches reality: tonight's
+  discharge is over) and forgets the stale belief so the next decision
+  issues a real, dwell-exempt `POP00` to converge state explicitly. The
+  reverse case -- device on battery while we believe grid, most likely a
+  real outage -- is surfaced (`reason: unexpected_battery`) but
+  deliberately not fought, since forcing `POP00` would do nothing useful
+  while the grid is actually down. Both are shown on the dashboard next to
+  the believed state. 203 tests.
 
 ---
 

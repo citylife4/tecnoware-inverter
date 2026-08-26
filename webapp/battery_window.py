@@ -280,6 +280,11 @@ class BatteryWindow:
                 "recovering": self._recovering,
                 "below_floor_readings": self._below_floor,
                 "battery_voltage": self.service.battery_voltage(),
+                # The device's own live QMOD letter, alongside our belief
+                # above -- a pure read, unlike _reconcile_with_device()
+                # (which only runs from a real tick), so the dashboard can
+                # show both sides even between polls.
+                "device_mode": self.service.mode(),
                 "hard_forbidden": [dict(w) for w in HARD_FORBIDDEN],
                 "absolute_floor_v": ABSOLUTE_FLOOR_V,
                 "last_run": self._last_run,
@@ -316,6 +321,50 @@ class BatteryWindow:
             # anything on its own; assume not, and let the other interlocks
             # do their job.
             return False
+
+    def _reconcile_with_device(self) -> str | None:
+        """Compare what we last applied against the device's own reported
+        mode (QMOD), which is always ground truth. Returns a short reason
+        string describing a mismatch, or None if there is none (including
+        when the mode can't be read -- say nothing rather than guess).
+
+        The device can leave battery mode on its own: program 12's SBU
+        switch-back, an internal low-battery protection, a write that
+        silently didn't take on this occasionally-flaky serial link. This
+        class used to have no way to notice. Observed live 2026-08-26: the
+        inverter switched itself from B to L at 05:46, mid-compressor-run,
+        which is exactly the load level FLOOR_MAX_LOAD_W excludes from the
+        floor count -- so the software never decided anything, and this
+        class kept reporting "already POP02; nothing to do" for the next
+        two hours while the pack had actually been back on utility the
+        whole time.
+        """
+        mode = self.service.mode()
+        if mode is None:
+            return None
+
+        if self._last_applied_pop == BATTERY_POP and mode != "B":
+            # We believe we're discharging the pack; the device disagrees.
+            # Treat tonight's discharge as already over -- that matches
+            # physical reality -- and forget the stale assumption so the
+            # next decision issues a real write (converging POP explicitly
+            # with the device) instead of a silent no-op.
+            self._recovering = True
+            self._last_applied_pop = None
+            self._save_runtime()
+            return "hardware_override"
+
+        if self._last_applied_pop == GRID_POP and mode == "B":
+            # We believe loads are on the grid; the device is on battery
+            # anyway. Most likely a genuine grid outage -- utility-first
+            # still auto-transfers to battery when the grid fails (see
+            # CLAUDE.md topology notes). Not something to fight: forcing
+            # POP00 here does nothing useful while the grid is actually
+            # down, and the device will report "L" again on its own once
+            # it returns. Surfaced for visibility, not acted on.
+            return "unexpected_battery"
+
+        return None
 
     def _decide(self, now=None):
         """Return (target_pop, reason, detail). Every path that is not a
@@ -392,6 +441,8 @@ class BatteryWindow:
         # just took rather than the previous one -- otherwise the floor
         # always fires one poll late. Kept out of _decide() so that
         # get_state() stays a pure read with no side effects.
+        mismatch = self._reconcile_with_device()
+
         v = self.service.battery_voltage()
         previous_runtime = (self._recovering, self._below_floor)
         if isinstance(v, (int, float)):
@@ -421,10 +472,18 @@ class BatteryWindow:
             self._save_runtime()
 
         target, reason, detail = self._decide(now=now)
+        if mismatch:
+            reason = mismatch
+            detail = (
+                "o inversor saiu do modo bateria por conta própria"
+                if mismatch == "hardware_override" else
+                "o inversor está em modo bateria sem termos pedido "
+                "-- possível falha de rede") + f" (QMOD={self.service.mode()})"
 
         result = {"at": _utcnow(), "target": target, "reason": reason,
                   "detail": detail, "battery_voltage": v,
-                  "applied": False, "note": ""}
+                  "applied": False, "note": "",
+                  "device_mismatch": mismatch}
 
         now_mono = _time.monotonic()
         dwell_ok = (now_mono - self._last_switch_mono) >= cfg["min_switch_interval"]
@@ -441,7 +500,11 @@ class BatteryWindow:
         # installation, so absorbing it is a compliance action, not a
         # preference, and the relay-wear argument does not outrank it.
         urgent = target == GRID_POP and reason in (
-            "floor", "recovering", "unknown_voltage", "forbidden", "yielding")
+            "floor", "recovering", "unknown_voltage", "forbidden", "yielding",
+            # The device is already physically on the safe side (L) by the
+            # time this fires; the write only converges our own belief with
+            # it. No reason to make that wait out a relay-wear cooldown.
+            "hardware_override")
 
         if target is None:
             result["note"] = "desligado"

@@ -772,6 +772,27 @@ function renderBatteryWindow(state) {
       : "";
     latched.hidden = !state.recovering;
   }
+
+  // O que o servidor pensa que aplicou vs. o que o inversor diz de si
+  // próprio (QMOD) -- podem discordar (o inversor sai da bateria por
+  // conta própria, ou entra nela sozinho por falha de rede). Ver
+  // last_run.device_mismatch, preenchido só quando um tick real detetou
+  // a discordância, não em cada leitura.
+  const mismatchEl = document.querySelector("#bw-mismatch");
+  if (mismatchEl) {
+    const lr = state.last_run;
+    const mismatch = lr && lr.device_mismatch;
+    if (mismatch === "hardware_override") {
+      mismatchEl.textContent = "\u26a0 O inversor saiu do modo bateria por conta "
+        + "própria -- a assumir que a descarga desta noite já terminou.";
+    } else if (mismatch === "unexpected_battery") {
+      mismatchEl.textContent = "\u26a0 O inversor está em modo bateria sem ter sido "
+        + "pedido -- possível falha de rede.";
+    } else {
+      mismatchEl.textContent = "";
+    }
+    mismatchEl.hidden = !mismatch;
+  }
 }
 
 async function loadBatteryWindow() {
