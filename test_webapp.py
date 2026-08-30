@@ -22,7 +22,8 @@ from webapp.app import create_app
 from webapp.energy_view import BATTERY, GRID, describe_energy
 from webapp.battery_window import (
     ABSOLUTE_FLOOR_V, BATTERY_POP, GRID_POP, POP_DRIFT_CONFIRMATIONS,
-    BatteryWindow, validate_config as validate_window_config)
+    POP_DRIFT_MAX_WRITES, BatteryWindow,
+    validate_config as validate_window_config)
 
 
 def bw_runtime_path(config_path: str) -> str:
@@ -1808,6 +1809,42 @@ class TestBatteryWindow(unittest.TestCase):
         self.assertEqual(r["reason"], "pop_drift")
         self.assertEqual(service.sent, ["POP00"])     # re-asserted
         self.assertTrue(r["applied"])
+
+    def test_repeated_correction_is_spaced_not_hammered(self):
+        """Once drift is confirmed the write must not repeat every tick.
+        A device that keeps disagreeing would otherwise throw the transfer
+        relay every 60 s for as long as nobody is watching."""
+        service, bw = self.make(battery_voltage=26.0, device_mode="L")
+        self.enable(bw, now=self.DAY)
+        service.sent.clear()
+        service._device_mode = "B"          # never complies
+        for _ in range(POP_DRIFT_CONFIRMATIONS * 3):
+            bw.tick(now=self.DAY)
+        self.assertEqual(len(service.sent), 3)   # not one per tick
+
+    def test_gives_up_after_repeated_attempts_and_says_so(self):
+        service, bw = self.make(battery_voltage=26.0, device_mode="L")
+        self.enable(bw, now=self.DAY)
+        service._device_mode = "B"
+        for _ in range(POP_DRIFT_CONFIRMATIONS * (POP_DRIFT_MAX_WRITES + 3)):
+            r = bw.tick(now=self.DAY)
+        self.assertEqual(len(service.sent), POP_DRIFT_MAX_WRITES)
+        self.assertEqual(r["reason"], "pop_drift_stuck")
+
+    def test_a_complying_device_clears_the_attempt_count(self):
+        service, bw = self.make(battery_voltage=26.0, device_mode="L")
+        self.enable(bw, now=self.DAY)
+        service.sent.clear()
+        service._device_mode = "B"
+        for _ in range(POP_DRIFT_CONFIRMATIONS):
+            bw.tick(now=self.DAY)
+        self.assertEqual(len(service.sent), 1)
+        service._device_mode = "L"          # obeyed
+        bw.tick(now=self.DAY)
+        service._device_mode = "B"          # drifts again much later
+        for _ in range(POP_DRIFT_CONFIRMATIONS):
+            bw.tick(now=self.DAY)
+        self.assertEqual(len(service.sent), 2)   # corrected again, not stuck
 
     def test_pop_drift_correction_ignores_dwell(self):
         service, bw = self.make(battery_voltage=26.0, device_mode="L")

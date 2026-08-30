@@ -782,7 +782,10 @@ function renderBatteryWindow(state) {
   if (mismatchEl) {
     const lr = state.last_run;
     const mismatch = lr && lr.device_mismatch;
-    if (mismatch === "pop_drift") {
+    if (mismatch === "pop_drift_stuck") {
+      mismatchEl.textContent = "\u26a0 O inversor ignorou várias tentativas de repor "
+        + "a prioridade de saída. Precisa de intervenção manual no painel frontal.";
+    } else if (mismatch === "pop_drift") {
       mismatchEl.textContent = "\u26a0 O inversor está em modo bateria com a rede "
         + "presente -- a prioridade de saída não era a que julgávamos. A reescrever.";
     } else if (mismatch === "hardware_override") {

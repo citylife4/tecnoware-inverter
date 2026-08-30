@@ -92,6 +92,13 @@ GRID_PRESENT_MIN_V = 180.0
 # 2026-08-30, that is still effectively immediate.
 POP_DRIFT_CONFIRMATIONS = 3
 
+# How many corrective POP writes to attempt before giving up and just
+# reporting. If the device has ignored this many, it is not going to comply
+# and the problem needs a person: continuing would hammer a physical relay
+# every few minutes for as long as nobody is watching, which during an
+# absence could be weeks.
+POP_DRIFT_MAX_WRITES = 5
+
 FILE_MODE = 0o600
 
 DEFAULT_CONFIG = {
@@ -233,6 +240,7 @@ class BatteryWindow:
         self._recovering = runtime["recovering"]
         self._below_floor = runtime["below_floor"]
         self._pop_drift = 0           # consecutive ticks of POP disagreement
+        self._pop_drift_writes = 0    # corrective writes already attempted
         self._last_run = None
 
     # ---- persistence ----------------------------------------------------
@@ -391,10 +399,18 @@ class BatteryWindow:
                 # cached value here is what forces that write to happen on
                 # purpose.
                 self._pop_drift += 1
-                if self._pop_drift >= POP_DRIFT_CONFIRMATIONS:
-                    self._last_applied_pop = None
-                    return "pop_drift"
-                return "unexpected_battery"
+                if self._pop_drift < POP_DRIFT_CONFIRMATIONS:
+                    return "unexpected_battery"
+                if self._pop_drift_writes >= POP_DRIFT_MAX_WRITES:
+                    # Tried and the device kept ignoring it. Stop writing and
+                    # say so, rather than keep throwing the relay unattended.
+                    return "pop_drift_stuck"
+                # Counter resets here so the next attempt is another
+                # POP_DRIFT_CONFIRMATIONS away, not on the very next tick.
+                self._pop_drift = 0
+                self._pop_drift_writes += 1
+                self._last_applied_pop = None
+                return "pop_drift"
 
             # Grid absent or out of range: a real outage. Utility-first
             # transfers to battery by design when the grid fails, which is
@@ -405,6 +421,7 @@ class BatteryWindow:
             return "unexpected_battery"
 
         self._pop_drift = 0
+        self._pop_drift_writes = 0
         return None
 
     def _decide(self, now=None):
@@ -521,6 +538,9 @@ class BatteryWindow:
                 "pop_drift":
                     "o inversor está em modo bateria com a rede presente "
                     "-- o POP não é o que julgávamos; a reescrever",
+                "pop_drift_stuck":
+                    "o inversor ignorou %d tentativas de repor o POP "
+                    "-- precisa de intervenção manual" % POP_DRIFT_MAX_WRITES,
                 "unexpected_battery":
                     "o inversor está em modo bateria sem termos pedido "
                     "-- possível falha de rede",
