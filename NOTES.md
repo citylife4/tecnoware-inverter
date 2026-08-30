@@ -206,6 +206,63 @@ First live `POP=02` run with the loads actually on the pack:
   Worth checking the USB cable/port, or easing `poll_interval`. Does not
   explain the above, but is a real degradation of the link.
 
+- **2026-08-30 18:29 — the USB-serial adapter wedged with the inverter in
+  `POP=02`, and nothing in software could reach it.** During a short
+  supervised test window the Prolific PL2303 dropped off the bus and
+  re-enumerated (`ttyUSB0` → `ttyUSB1`). Every layer failed:
+
+      termios.error: (5, 'Input/output error')      -- port opens, then errors
+      pl2303 ttyUSB1: pl2303_set_control_lines - failed: -32
+      usb 1-1.4: can't set config #1, error -32     -- device unbind no help
+
+  The `by-id` path was already in use and correctly followed the new node,
+  so that was not the problem — the adapter itself was unresponsive. What
+  recovered it was **unbinding and re-binding the parent hub** (`1-1`, not
+  `1-1.4`), then restarting the service. The inverter had been sitting on
+  battery for ~8 minutes with no way to command it back.
+
+  Two things follow, and the second reverses earlier advice.
+
+  **`usb_watchdog.py` + `usb-watchdog.service`** now do that recovery
+  unattended: poll `/api/status`, and if `connected` is false with the last
+  successful read older than `STALE_AFTER_S` (300 s, well clear of ordinary
+  frame loss), reset the hub and restart the service, up to `MAX_ATTEMPTS`
+  before giving up and saying it needs hands. Detection deliberately asks
+  the service rather than trying to open the port: a wedged PL2303 opens
+  fine and only errors on first use.
+
+  **For an unattended absence, disable the battery window.** The reasoning
+  given a few hours earlier — that an enabled window keeps POP supervision
+  active, so disabling it is the less safe choice — does not survive this
+  incident. It assumed the link stays up. It does not:
+
+  | | window enabled | window disabled |
+  |---|---|---|
+  | Writes `POP=02` nightly | yes | never |
+  | Adapter dies mid-window | **stuck on battery, discharging** | already `POP=00` |
+  | Resulting state | pack cycled uncontrolled | loads on grid, pack full |
+
+  With the window off, the resting state *is* the safe state and needs no
+  successful write to reach or hold. Applied 2026-08-30 for the user's
+  absence: `POP=00`, `PCP=01` (pack stays full and ready for a real
+  outage), both automations disabled, so nothing needs to write to the
+  inverter at all. Cost is the battery going unused (~EUR 2-10/year) and no
+  export absorption — the latter mattering less than it sounds, since a full
+  pack absorbs nothing anyway.
+
+- **2026-08-30 — the pump's real window, measured rather than recalled.**
+  Loads above 600 W on the inverter output, all days, local time:
+
+      19:00-19:30    4 samples   1183-1435 W   (days 28, 29)
+      19:30-20:00   37 samples   1160-1280 W   (days 24, 25, 26)
+      20:00-20:45  154 samples   1128-1293 W   (days 24, 25, 26)
+
+  The user recalls the pump as starting at 20:00 and asked for
+  `HARD_FORBIDDEN` to be moved accordingly. **It was not moved**: there is
+  measured 1.2-1.4 kW activity from 19:00 on recent days, so the existing
+  19:00-21:15 block is doing real work at its lower edge. Keep it unless
+  the pump is physically re-timed or moved off the protected output.
+
 ---
 
 ## Loads on this installation

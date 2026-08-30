@@ -1,0 +1,22 @@
+[Unit]
+# Recovers the USB-serial adapter when it wedges. See usb_watchdog.py for
+# the 2026-08-30 incident this exists for: the adapter dropped off the bus,
+# every lower-level recovery failed, and the inverter sat in POP=02 --
+# loads on battery, no way to command it back -- until a person unbound and
+# re-bound the parent hub by hand.
+Description=USB-serial adapter watchdog for the inverter link
+After=inverter-web.service
+Wants=inverter-web.service
+
+[Service]
+Type=simple
+User=greenv
+WorkingDirectory=/home/greenv/dev/tecnoware-inverter
+ExecStart=/usr/bin/python3 /home/greenv/dev/tecnoware-inverter/usb_watchdog.py --daemon --interval 300
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
