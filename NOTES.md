@@ -243,12 +243,26 @@ First live `POP=02` run with the loads actually on the pack:
   | Resulting state | pack cycled uncontrolled | loads on grid, pack full |
 
   With the window off, the resting state *is* the safe state and needs no
-  successful write to reach or hold. Applied 2026-08-30 for the user's
-  absence: `POP=00`, `PCP=01` (pack stays full and ready for a real
-  outage), both automations disabled, so nothing needs to write to the
-  inverter at all. Cost is the battery going unused (~EUR 2-10/year) and no
-  export absorption — the latter mattering less than it sounds, since a full
-  pack absorbs nothing anyway.
+  successful write to reach or hold.
+
+  **Applied, then reversed the same evening at the user's request** — they
+  want the pack used, and the argument for the safe-state config was weaker
+  than it looked at the time it was made. Two reasons it was reconsidered:
+
+  1. `usb_watchdog.py` did not exist when the recommendation was made. It
+     does now, and it closes exactly the failure mode the recommendation was
+     hedging against.
+  2. The inverter's own program 12 is a hard backstop underneath everything.
+     Even with the link dead and the watchdog exhausted, the pack does not
+     run flat — it changes over to utility around 23.9-25.4 V on its own.
+     The realistic worst case is uncontrolled cycling (wear), not a
+     destroyed pack.
+
+  **So the deployed state for the absence is the normal one**: window
+  21:15-08:00 at a 24.0 V floor, grid-export control on in `exclusive` mode.
+  The residual risk is that if the adapter wedges mid-window *and* the
+  watchdog cannot recover it, the pack cycles unsupervised until someone
+  looks — costing cycle life, bounded by program 12.
 
 - **2026-08-30 — the pump's real window, measured rather than recalled.**
   Loads above 600 W on the inverter output, all days, local time:
@@ -262,6 +276,14 @@ First live `POP=02` run with the loads actually on the pack:
   measured 1.2-1.4 kW activity from 19:00 on recent days, so the existing
   19:00-21:15 block is doing real work at its lower edge. Keep it unless
   the pump is physically re-timed or moved off the protected output.
+
+  Worth noting the block is belt-and-braces for the *normal* schedule, not
+  load-bearing: the window opens at 21:15, after it closes, so the two never
+  meet. It only bites on a manually-shortened test window, which is what
+  the exchange above was actually about. The 19:00-19:30 samples are also
+  few (4 across two days, versus 154 after 20:00), so they may well be some
+  other appliance rather than the pump running early — the block is kept
+  because nothing is lost by keeping it, not because that is settled.
 
 ---
 
