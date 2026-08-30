@@ -254,10 +254,16 @@ battery mode `BatteryWindow` is the *only* thing protecting the pack.
 All fail towards utility, and all exist because the Pi is on the same
 output as the loads:
 
-1. **`HARD_FORBIDDEN` (19:00-21:15)** — the pump. Applied on top of whatever
-   is configured and not reachable from the API, so a config edit cannot
-   put the loads on battery while the pump runs. Delete it only if the pump
-   is physically moved off the protected output.
+1. **The pump window (`pump_window`, default 19:00-21:15)** — configurable,
+   and deliberately so as of 2026-08-30. It used to be hard-coded and
+   unreachable from the API, on the reasoning that a config edit should not
+   be able to put the loads on battery while the pump runs. That guards the
+   wrong thing: the pump is on a timer the user can change, and a block
+   frozen at the wrong hours reads as protection on the dashboard while the
+   pump actually runs outside it. **If the pump's timer moves, move this
+   too.** Setting it empty is legitimate only once the pump is off the
+   protected output; `get_state()` then reports `pump_unprotected` so the
+   dashboard says so out loud.
 2. **`floor_voltage`, latched.** The latch releases only once the
    window has *closed* and the pack is back above `resume_voltage` — i.e.
    **one discharge per night**. Releasing on voltage alone would discharge

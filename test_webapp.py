@@ -14,6 +14,7 @@ import os
 import stat
 import tempfile
 import unittest
+import datetime as dt
 from datetime import datetime, timedelta
 
 import serve
@@ -21,8 +22,8 @@ from webapp import safety
 from webapp.app import create_app
 from webapp.energy_view import BATTERY, GRID, describe_energy
 from webapp.battery_window import (
-    ABSOLUTE_FLOOR_V, BATTERY_POP, GRID_POP, POP_DRIFT_CONFIRMATIONS,
-    POP_DRIFT_MAX_WRITES, BatteryWindow,
+    ABSOLUTE_FLOOR_V, BATTERY_POP, DEFAULT_PUMP_WINDOW, GRID_POP,
+    POP_DRIFT_CONFIRMATIONS, POP_DRIFT_MAX_WRITES, BatteryWindow,
     validate_config as validate_window_config)
 
 
@@ -1612,6 +1613,51 @@ class TestBatteryWindow(unittest.TestCase):
         r = bw.tick(now=self.NIGHT)
         self.assertEqual(r["target"], GRID_POP)
         self.assertEqual(r["reason"], "floor")
+
+    def test_pump_window_can_be_moved(self):
+        """The pump is on a timer the user can change. A block frozen at the
+        wrong hours reads as protection while the pump runs outside it."""
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=self.DAY,
+                    pump_window=[{"from": "22:00", "to": "23:30",
+                                  "why": "bomba, horario novo"}])
+        # self.NIGHT is 23:00, which the moved block now covers (end is
+        # exclusive, hence 23:30) and the old 19:00-21:15 never did.
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(r["reason"], "forbidden")
+        self.assertEqual(r["target"], GRID_POP)
+        # ...while the previously hard-coded hours no longer block anything.
+        r = bw.tick(now=dt.datetime(2026, 8, 25, 20, 0))
+        self.assertNotEqual(r["reason"], "forbidden")
+
+    def test_pump_window_defaults_to_the_measured_hours(self):
+        """A config written before this key existed must inherit the block,
+        not silently lose it."""
+        bw = BatteryWindow(FakeService(), self.path)
+        cfg = bw.get_state()["config"]
+        self.assertEqual(cfg["pump_window"],
+                         [dict(w) for w in DEFAULT_PUMP_WINDOW])
+
+    def test_clearing_the_pump_window_is_reported_as_unprotected(self):
+        """Legitimate once the pump is off the protected output, a serious
+        mistake otherwise -- so it is stated rather than inferred."""
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=self.DAY, pump_window=[])
+        state = bw.get_state()
+        self.assertTrue(state["pump_unprotected"])
+        r = bw.tick(now=dt.datetime(2026, 8, 25, 20, 0))
+        self.assertNotEqual(r["reason"], "forbidden")
+
+    def test_extra_forbidden_windows_still_apply_on_top(self):
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=self.DAY,
+                    forbidden=[{"from": "22:45", "to": "23:30", "why": "outra"}])
+        r = bw.tick(now=self.NIGHT)
+        self.assertEqual(r["reason"], "forbidden")
+
+    def test_bad_pump_window_is_refused(self):
+        with self.assertRaises(ValueError):
+            validate_window_config({"pump_window": [{"from": "99:99", "to": "1"}]})
 
     def test_floor_needs_consecutive_confirmations(self):
         """A single dip must not end the night. The pack sags ~0.4 V while

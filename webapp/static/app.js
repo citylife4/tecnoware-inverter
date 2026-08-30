@@ -735,15 +735,23 @@ function renderBatteryWindow(state) {
   const absEl = document.querySelector("#bw-abs-floor");
   if (absEl && state.absolute_floor_v !== undefined) absEl.textContent = state.absolute_floor_v;
 
+  // O horario da bomba e editavel: um bloqueio congelado nas horas erradas
+  // le-se como protecao no painel enquanto a bomba corre fora dele.
+  const pump = (state.pump_window || [])[0];
+  ["bw-pump-from", "bw-pump-to"].forEach((id, i) => {
+    const el = document.querySelector(`#${id}`);
+    if (!el || document.activeElement === el) return;
+    el.value = pump ? (i === 0 ? pump.from : pump.to) : "";
+  });
+
   const hf = document.querySelector("#bw-hard-forbidden");
   if (hf) {
-    const list = (state.hard_forbidden || [])
-      .map((w) => `${w.from}\u2013${w.to} (${w.why})`).join(", ");
-    hf.textContent = list
-      ? `\u26a0 Janela(s) sempre recusadas, fixas no servidor e não alteráveis aqui: ${list}. `
-        + `Nessas horas as cargas ficam na rede aconteça o que acontecer.`
+    hf.textContent = state.pump_unprotected
+      ? "\u26a0 Sem horário de bomba definido: nada impede a bateria de "
+        + "alimentar as cargas a qualquer hora. Correto só se a bomba já não "
+        + "estiver na saída protegida."
       : "";
-    hf.hidden = !list;
+    hf.hidden = !state.pump_unprotected;
   }
 
   // Estado atual: o alvo, a razão, e a tensão contra o piso.
@@ -833,7 +841,19 @@ async function saveBatteryWindow(overrides) {
     renderBatteryWindow(batteryWindowState);
     return { ok: false, code: "invalid_form" };
   }
-  const body = { ...values, ...overrides, forbidden: (batteryWindowState.config || {}).forbidden || [] };
+  const from = (document.querySelector("#bw-pump-from") || {}).value || "";
+  const to = (document.querySelector("#bw-pump-to") || {}).value || "";
+  const existing = ((batteryWindowState.config || {}).pump_window || [])[0] || {};
+  // Ambos vazios = a bomba saiu da saida protegida. Um so preenchido e um
+  // engano, e gravar isso silenciosamente removia a protecao -- por isso
+  // mantem-se o que estava.
+  let pump_window;
+  if (from && to) pump_window = [{ from, to, why: existing.why || "bomba de água" }];
+  else if (!from && !to) pump_window = [];
+  else pump_window = (batteryWindowState.config || {}).pump_window || [];
+
+  const body = { ...values, ...overrides, pump_window,
+                 forbidden: (batteryWindowState.config || {}).forbidden || [] };
   const d = await api("/api/battery-window", { method: "PUT", body: JSON.stringify(body) });
   if (d.ok) { batteryWindowState = d; renderBatteryWindow(d); }
   else {

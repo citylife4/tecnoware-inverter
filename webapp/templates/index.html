@@ -322,6 +322,21 @@
         <button class="ghost" id="bw-apply-now">Aplicar agora</button>
       </div>
 
+      <h3>Horário da bomba</h3>
+      <div class="control-grid">
+        <label class="field">Bomba começa às
+          <input type="time" id="bw-pump-from"></label>
+        <label class="field">Bomba acaba às
+          <input type="time" id="bw-pump-to"></label>
+      </div>
+      <p class="muted small">Durante estas horas as cargas ficam na rede,
+        aconteça o que acontecer. A bomba arranca com ~1,2&ndash;1,4&nbsp;kW e
+        faria disparar o inversor se estivesse em bateria &mdash; e isso
+        derrubava também o frigorífico, a luz e o portão.
+        <strong>Se mudares o temporizador da bomba, muda aqui também</strong>:
+        um bloqueio nas horas erradas parece proteção e não protege nada.
+        Deixa os dois campos vazios só se a bomba já não estiver ligada à saída
+        protegida.</p>
       <p class="warn small" id="bw-hard-forbidden"></p>
       <p class="warn small">Em modo bateria a proteção habitual de bateria fraca
         <strong>não funciona</strong>: essa escreve <code>PCP</code>, que não tem

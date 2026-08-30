@@ -56,12 +56,26 @@ from webapp.atomic_write import write_json_atomic
 GRID_POP = "00"       # utility first -- loads on grid, charger able to work
 BATTERY_POP = "02"    # SBU -- loads on battery
 
-# Applied in addition to the configured `forbidden` list, and deliberately
-# not reachable from the API. The pump is a latent fault, not a preference:
-# see CLAUDE.md "The pump is a latent fault, not just an inconvenience".
-# If the pump is ever moved off the protected output, delete this -- but
-# delete it on purpose, not because a config edit made it inconvenient.
-HARD_FORBIDDEN = ({"from": "19:00", "to": "21:15", "why": "bomba de água"},)
+# The pump hours, as a DEFAULT rather than a hard-coded law.
+#
+# This was originally unreachable from the API, on the reasoning that a
+# config edit should not be able to put the loads on battery while the pump
+# runs. That protects against the wrong thing. The pump is on a timer the
+# user can change, and a block frozen at the wrong hours is worse than no
+# block at all: it reads as protection on the dashboard while the pump
+# actually runs somewhere outside it. Guarding against a careless edit is
+# not worth guaranteeing the guard goes stale.
+#
+# So it is configurable now (`pump_window`), and this is what a config that
+# has never said otherwise inherits. Measured 2026-08-30: loads of
+# 1128-1435 W concentrated 19:30-20:40, which is what these bounds cover
+# with margin either side. Set it to [] only when the pump is physically off
+# the protected output -- get_state() reports that as unprotected so the
+# dashboard can say so.
+DEFAULT_PUMP_WINDOW = ({"from": "19:00", "to": "21:15", "why": "bomba de água"},)
+
+# Kept as an alias so existing imports and docs still resolve.
+HARD_FORBIDDEN = DEFAULT_PUMP_WINDOW
 
 # A configured floor below this is refused. 24.0 V on a 24 V lead-acid bank
 # is already ~50% depth of discharge; anything under it is not a "shallow
@@ -124,6 +138,10 @@ DEFAULT_CONFIG = {
     # POP throws a physical relay -- audible, and mechanical wear. Much
     # more conservative than the PCP controllers' dwell.
     "min_switch_interval": 600.0,
+    # The pump's hours. Defaults to DEFAULT_PUMP_WINDOW; a config written
+    # before this key existed inherits it rather than losing the block.
+    "pump_window": [dict(w) for w in DEFAULT_PUMP_WINDOW],
+    # Any further windows the user wants to exclude, applied on top.
     "forbidden": [],
 }
 
@@ -201,6 +219,7 @@ def validate_config(cfg: dict) -> dict:
     # convention scheduler.py and grid_charge.py already use in tests.
 
     out["forbidden"] = _validate_windows(out["forbidden"], "forbidden")
+    out["pump_window"] = _validate_windows(out["pump_window"], "pump_window")
     return out
 
 
@@ -309,7 +328,13 @@ class BatteryWindow:
                 # (which only runs from a real tick), so the dashboard can
                 # show both sides even between polls.
                 "device_mode": self.service.mode(),
-                "hard_forbidden": [dict(w) for w in HARD_FORBIDDEN],
+                "pump_window": [dict(w) for w in self._config["pump_window"]],
+                # True when nothing at all blocks battery mode for the pump.
+                # Legitimate once the pump is off the protected output, and
+                # a serious mistake otherwise, so it is surfaced rather than
+                # left to be inferred from an empty list.
+                "pump_unprotected": not self._config["pump_window"],
+                "hard_forbidden": [dict(w) for w in self._config["pump_window"]],
                 "absolute_floor_v": ABSOLUTE_FLOOR_V,
                 "last_run": self._last_run,
             }
@@ -444,7 +469,7 @@ class BatteryWindow:
             return GRID_POP, "outside", (
                 f"fora da janela {cfg['from']}-{cfg['to']}")
 
-        blocked = _in_any(t, HARD_FORBIDDEN)
+        blocked = _in_any(t, cfg["pump_window"])
         if blocked is not None:
             return GRID_POP, "forbidden", (
                 f"janela proibida {blocked['from']}-{blocked['to']}"
