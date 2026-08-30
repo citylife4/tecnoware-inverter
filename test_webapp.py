@@ -2139,5 +2139,60 @@ class TestEnergyView(unittest.TestCase):
         self.assertTrue(high["charging_trusted"])
 
 
+class TestTraceSchemaChanges(unittest.TestCase):
+    """Adding a trace column used to corrupt that day's file: the header is
+    written once at creation, so later rows carried more fields than the
+    header named. csv.DictReader then mismapped them and any length check
+    dropped exactly the new rows -- the ones added to diagnose something.
+    Hit twice here, 2026-08-25 and 2026-08-30."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, "trace.csv")
+
+    def rows(self, path):
+        import csv as _csv
+        with open(path, newline="") as fh:
+            return list(_csv.DictReader(fh))
+
+    def test_stable_columns_append_normally(self):
+        from webapp.trace import append_row
+        for i in range(3):
+            append_row(self.path, ("ts", "value"), ["t%d" % i, i])
+        rows = self.rows(self.path)
+        self.assertEqual([r["value"] for r in rows], ["0", "1", "2"])
+
+    def test_changed_columns_roll_the_file_aside(self):
+        from webapp.trace import append_row
+        append_row(self.path, ("ts", "value"), ["t0", 0])
+        append_row(self.path, ("ts", "value", "extra"), ["t1", 1, "x"])
+
+        current = self.rows(self.path)
+        self.assertEqual(len(current), 1)
+        self.assertEqual(current[0]["extra"], "x")     # new schema, readable
+
+        rolled = self.path.replace(".csv", ".1.csv")
+        self.assertTrue(os.path.exists(rolled))        # nothing discarded
+        self.assertEqual(self.rows(rolled)[0]["value"], "0")
+
+    def test_a_nul_damaged_header_does_not_lose_the_row(self):
+        """Unclean shutdowns leave NUL runs; the header check must see
+        through them rather than roll on every append afterwards."""
+        from webapp.trace import append_row
+        append_row(self.path, ("ts", "value"), ["t0", 0])
+        with open(self.path, "rb") as fh:
+            body = fh.read()
+        with open(self.path, "wb") as fh:
+            fh.write(b"\x00\x00" + body)
+        append_row(self.path, ("ts", "value"), ["t1", 1])
+        self.assertFalse(os.path.exists(self.path.replace(".csv", ".1.csv")))
+
+    def test_write_failure_is_swallowed(self):
+        from webapp.trace import append_row
+        append_row(os.path.join(self.tmp.name, "no", "such", "\x00bad"),
+                   ("a",), [1])          # must not raise
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

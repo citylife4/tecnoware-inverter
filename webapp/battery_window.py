@@ -52,6 +52,7 @@ from datetime import datetime, timezone
 from charge_schedule import parse_hhmm, rule_active
 from transport import InverterError
 from webapp.atomic_write import write_json_atomic
+from webapp.trace import append_row
 
 GRID_POP = "00"       # utility first -- loads on grid, charger able to work
 BATTERY_POP = "02"    # SBU -- loads on battery
@@ -639,23 +640,16 @@ class BatteryWindow:
     def _append_trace(self, result) -> None:
         if not self.trace_dir:
             return
-        try:
-            os.makedirs(self.trace_dir, exist_ok=True)
-            path = os.path.join(self.trace_dir,
-                                "batterywindow-%s.csv" % result["at"][:10])
-            new = not os.path.exists(path)
-            row = dict(result, recovering=self._recovering,
-                       below_floor=self._below_floor,
-                       device_mode=self.service.mode())
-            with open(path, "a", newline="") as fh:
-                w = csv.writer(fh)
-                if new:
-                    w.writerow(self.TRACE_COLUMNS)
-                w.writerow([row.get(k) for k in self._TRACE_KEYS])
-        except OSError:
-            # Losing the trace must never take down the controller that is
-            # the pack's only guard while the window is open.
-            pass
+        path = os.path.join(self.trace_dir,
+                            "batterywindow-%s.csv" % result["at"][:10])
+        row = dict(result, recovering=self._recovering,
+                   below_floor=self._below_floor,
+                   device_mode=self.service.mode())
+        # append_row rolls the file aside if the columns have changed since
+        # it was created, so a mid-day release cannot leave one file holding
+        # two schemas -- which happened twice here before it existed.
+        append_row(path, self.TRACE_COLUMNS,
+                   [row.get(k) for k in self._TRACE_KEYS])
 
     # ---- lifecycle --------------------------------------------------------
 

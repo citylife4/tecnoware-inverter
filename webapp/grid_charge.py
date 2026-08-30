@@ -49,6 +49,7 @@ import requests
 
 from transport import InverterError
 from webapp.atomic_write import write_json_atomic
+from webapp.trace import append_row
 from webapp.safety import PCP_VALUES, apply_low_battery_floor
 
 # Como é que este controlador se relaciona com o agendamento horário:
@@ -482,20 +483,10 @@ class GridChargeController:
         read_telemetry.py, which tolerates the NUL runs that causes."""
         if not self.trace_dir:
             return
-        try:
-            os.makedirs(self.trace_dir, exist_ok=True)
-            day = result["at"][:10]
-            path = os.path.join(self.trace_dir, "gridcharge-%s.csv" % day)
-            new = not os.path.exists(path)
-            with open(path, "a", newline="") as fh:
-                w = csv.writer(fh)
-                if new:
-                    w.writerow(self.TRACE_COLUMNS)
-                w.writerow([result.get(k) for k in self._TRACE_KEYS])
-        except OSError:
-            # Losing the trace must never take down the controller that is
-            # holding the export down.
-            pass
+        path = os.path.join(self.trace_dir,
+                            "gridcharge-%s.csv" % result["at"][:10])
+        append_row(path, self.TRACE_COLUMNS,
+                   [result.get(k) for k in self._TRACE_KEYS])
 
     # ---- lifecycle ----------------------------------------------------------
 
