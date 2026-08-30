@@ -77,6 +77,21 @@ ABSOLUTE_FLOOR_V = 24.0
 # regardless, so the hardware backstops us.
 FLOOR_MAX_LOAD_W = 10
 
+# Above this AC input voltage the grid is considered present. Used only to
+# tell two very different situations apart when the device reports battery
+# mode while we believe POP=00: a real outage (grid gone -- correct
+# behaviour, must not be fought) versus the POP setting having drifted out
+# of sync with what this server believes (our problem, and fixable).
+GRID_PRESENT_MIN_V = 180.0
+
+# Consecutive ticks of that drift before re-asserting POP. One reading is
+# not enough: a brief grid sag too short to show in the 10 s telemetry
+# sampling can transfer the inverter to battery momentarily, and writing POP
+# at every such blip would be pointless churn on a physical relay. Three
+# ticks is ~3 minutes -- against the 8 hours this went uncorrected on
+# 2026-08-30, that is still effectively immediate.
+POP_DRIFT_CONFIRMATIONS = 3
+
 FILE_MODE = 0o600
 
 DEFAULT_CONFIG = {
@@ -217,6 +232,7 @@ class BatteryWindow:
         runtime = self._load_runtime()
         self._recovering = runtime["recovering"]
         self._below_floor = runtime["below_floor"]
+        self._pop_drift = 0           # consecutive ticks of POP disagreement
         self._last_run = None
 
     # ---- persistence ----------------------------------------------------
@@ -356,14 +372,39 @@ class BatteryWindow:
 
         if self._last_applied_pop == GRID_POP and mode == "B":
             # We believe loads are on the grid; the device is on battery
-            # anyway. Most likely a genuine grid outage -- utility-first
-            # still auto-transfers to battery when the grid fails (see
-            # CLAUDE.md topology notes). Not something to fight: forcing
-            # POP00 here does nothing useful while the grid is actually
-            # down, and the device will report "L" again on its own once
-            # it returns. Surfaced for visibility, not acted on.
+            # anyway. Two very different causes, and the AC input voltage
+            # separates them cleanly.
+            grid = self.service.grid_voltage()
+            if grid is not None and grid >= GRID_PRESENT_MIN_V:
+                # The grid is up, so this is NOT an outage: the device's POP
+                # is simply not what we think it is. Nothing else notices,
+                # because the normal write path compares against
+                # _last_applied_pop and concludes "already POP00; nothing to
+                # do" -- so the disagreement can persist indefinitely.
+                #
+                # It did, on 2026-08-30: this fired 483 times across ~8 hours
+                # while the inverter free-ran in SBU, cycling the pack 13
+                # times and pulling it to 20.7 V under a 1.3 kW load -- below
+                # the datasheet's own 1.75 V/cell discharge limit. It was
+                # only resolved by accident, when a service restart re-seeded
+                # _last_applied_pop and produced a real write. Clearing the
+                # cached value here is what forces that write to happen on
+                # purpose.
+                self._pop_drift += 1
+                if self._pop_drift >= POP_DRIFT_CONFIRMATIONS:
+                    self._last_applied_pop = None
+                    return "pop_drift"
+                return "unexpected_battery"
+
+            # Grid absent or out of range: a real outage. Utility-first
+            # transfers to battery by design when the grid fails, which is
+            # exactly what should happen. Forcing POP00 would achieve
+            # nothing while there is no grid to fall back to, and the device
+            # reports "L" again on its own once it returns.
+            self._pop_drift = 0
             return "unexpected_battery"
 
+        self._pop_drift = 0
         return None
 
     def _decide(self, now=None):
@@ -474,11 +515,17 @@ class BatteryWindow:
         target, reason, detail = self._decide(now=now)
         if mismatch:
             reason = mismatch
-            detail = (
-                "o inversor saiu do modo bateria por conta própria"
-                if mismatch == "hardware_override" else
-                "o inversor está em modo bateria sem termos pedido "
-                "-- possível falha de rede") + f" (QMOD={self.service.mode()})"
+            details = {
+                "hardware_override":
+                    "o inversor saiu do modo bateria por conta própria",
+                "pop_drift":
+                    "o inversor está em modo bateria com a rede presente "
+                    "-- o POP não é o que julgávamos; a reescrever",
+                "unexpected_battery":
+                    "o inversor está em modo bateria sem termos pedido "
+                    "-- possível falha de rede",
+            }
+            detail = details[mismatch] + f" (QMOD={self.service.mode()})"
 
         result = {"at": _utcnow(), "target": target, "reason": reason,
                   "detail": detail, "battery_voltage": v,
@@ -504,7 +551,11 @@ class BatteryWindow:
             # The device is already physically on the safe side (L) by the
             # time this fires; the write only converges our own belief with
             # it. No reason to make that wait out a relay-wear cooldown.
-            "hardware_override")
+            "hardware_override",
+            # Re-asserting POP after it drifted out of sync is corrective,
+            # not discretionary: every tick spent waiting is a tick the pack
+            # is being cycled by the device instead of by us.
+            "pop_drift")
 
         if target is None:
             result["note"] = "desligado"
@@ -534,9 +585,11 @@ class BatteryWindow:
         return result
 
     TRACE_COLUMNS = ("ts", "target", "reason", "battery_voltage",
-                     "below_floor", "recovering", "applied", "note", "detail")
+                     "device_mode", "device_mismatch", "below_floor",
+                     "recovering", "applied", "note", "detail")
     _TRACE_KEYS = ("at", "target", "reason", "battery_voltage",
-                   "below_floor", "recovering", "applied", "note", "detail")
+                   "device_mode", "device_mismatch", "below_floor",
+                   "recovering", "applied", "note", "detail")
 
     def _append_trace(self, result) -> None:
         if not self.trace_dir:
@@ -547,7 +600,8 @@ class BatteryWindow:
                                 "batterywindow-%s.csv" % result["at"][:10])
             new = not os.path.exists(path)
             row = dict(result, recovering=self._recovering,
-                       below_floor=self._below_floor)
+                       below_floor=self._below_floor,
+                       device_mode=self.service.mode())
             with open(path, "a", newline="") as fh:
                 w = csv.writer(fh)
                 if new:

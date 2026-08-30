@@ -35,65 +35,53 @@ the bundled Windows app does NOT support this inverter" sections.
 
 ## Hardware topology — CHECK THIS, it may have changed
 
-**THE PI IS POWERED FROM THE INVERTER.** Confirmed 2026-08-24: the user
-was asked to power-cycle the inverter for ~10 s to apply a front-panel
-setting, and `palacoulo-inverter` rebooted with `hwmon1: Undervoltage
-detected!` in its kernel log. This also explains the earlier 09:05
-"coincidence" — the inverter's Fault 01 event and the Pi's undervoltage
-reboot were not two symptoms of a shared circuit, they were one event:
-the inverter hiccuped, so the Pi lost power.
+**Moved 2026-08-28:** the USB-serial adapter and `inverter-web.service`
+live on **`palacoulo-rasp`** (`greenv@192.168.188.11`, this machine) as
+`/dev/ttyUSB0` (prefer `/dev/serial/by-id/usb-Prolific_*`). EcoPi
+(`auto-energy`, Docker `:8000`) is on the same host. `greenv` is in
+`dialout`.
 
-Consequences, all learned the hard way:
-- **Never tell anyone to power-cycle the inverter without saying the Pi
-  goes down with it.** The monitoring dies exactly when something
-  interesting is happening.
-- Anything the Pi is mid-write on gets truncated. `web.json` was found
-  zero-length this way once; the telemetry CSV picked up a NUL block
-  (56 bytes, 1 row lost out of 1578). JSON config is written atomically;
-  the CSV is plain append by design, so **use `read_telemetry.py`**, which
-  skips corrupt lines instead of letting Python's csv module reject the
-  whole file over a few bytes.
-- The inverter cannot be rebooted to apply a setting without also
-  rebooting the logger, so expect a gap in `telemetry/` around every
-  front-panel change.
+The **retired** box `palacoulo-inverter` (`valverde@192.168.188.20`) was
+powered **from the inverter output**. Confirmed 2026-08-24: a ~10 s
+inverter power-cycle rebooted that Pi with `hwmon1: Undervoltage
+detected!`. Fault 01 and the Pi reboot were one event. **This logger is
+not on that circuit**, so an inverter trip should not kill monitoring or
+the automations. Still do not power-cycle the inverter casually: the
+serial adapter is plugged into it, and any leftover `palacoulo-inverter`
+still on the protected output *will* die with it.
 
-**Changed on 2026-08-23:** the USB-serial adapter now lives on
-**`palacoulo-inverter`** (`valverde@192.168.188.20`, also reachable over
-Tailscale) as `/dev/ttyUSB0` — confirmed by a live `QPIGS`. It is no longer
-on the Mac. `valverde` is already in the `dialout` group there.
+Consequences that still apply to files this process writes:
+- Anything this Pi is mid-write on can be truncated on *this* host's own
+ unclean reboot. `web.json` was found zero-length that way on the old Pi;
+ the telemetry CSV picked up a NUL block once. JSON config is written
+ atomically; the CSV is plain append, so **use `read_telemetry.py`**,
+ which skips corrupt lines.
+- Historical CSVs from the old Pi are in `telemetry/` (live, appends
+ continue) and a frozen copy in `telemetry/archive-palacoulo-inverter/`.
 
-That machine is 32-bit armv7 running Python 3.9.2 with Flask 1.1.2 and
-pyserial 3.5b0 from the distro packages — **keep everything Python 3.9
-compatible** (`from __future__ import annotations` in every module; no
-`match`, no `X | Y` at runtime). Claude Code does not run on that host, so
-work on it over SSH from `palacoulo-rasp`.
+Runtime here is Python 3.13. Keep `from __future__ import annotations`
+and avoid `match` / runtime `X | Y` until we deliberately drop 3.9-safe
+style. Do not start a second `serve.py` on `palacoulo-inverter` if that
+box is still on.
 
-Before assuming you can talk to the inverter from whichever Pi you're on:
+Before assuming you can talk to the inverter from this session:
 
 ```bash
 ls /dev/ttyUSB* /dev/serial/by-id/* 2>&1
 ```
 
-If nothing shows up, the adapter isn't here — either SSH to wherever it is,
-or ask the user to move it.
+If nothing shows up, the adapter isn't plugged in here.
 
 ## Machines involved
 
 | Host | Arch | Role |
 |---|---|---|
-| Mac (this session originated here) | — | original dev machine, has the adapter historically |
-| `palacoulo-inverter.platy-cliff.ts.net` / `192.168.188.20` (user `valverde`) | **armv7 (32-bit)** | Raspberry Pi, named for this project — **holds the USB adapter and runs the web server**; Claude Code does NOT run here |
-| `palacoulo-rasp.platy-cliff.ts.net` (user `greenv`) | aarch64 (64-bit) | **this machine** — general dev Pi, Claude Code works here |
+| Mac | — | original dev machine, had the adapter historically |
+| `palacoulo-rasp` / `192.168.188.11` (user `greenv`) | aarch64 | **this machine** — USB adapter, `inverter-web.service` `:9090`, EcoPi Docker `:8000`, Claude Code |
+| `palacoulo-inverter` / `192.168.188.20` (user `valverde`) | armv7 | **retired** (was USB + web; powered from the inverter). Do not run `serve.py` there after cutover |
 
-All three should now have the repo. GitHub is the source of truth:
-`git@github.com:citylife4/tecnoware-inverter.git`, branch `main`. Both Pis
-already have working SSH keys registered with GitHub (`citylife4` account)
-— confirm with `ssh -T git@github.com` if push fails.
-
-`palacoulo-inverter`'s copy was `git reset --hard origin/main`'d to match
-GitHub exactly (its first local commit had identical content to what the
-Mac had already pushed, just as a different commit — resolved by aligning
-to origin rather than keeping two histories of the same thing).
+GitHub is the source of truth:
+`git@github.com:citylife4/tecnoware-inverter.git`, branch `main`.
 
 ## Critical gotchas — read before touching the real inverter
 
@@ -199,8 +187,9 @@ have been observed changing real behaviour on hardware.
 ## Web interface and automations
 
 `serve.py` + `webapp/` is a Flask dashboard and REST API over the same
-protocol code, deployed to `palacoulo-inverter` under systemd
-(`inverter-web.service`).
+protocol code, deployed to `palacoulo-rasp` under systemd
+(`inverter-web.service`, port 9090). EcoPi stays a separate process on
+port 8000; `grid_charge` polls `http://127.0.0.1:8000/api/live`.
 
 1. **The serial port is exclusive.** While `serve.py` runs it owns
    `/dev/ttyUSB0`, so `charge_schedule.py` and `inverter_ctl.py` cannot
@@ -447,7 +436,7 @@ session — all in [NOTES.md](NOTES.md):
 - which `QPIGS` fields are trustworthy and which are not
 - the incident log, and the corrections history behind several numbers
 - the deployed configuration and the reasoning for each setting
-- planned work, including merging the two dashboards, and open questions
+- planned work, and open questions
 
 If you learn something new about this installation, it belongs there. Only
 add to this file if forgetting it would break something.

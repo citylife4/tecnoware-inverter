@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=valverde
-# Serial access needs the dialout group; check with `groups valverde`.
-WorkingDirectory=/home/valverde/tecnoware-inverter
-ExecStart=/usr/bin/python3 /home/valverde/tecnoware-inverter/serve.py --config /home/valverde/tecnoware-inverter/web.json
+User=greenv
+# Serial access needs the dialout group; check with `groups greenv`.
+WorkingDirectory=/home/greenv/dev/tecnoware-inverter
+ExecStart=/usr/bin/python3 /home/greenv/dev/tecnoware-inverter/serve.py --config /home/greenv/dev/tecnoware-inverter/web.json
 Restart=always
 RestartSec=10
 StandardOutput=journal

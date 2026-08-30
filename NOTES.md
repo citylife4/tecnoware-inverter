@@ -160,6 +160,52 @@ First live `POP=02` run with the loads actually on the pack:
   while the grid is actually down. Both are shown on the dashboard next to
   the believed state. 203 tests.
 
+- **2026-08-28 to 2026-08-30 — the nightly window quietly stopped working,
+  and the inverter cycled the pack unsupervised instead.** Found by the user
+  ("it is not using the batteries much"), which was exactly right about the
+  window and exactly backwards about the pack.
+
+  | Day | `window` ticks | `unexpected_battery` | B-cycles | wrote POP02? |
+  |---|---|---|---|---|
+  | 08-26 | 633 | 0 | 2 | yes |
+  | 08-27 | 443 | 0 | 2 | yes |
+  | 08-28 | 270 | 0 | 2 | yes |
+  | 08-29 | **2** | 306 | 4 | yes |
+  | 08-30 | **0** | **483** | **13** | **none** |
+
+  **Root cause was a design mistake in the 2026-08-26 reconciliation work.**
+  `_reconcile_with_device()` correctly detected the device sitting in battery
+  mode while this server believed `POP=00` — 483 times, across ~8 hours — and
+  deliberately did nothing, on the reasoning that it was "most likely a real
+  grid outage" and forcing `POP00` would be useless. Mains was healthy the
+  entire time (227-233 V). The device's `POP` had simply drifted out of sync,
+  and because the normal write path compares against `_last_applied_pop` it
+  kept concluding *"já em POP00; nada a fazer"*. Nothing could break the
+  deadlock. It resolved **by accident** when a service restart at 15:01
+  re-seeded `_last_applied_pop` and produced a real write.
+
+  Cost to the pack: 13 cycles in a day against the 2 by design, and
+  **20.7 V under a 1.3 kW load** (08:55 22.2 V/1266 W, 10:41 20.7 V/1328 W,
+  11:04 21.9 V/1305 W) — below the datasheet's own 1.75 V/cell (21.0 V)
+  discharge limit. Note the resting-voltage floor gives no protection at all
+  during a large load's inrush; it was calibrated for a ~66 W draw.
+
+  **Fixed:** `InverterService.grid_voltage()` now lets the reconciler tell the
+  two cases apart. Grid present (>= `GRID_PRESENT_MIN_V`, 180 V) plus device
+  on battery means drift, not outage: after `POP_DRIFT_CONFIRMATIONS` (3
+  ticks, ~3 min, so a brief sag doesn't cause relay churn) it clears the
+  cached POP and re-asserts, bypassing the anti-flap dwell. Grid genuinely
+  absent still returns `unexpected_battery` and is never fought. The trace
+  gained `device_mode` and `device_mismatch` columns — the post-mortem above
+  had to infer the mismatch from the `reason` column because neither was
+  recorded.
+
+  **Also observed, unexplained:** serial frame corruption jumped from 2-5
+  garbled `QMOD`/`QPIGS` frames per day on the old Pi to **29 and 33** on
+  2026-08-29/30, i.e. immediately after the 08-28 move to `palacoulo-rasp`.
+  Worth checking the USB cable/port, or easing `poll_interval`. Does not
+  explain the above, but is a real degradation of the link.
+
 ---
 
 ## Loads on this installation
@@ -173,7 +219,7 @@ user 2026-08-24:
 | **Water pump + remote** | **~2 kW, every ~10 min from 20:00-21:00. TRIPS THE INVERTER if run from battery.** |
 | Light | small |
 | Remote garage door | intermittent |
-| **Raspberry Pi** | the logger itself — see the topology warning above |
+| **Raspberry Pi (`palacoulo-inverter`)** | was the logger, on this output. After 2026-08-28 the logger is `palacoulo-rasp`, not on this circuit. |
 
 **An earlier note here claimed the pump was NOT on the output. That was
 wrong.** It came from reading `ac_output_active_power` as 1 W at 20:58
@@ -419,61 +465,25 @@ measurement. Treat the percentages as approximate, not calibrated.
 
 ---
 
-### Planned: merge the two dashboards, leave this Pi headless
+### Host move 2026-08-28 — USB + automations onto `palacoulo-rasp`
 
-Agreed in principle 2026-08-25, **not started**. There are two web UIs on
-this network and they describe halves of one system:
+Supersedes the 2026-08-25 "headless inverter Pi, UI only" sketch. The
+USB adapter, `serve.py`, and the three automations move to
+`palacoulo-rasp` (independent power, same host as EcoPi).
+`palacoulo-inverter` is then powered off. Two processes, not one
+container: EcoPi Docker `:8000`, inverter-web systemd `:9090`.
 
-| | |
-|---|---|
-| `palacoulo-rasp:8000` | `auto-energy` — panels, grid meter, weather |
-| `palacoulo-inverter:8080` | this project — inverter, battery, automations |
+Logs from the old Pi: live files in `telemetry/` (the service appends to
+the same `telemetry-YYYY-MM-DD.csv` / `gridcharge-*` / `batterywindow-*`
+names). Frozen snapshot at cutover in
+`telemetry/archive-palacoulo-inverter/`. Read with `read_telemetry.py`.
 
-Answering any real question today means opening both, and `webapp/energy_view.py`
-already stitches them by hand. Three reasons to merge, strongest first:
+Still open after the hardware move: one dashboard in EcoPi that renders
+this project's `/api/*` (token in `web.json`). Keep the inverter UI on
+`:9090` as the emergency page until that exists.
 
-1. **`palacoulo-inverter` is powered BY the inverter; `palacoulo-rasp` is
-   not.** When the inverter trips, its own dashboard dies with it — precisely
-   when you want to look. Moving the UI to a machine on separate power makes
-   the failure observable.
-2. One place showing solar, grid, battery and inverter together.
-3. `palacoulo-rasp` is aarch64 with Docker and a modern Python;
-   `palacoulo-inverter` is armv7/Python 3.9 and constrains every line of UI
-   written for it.
-
-**What must NOT move.** The three automations (`scheduler.py`,
-`grid_charge.py`, `battery_window.py`) stay on `palacoulo-inverter`. They own
-the serial port and must keep working with the network down — routing house
-power control through a LAN hop would make a switch failure into a control
-failure. "Headless" here means *the UI leaves*; the API and the automations
-stay.
-
-**Two risks to decide on before starting, not after:**
-
-- **The local emergency control disappears.** Today, if `palacoulo-rasp`
-  dies, you can still open the inverter's own dashboard and switch the
-  battery window off. After the move you could not. Keep a stripped local
-  page — status plus a kill switch for the automations. Cheap, and the kind
-  of thing only missed on the wrong day.
-- **The API token moves to another machine.** It can change the house's power
-  priorities. Decide deliberately where it lives and how it is stored.
-
-**Rough shape of the work**, in order:
-
-1. `palacoulo-inverter`: keep `serve.py` serving `/api/*`, bind it beyond
-   localhost, confirm the token flow works cross-host.
-2. `auto-energy`: add a client for that API and render the inverter panels —
-   status, priorities, the three automations, the energy-provenance box.
-   `webapp/ui_labels.py` and `webapp/energy_view.py` port across; the API is
-   deliberately English so the contract is stable.
-3. `palacoulo-inverter`: cut the full UI down to the fallback page.
-4. Decide whether `webapp/` keeps serving templates at all, or becomes
-   API-only with the templates moving to the other repo.
-
-Note `grid_charge` **already** depends on `palacoulo-rasp` being reachable
-(it polls `/api/live`), and that dependency fails safe — a stale reading
-means idle, never "charge blind". The merge does not add a new class of
-failure there; it does add one for the UI.
+`grid_charge` `source_url` is `http://127.0.0.1:8000/api/live`. Stale
+reading still means idle.
 
 ---
 
@@ -498,9 +508,8 @@ failure there; it does add one for the UI.
   until done.
 - The macOS `launchd` plist for the standalone `charge_schedule.py` is
   obsolete now scheduling lives in the server — probably delete it.
-- `grid_charge`'s `source_url` defaults to `http://192.168.188.11:8000`
-  (`palacoulo-rasp`); update it and the deployed `web_gridcharge.json` if
-  `auto-energy` ever moves host.
+- `grid_charge`'s `source_url` defaults to `http://127.0.0.1:8000/api/live`
+  (same host as EcoPi). Update it if EcoPi's published port changes.
 - `QPIRI` field 14 (`max_charging_current`) reads malformed (`06P`) — never
   resolved, don't trust it.
 - `battery_redischarge_voltage` (field 22, reads `52.0`) fits neither the

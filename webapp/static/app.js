@@ -782,7 +782,10 @@ function renderBatteryWindow(state) {
   if (mismatchEl) {
     const lr = state.last_run;
     const mismatch = lr && lr.device_mismatch;
-    if (mismatch === "hardware_override") {
+    if (mismatch === "pop_drift") {
+      mismatchEl.textContent = "\u26a0 O inversor está em modo bateria com a rede "
+        + "presente -- a prioridade de saída não era a que julgávamos. A reescrever.";
+    } else if (mismatch === "hardware_override") {
       mismatchEl.textContent = "\u26a0 O inversor saiu do modo bateria por conta "
         + "própria -- a assumir que a descarga desta noite já terminou.";
     } else if (mismatch === "unexpected_battery") {

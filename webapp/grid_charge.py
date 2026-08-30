@@ -80,9 +80,9 @@ SOLAR_FLOOR_W = 5.0
 DEFAULT_CONFIG = {
     "enabled": False,
     "mode": "exclusive",
-    # The auto-energy dashboard's live-telemetry endpoint. Runs on
-    # palacoulo-rasp in this deployment; adjust if that ever moves.
-    "source_url": "http://192.168.188.11:8000/api/live",
+    # EcoPi / auto-energy live telemetry. Same host as this service after
+    # the 2026-08-28 move; fail-safe is unchanged (stale → idle).
+    "source_url": "http://127.0.0.1:8000/api/live",
     "poll_interval": 30.0,       # matches the dashboard's own refresh cadence
     "http_timeout": 5.0,
     # Hysteresis band, in watts of the SURPLUS SIGNAL -- which is

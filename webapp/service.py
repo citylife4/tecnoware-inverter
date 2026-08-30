@@ -461,6 +461,21 @@ class InverterService:
         snap = self._latest
         return snap.get("mode") if snap else None
 
+    def grid_voltage(self):
+        """The device's own last-polled AC input voltage, or None.
+
+        Used by battery_window to tell a genuine grid outage (the one case
+        where the inverter transferring to battery under POP=00 is correct
+        and must not be fought) apart from a POP setting that has drifted
+        out of sync with what this server believes. See
+        BatteryWindow._reconcile_with_device().
+        """
+        snap = self._latest
+        if not snap:
+            return None
+        v = snap.get("grid_voltage")
+        return v if isinstance(v, (int, float)) else None
+
     def output_load_w(self):
         """ac_output_active_power from the cached snapshot, or None.
 

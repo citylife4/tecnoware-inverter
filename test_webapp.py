@@ -21,8 +21,8 @@ from webapp import safety
 from webapp.app import create_app
 from webapp.energy_view import BATTERY, GRID, describe_energy
 from webapp.battery_window import (
-    ABSOLUTE_FLOOR_V, BATTERY_POP, GRID_POP, BatteryWindow,
-    validate_config as validate_window_config)
+    ABSOLUTE_FLOOR_V, BATTERY_POP, GRID_POP, POP_DRIFT_CONFIRMATIONS,
+    BatteryWindow, validate_config as validate_window_config)
 
 
 def bw_runtime_path(config_path: str) -> str:
@@ -49,7 +49,7 @@ class FakeService:
 
     def __init__(self, battery_voltage=26.0, allow_writes=True,
                  min_battery_voltage=24.0, ack=True, pop="00",
-                 output_load_w=1, device_mode=None):
+                 output_load_w=1, device_mode=None, grid_voltage=230.0):
         self.allow_writes = allow_writes
         self.min_battery_voltage = min_battery_voltage
         self.poll_interval = 10.0
@@ -61,6 +61,11 @@ class FakeService:
         # None by default: most tests don't care and get_state()'s
         # reconciliation check treats None as "say nothing".
         self._device_mode = device_mode
+        # Mains present and healthy by default. Set below
+        # GRID_PRESENT_MIN_V (or None) to simulate a real outage, which is
+        # the one case where the device being on battery under POP=00 is
+        # correct and must not be corrected.
+        self._grid_voltage = grid_voltage
         self._ack = ack
         self.sent = []
         self.sent_sources = []
@@ -78,6 +83,9 @@ class FakeService:
 
     def mode(self):
         return self._device_mode
+
+    def grid_voltage(self):
+        return self._grid_voltage
 
     def last_known_priority(self, prefix):
         if prefix == "POP":
@@ -1766,19 +1774,64 @@ class TestBatteryWindow(unittest.TestCase):
         self.assertEqual(service.sent, ["POP00"])
         self.assertTrue(r["applied"])
 
-    def test_flags_but_does_not_fight_an_unexpected_battery_transfer(self):
-        """Loads on battery while we believe grid is most likely a real
-        grid outage. Forcing POP00 would do nothing useful while the grid
-        is actually down, so this only has to be visible, not acted on."""
+    def test_real_grid_outage_is_never_fought(self):
+        """Loads on battery while we believe grid, with the mains actually
+        gone, is the inverter doing exactly the right thing. Forcing POP00
+        achieves nothing when there is no grid to fall back to, and the
+        device returns to "L" by itself once it comes back."""
         service, bw = self.make(battery_voltage=26.0, device_mode="L")
         self.enable(bw, now=self.DAY)       # outside window -> target GRID_POP
         service.sent.clear()
-        service._device_mode = "B"          # grid apparently failed
-        r = bw.tick(now=self.DAY)
+        service._device_mode = "B"
+        service._grid_voltage = 0.0         # mains really is gone
+        for _ in range(6):                  # well past POP_DRIFT_CONFIRMATIONS
+            r = bw.tick(now=self.DAY)
         self.assertEqual(r["reason"], "unexpected_battery")
-        self.assertEqual(r["device_mismatch"], "unexpected_battery")
-        self.assertEqual(service.sent, [])            # not fought
+        self.assertEqual(service.sent, [])            # never fought
         self.assertFalse(bw.get_state()["recovering"])  # and not misread as ours
+
+    def test_pop_drift_is_corrected_when_the_grid_is_present(self):
+        """The 2026-08-30 failure: the device sat in SBU for ~8 hours while
+        this class believed POP=00, so the normal write path kept concluding
+        "already POP00; nothing to do" and the disagreement never resolved.
+        With mains healthy it is not an outage -- it is our belief being
+        stale -- and the fix is to force a real write."""
+        service, bw = self.make(battery_voltage=26.0, device_mode="L")
+        self.enable(bw, now=self.DAY)
+        service.sent.clear()
+        service._device_mode = "B"          # device on battery, mains fine
+        for _ in range(POP_DRIFT_CONFIRMATIONS - 1):
+            r = bw.tick(now=self.DAY)
+            self.assertEqual(r["reason"], "unexpected_battery")
+            self.assertEqual(service.sent, [])        # still debounced
+        r = bw.tick(now=self.DAY)
+        self.assertEqual(r["reason"], "pop_drift")
+        self.assertEqual(service.sent, ["POP00"])     # re-asserted
+        self.assertTrue(r["applied"])
+
+    def test_pop_drift_correction_ignores_dwell(self):
+        service, bw = self.make(battery_voltage=26.0, device_mode="L")
+        self.enable(bw, now=self.DAY, min_switch_interval=99999)
+        service.sent.clear()
+        service._device_mode = "B"
+        for _ in range(POP_DRIFT_CONFIRMATIONS):
+            bw.tick(now=self.DAY)
+        self.assertEqual(service.sent, ["POP00"])
+
+    def test_a_brief_transfer_does_not_trigger_a_rewrite(self):
+        """A grid sag too short to show in 10 s telemetry can transfer the
+        inverter momentarily. Writing POP at every blip would be pointless
+        churn on a physical relay."""
+        service, bw = self.make(battery_voltage=26.0, device_mode="L")
+        self.enable(bw, now=self.DAY)
+        service.sent.clear()
+        service._device_mode = "B"
+        bw.tick(now=self.DAY)
+        service._device_mode = "L"          # recovered on its own
+        bw.tick(now=self.DAY)
+        service._device_mode = "B"          # and blips again later
+        bw.tick(now=self.DAY)
+        self.assertEqual(service.sent, [])  # count was reset in between
 
     def test_unreadable_device_mode_is_not_treated_as_a_mismatch(self):
         service, bw = self.make(battery_voltage=27.0, device_mode=None)
@@ -1792,6 +1845,26 @@ class TestBatteryWindow(unittest.TestCase):
         r = bw.tick(now=self.NIGHT)
         self.assertIsNone(r["device_mismatch"])
         self.assertEqual(r["reason"], "window")
+
+    def test_trace_records_the_device_mode_and_mismatch(self):
+        """The 2026-08-30 post-mortem had to infer device_mismatch from the
+        reason column because neither it nor the device's own mode was in
+        the trace. Both are now columns."""
+        import csv as _csv
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        service = FakeService(battery_voltage=26.0, device_mode="L")
+        bw = BatteryWindow(service, self.path, trace_dir=d.name)
+        bw.set_config({"enabled": True, "min_switch_interval": 0},
+                      now=self.DAY)
+        service._device_mode = "B"
+        for _ in range(POP_DRIFT_CONFIRMATIONS):
+            bw.tick(now=self.DAY)
+        with open(os.path.join(d.name, os.listdir(d.name)[0])) as fh:
+            rows = list(_csv.DictReader(fh))
+        last = rows[-1]
+        self.assertEqual(last["device_mode"], "B")
+        self.assertEqual(last["device_mismatch"], "pop_drift")
 
     def test_config_round_trips(self):
         service, bw = self.make()
