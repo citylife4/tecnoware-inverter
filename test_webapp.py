@@ -84,7 +84,10 @@ class FakeService:
         return self._output_load_w
 
     def mode(self):
-        return self._device_mode
+        # Mirrors InverterService.mode(): only modes the firmware defines
+        # reach a decision, so tests can feed garbage and see it ignored.
+        from webapp.service import DEVICE_MODES
+        return self._device_mode if self._device_mode in DEVICE_MODES else None
 
     def grid_voltage(self):
         return self._grid_voltage
@@ -1784,6 +1787,22 @@ class TestBatteryWindow(unittest.TestCase):
         self.assertTrue(rows[-1]["ts"])
         self.assertEqual(rows[-1]["reason"], "forbidden")
         self.assertEqual(rows[-1]["target"], GRID_POP)
+
+    def test_corrupt_device_mode_is_ignored_not_acted_on(self):
+        """A garbled QMOD ("BçÉ" was seen live on 2026-08-30) is not "B",
+        so a naive comparison reads corruption as the inverter having left
+        battery mode -- and ends the night's discharge on it. Only modes
+        this firmware defines count."""
+        service, bw = self.make(battery_voltage=27.0, device_mode="B")
+        self.enable(bw, now=self.NIGHT)
+        self.assertTrue(bw.is_active())
+        service.sent.clear()
+        service._device_mode = "B\u00e7\u00c9"   # garbled frame
+        r = bw.tick(now=self.NIGHT)
+        self.assertIsNone(r["device_mismatch"])
+        self.assertEqual(r["target"], BATTERY_POP)   # window continues
+        self.assertFalse(bw.get_state()["recovering"])
+        self.assertEqual(service.sent, [])
 
     def test_detects_hardware_taking_itself_off_battery(self):
         """2026-08-26: the inverter switched itself from B to L at 05:46,

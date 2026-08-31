@@ -449,7 +449,15 @@ class InverterService:
 
     def mode(self):
         """The device's own last-polled QMOD letter (see DEVICE_MODES), or
-        None if unknown. This is ground truth for what the inverter is
+        None if unknown **or not a mode this firmware defines**.
+
+        The validity check is not decoration. This serial link returns
+        garbled frames regularly (gotcha #8), and a mode of "BçÉ" is not
+        "B" -- so a caller comparing against "B" reads corruption as the
+        inverter having changed state. BatteryWindow does exactly that, and
+        would end a night's discharge on it. The raw value is still what
+        goes into the telemetry CSV, where seeing the garbage is the point;
+        it is only decisions that get the filtered view. This is ground truth for what the inverter is
         actually doing -- unlike last_known_priority(), which only records
         what this server last *wrote* and has no way to notice the device
         overriding it on its own (program 12's SBU switch-back, an
@@ -459,7 +467,10 @@ class InverterService:
         see CLAUDE.md "the dashboard used to silently disagree with the
         device" incident, 2026-08-26."""
         snap = self._latest
-        return snap.get("mode") if snap else None
+        if not snap:
+            return None
+        mode = snap.get("mode")
+        return mode if mode in DEVICE_MODES else None
 
     def grid_voltage(self):
         """The device's own last-polled AC input voltage, or None.
