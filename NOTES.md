@@ -285,6 +285,42 @@ First live `POP=02` run with the loads actually on the pack:
   other appliance rather than the pump running early — the block is kept
   because nothing is lost by keeping it, not because that is settled.
 
+- **2026-08-31 — the window moved from night to early morning (04:30-08:00),
+  because the headroom it creates was being destroyed before dawn.**
+  Reconstructed from the 08-30 night, which ran cleanly and still achieved
+  nothing useful:
+
+      21:15 - 23:38   battery, 25.5 -> 24.8 V   (2h23, genuinely discharging)
+      23:38 - 04:15   grid, NOT charging, resting at 24.7-24.8 V   (4h30 idle)
+      04:15 - 04:30   charges at 10 A -> 28.2 V, 100%
+      04:30 - 08:00   float, full
+
+  Verified the discharge was real rather than nominal, from two independent
+  instruments: the inverter reported mode B with 0.0 A charging current
+  throughout, and Shelly channel 1 measured **0.3-0.9 W** entering the
+  inverter for the whole two hours (against 34 W just before it opened). The
+  fridge, light and Pi were genuinely running off the pack.
+
+  The problem is the timing, not the mechanism. By sunrise (~07:10) the pack
+  was back at 100%, so there was **zero absorption headroom** exactly when
+  solar starts — which is the entire reason the discharge exists. The 4h30
+  in the middle is worse than wasted: the loads are on grid, the pack is
+  neither supplying nor receiving, and a lead-acid resting part-charged is
+  the one state to avoid.
+
+  Moved to **04:30-08:00** so the discharge lands against dawn: full at
+  04:30, program 12 cuts around 06:50 at ~24.8 V, and the pack meets the sun
+  with room in it. Same amount of battery use, placed where it is useful,
+  and the part-charged idle time drops from 4h30 to about 20 minutes. Also
+  clear of the pump window entirely.
+
+  Note the 04:15 recharge was **accidental**, not designed: `grid_charge` is
+  `disabled_no_solar` overnight and writes nothing, so the pack should have
+  stayed low. A momentary solar reading let a normal evaluation through, the
+  low-battery floor saw 24.7 V under `min_battery_voltage` (25.5 V), and
+  raised `idle_pcp` to `01`. Worth understanding properly before relying on
+  the pack being full at 04:30.
+
 ---
 
 ## Loads on this installation
