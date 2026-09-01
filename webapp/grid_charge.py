@@ -212,7 +212,7 @@ class GridChargeController:
             with open(self.path) as fh:
                 raw = fh.read()
             if not raw.strip():
-                return dict(DEFAULT_CONFIG)
+                raise ValueError("config file is empty")
             return validate_config(json.loads(raw))
         except (ValueError, OSError) as e:
             # Falling back to defaults means enabled=False. For this
@@ -283,11 +283,18 @@ class GridChargeController:
     def set_config(self, updates: dict) -> dict:
         cfg = validate_config(updates)
         with self._lock:
+            previous = self._config
             self._config = cfg
-            # A config that validated and was written is no longer the one
-            # that got rejected at boot.
+            try:
+                self._save()
+            except Exception:
+                # A failed API save must not change the running controller or
+                # dismiss the warning for the rejected file still on disk.
+                self._config = previous
+                raise
+            # Only a config that was both validated and written replaces the
+            # one that got rejected at boot.
             self._config_error = None
-            self._save()
             if cfg["enabled"]:
                 self._tick(force=True)
         return self.get_state()

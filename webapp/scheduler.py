@@ -103,7 +103,7 @@ class Scheduler:
             with open(self.path) as fh:
                 raw = fh.read()
             if not raw.strip():
-                return dict(DEFAULT_STATE)
+                raise ValueError("config file is empty")
             data = json.loads(raw)
             if not isinstance(data, dict):
                 raise ValueError("state must be an object")
@@ -151,11 +151,18 @@ class Scheduler:
             raise ValueError("enabled must be a boolean")
         rules = validate_rules(rules)
         with self._lock:
+            previous = self._state
             self._state = {"enabled": bool(enabled), "rules": rules}
-            # A state that validated and was written is no longer the one
-            # that got rejected at boot.
+            try:
+                self._save()
+            except Exception:
+                # Keep the running state and warning aligned with the file
+                # that remains on disk when persistence fails.
+                self._state = previous
+                raise
+            # Only a state that was both validated and written replaces the
+            # one that got rejected at boot.
             self._config_error = None
-            self._save()
             if self._state["enabled"]:
                 # Apply immediately rather than making an edit wait up to
                 # poll_interval to take effect.

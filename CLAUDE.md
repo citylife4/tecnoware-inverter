@@ -343,11 +343,12 @@ is a direct guarantee that discharging cannot push the meter into export,
 and a negative one is a direct prediction of how much it would.
 
 Measured on this house: the daytime signal is above 0 W for **47%** of
-samples and its median sits at **−7 W**. Hence two thresholds
-(`daytime_enter_w` 150, `daytime_exit_w` 50) rather than one — a single
-threshold would chatter across that median — and a much larger dwell
-(`daytime_min_switch_interval`, 1200 s) than the nightly window needs, since
-this one crosses its band far more often.
+samples and its median sits at **−7 W**. The initial 150 W entry threshold
+proved unreachable in the available 2026-09-01 afternoon sample (maximum
++94 W; n=467), so the live thresholds are now `daytime_enter_w` 80 and
+`daytime_exit_w` 50. Two thresholds avoid chatter around the boundary, and
+the much larger dwell (`daytime_min_switch_interval`, 1200 s) reflects how
+often this window crosses its band compared with the nightly window.
 
 Everything else still applies: the pump block, the voltage floor (whose
 counter now runs during either window, not just the nightly one), and the

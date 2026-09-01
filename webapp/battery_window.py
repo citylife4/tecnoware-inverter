@@ -341,7 +341,7 @@ class BatteryWindow:
             with open(self.path) as fh:
                 raw = fh.read()
             if not raw.strip():
-                return dict(DEFAULT_CONFIG)
+                raise ValueError("config file is empty")
             return validate_config(json.loads(raw))
         except (ValueError, OSError) as e:
             # Never let stored automation config crash the server. Starting
@@ -423,13 +423,20 @@ class BatteryWindow:
         production never passes it, tests do so the force-tick doesn't land
         wherever the wall clock happens to be when the suite runs."""
         with self._lock:
-            merged = dict(self._config)
+            previous = self._config
+            merged = dict(previous)
             merged.update(updates or {})
             self._config = validate_config(merged)
-            # A config that validated and was written is no longer the one
-            # that got rejected at boot.
+            try:
+                self._save()
+            except Exception:
+                # Keep the running config and warning aligned with the file
+                # that remains on disk when persistence fails.
+                self._config = previous
+                raise
+            # Only a config that was both validated and written replaces the
+            # one that got rejected at boot.
             self._config_error = None
-            self._save()
             self._tick(force=True, now=now)
         return self.get_state()
 

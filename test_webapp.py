@@ -2687,6 +2687,53 @@ class TestRejectedConfigIsVisible(unittest.TestCase):
                                   fetch_fn=FetchStub(None))
         self.assertIsNone(gc.get_state()["config_error"])
 
+    def test_an_existing_empty_file_is_reported(self):
+        """An empty file is unlike a missing first-run file: it may be a
+        truncated live config and must not look deliberately disabled."""
+        factories = (
+            ("web_gridcharge.json",
+             lambda p: GridChargeController(FakeService(), p,
+                                            fetch_fn=FetchStub(None))),
+            ("web_battery_window.json",
+             lambda p: BatteryWindow(FakeService(battery_voltage=27.0), p)),
+            ("web_schedule.json", lambda p: Scheduler(FakeService(), p)),
+        )
+        for name, factory in factories:
+            with self.subTest(name=name):
+                _, state, err = self.build(name, "", factory)
+                self.assertIn(name, state["config_error"])
+                self.assertIn("empty", err)
+
+    def test_failed_save_keeps_the_rejection_and_running_config(self):
+        def fail_save():
+            raise OSError("disk full")
+
+        cases = (
+            ("web_gridcharge.json", self.BAD,
+             lambda p: GridChargeController(FakeService(), p,
+                                            fetch_fn=FetchStub(None)),
+             lambda c: c.set_config({"enabled": True}),
+             lambda state: state["enabled"]),
+            ("web_battery_window.json", self.BAD,
+             lambda p: BatteryWindow(FakeService(battery_voltage=27.0), p),
+             lambda c: c.set_config({"enabled": True}),
+             lambda state: state["config"]["enabled"]),
+            ("web_schedule.json", json.dumps({"enabled": 1, "rules": []}),
+             lambda p: Scheduler(FakeService(), p),
+             lambda c: c.set_state(True, []),
+             lambda state: state["enabled"]),
+        )
+        for name, text, factory, update, is_enabled in cases:
+            with self.subTest(name=name):
+                controller, state, _ = self.build(name, text, factory)
+                rejected = state["config_error"]
+                controller._save = fail_save
+                with self.assertRaises(OSError):
+                    update(controller)
+                state = controller.get_state()
+                self.assertFalse(is_enabled(state))
+                self.assertEqual(state["config_error"], rejected)
+
 
 
 if __name__ == "__main__":
