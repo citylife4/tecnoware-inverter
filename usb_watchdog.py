@@ -39,6 +39,8 @@ import time
 import urllib.error
 import urllib.request
 
+from notify import Notifier, load_config
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Kept generous: the poller retries internally and the serial link is
@@ -176,15 +178,24 @@ def restart_service(dry_run: bool) -> None:
 
 
 def check_once(config_path: str, dry_run: bool) -> int:
+    notifier = Notifier(load_config(config_path))
     healthy, detail = _service_health(config_path)
     if healthy is None:
         _log("skipping: %s" % detail)
         return 0
     if healthy:
         _log("ok (%s)" % detail)
+        # Only speaks up on the transition, so a healthy month is silent.
+        notifier.on_change("link", "ok",
+                           "Inversor: ligacao restabelecida (%s)." % detail)
+        notifier.heartbeat(
+            "Inversor: tudo bem. Ligacao ativa, %s." % detail)
         return 0
 
     _log("link or service looks dead: %s" % detail)
+    notifier.on_change("link", "down",
+                       "Inversor: SEM LIGACAO ao aparelho (%s). "
+                       "A tentar recuperar automaticamente." % detail)
 
     # Restart first, reset the bus only if that was not enough. A wedged
     # serial thread needs the process replaced, not the bus cycled, and
@@ -198,6 +209,8 @@ def check_once(config_path: str, dry_run: bool) -> int:
     healthy, detail = _service_health(config_path)
     if healthy:
         _log("recovered by restart (%s)" % detail)
+        notifier.on_change("link", "ok",
+                           "Inversor: recuperado com um reinicio do servico.")
         return 0
     _log("  still down: %s" % detail)
 
@@ -205,6 +218,10 @@ def check_once(config_path: str, dry_run: bool) -> int:
     if hub is None:
         _log("  adapter not present in sysfs at all -- cable or adapter, "
              "needs hands")
+        notifier.on_change("link", "absent",
+                           "Inversor: o adaptador USB desapareceu do sistema. "
+                           "Nao da para recuperar por software -- precisa de "
+                           "alguem no local (cabo ou adaptador).")
         return 2
 
     for attempt in range(2, MAX_ATTEMPTS + 1):
@@ -215,10 +232,15 @@ def check_once(config_path: str, dry_run: bool) -> int:
         healthy, detail = _service_health(config_path)
         if healthy:
             _log("recovered (%s)" % detail)
+            notifier.on_change("link", "ok",
+                               "Inversor: recuperado apos reset do USB.")
             return 0
         _log("  still down: %s" % detail)
 
     _log("gave up after %d attempts -- needs manual intervention" % MAX_ATTEMPTS)
+    notifier.on_change("link", "gave_up",
+                       "Inversor: %d tentativas de recuperacao falharam. "
+                       "Precisa de intervencao manual." % MAX_ATTEMPTS)
     return 2
 
 

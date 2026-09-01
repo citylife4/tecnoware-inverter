@@ -2279,5 +2279,82 @@ class TestStallDetector(unittest.TestCase):
         self.assertGreaterEqual(STALL_EXIT_S, 600)
 
 
+class TestNotifier(unittest.TestCase):
+    """Alerting that cries wolf is the same as no alerting: a fault standing
+    for a week must produce one message, not one per check. And an alert with
+    no matching all-clear leaves you unable to tell "still broken" from
+    "fixed and nobody said"."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state = os.path.join(self.tmp.name, "state.json")
+        self.sent = []
+
+    def make(self, **over):
+        from notify import Notifier
+        cfg = {"telegram": {"enabled": True, "token": "t", "chat_id": "c"}}
+        cfg["telegram"].update(over)
+        n = Notifier(cfg, state_file=self.state)
+        n.send = lambda text: (self.sent.append(text), True)[1]
+        return n
+
+    def test_a_standing_fault_reports_once(self):
+        n = self.make()
+        for _ in range(20):
+            n.on_change("link", "down", "fault")
+        self.assertEqual(self.sent, ["fault"])
+
+    def test_recovery_is_reported_too(self):
+        n = self.make()
+        n.on_change("link", "down", "fault")
+        n.on_change("link", "ok", "recovered")
+        for _ in range(10):
+            n.on_change("link", "ok", "recovered")
+        self.assertEqual(self.sent, ["fault", "recovered"])
+
+    def test_a_new_fault_after_recovery_reports_again(self):
+        n = self.make()
+        n.on_change("link", "down", "fault 1")
+        n.on_change("link", "ok", "ok")
+        n.on_change("link", "down", "fault 2")
+        self.assertEqual(len(self.sent), 3)
+
+    def test_heartbeat_is_daily_and_hour_bound(self):
+        import datetime as _dt
+        now = _dt.datetime.now().hour
+        n = self.make(heartbeat_hour=now)
+        for _ in range(5):
+            n.heartbeat("alive")
+        self.assertEqual(self.sent, ["alive"])
+
+        other = self.make(heartbeat_hour=(now + 1) % 24)
+        other.heartbeat("wrong hour")
+        self.assertEqual(self.sent, ["alive"])
+
+    def test_unconfigured_notifier_is_silent_not_broken(self):
+        from notify import Notifier
+        n = Notifier({}, state_file=self.state)
+        self.assertFalse(n.enabled)
+        self.assertFalse(n.send("anything"))       # must not raise
+        self.assertFalse(n.on_change("k", "v", "t"))
+
+    def test_send_failure_does_not_raise(self):
+        """An alerting channel that can break the thing it watches is worse
+        than no alerting channel."""
+        from notify import Notifier
+        n = Notifier({"telegram": {"enabled": True, "token": "t",
+                                   "chat_id": "c"}}, state_file=self.state)
+        # Real send against an unroutable host, short timeout via bad token.
+        self.assertFalse(n.send("x"))              # must not raise
+
+    def test_corrupt_state_file_does_not_lose_alerting(self):
+        with open(self.state, "w") as fh:
+            fh.write("{not json")
+        n = self.make()
+        n.on_change("link", "down", "fault")
+        self.assertEqual(self.sent, ["fault"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

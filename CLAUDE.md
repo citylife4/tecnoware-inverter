@@ -433,6 +433,31 @@ data has been observed yet (fixed after sunset the same day). Worth
 checking `/api/audit` for `grid_export` entries the next time there's
 actually sun, to see whether -150W turns out to need tuning the same way.
 
+## Alerts
+
+`notify.py` sends Telegram messages for things that need a person, wired
+into `usb_watchdog.py`. Configure under a `"telegram"` key in `web.json`
+(already gitignored — it holds the API token):
+
+```json
+"telegram": {"enabled": true, "token": "...", "chat_id": "...",
+             "heartbeat_hour": 9}
+```
+
+Test with `python3 notify.py --test`.
+
+Two rules it follows, both from the 2026-09-01 incident where the system was
+dead for 14.5 hours with nobody watching:
+
+- **Alerts fire on state changes, never on conditions.** A fault standing
+  for a week produces one message. Ringing continuously trains you to ignore
+  it, which is the same as not ringing.
+- **Recoveries are announced too**, so "still broken" and "fixed, nobody
+  said" are distinguishable.
+
+The daily heartbeat is what makes silence informative: with it, no message
+means the notifier itself broke. Without it, no message means nothing.
+
 ## Where the rest went
 
 Deliberately **not** in this file, to keep it short enough to load every
