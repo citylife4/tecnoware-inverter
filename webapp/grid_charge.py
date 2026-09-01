@@ -316,27 +316,30 @@ class GridChargeController:
         with self._lock:
             return dict(self._last_payload) if self._last_payload else None
 
-    def is_overriding(self) -> bool:
-        """True quando este controlador está, neste momento, a impor o
-        carregamento e o agendamento deve ficar de fora.
+    def is_absorbing_export(self) -> bool:
+        """True quando o carregador está, NESTE momento, a absorver
+        excedente. Independente do `mode`, que só decide o que acontece
+        quando *não* está.
+
+        É esta a pergunta que a janela de bateria precisa de fazer. O
+        carregador não funciona em POP=02 (gotcha #1), por isso absorver
+        excedente e pôr as cargas no pack são mutuamente exclusivos --
+        e isso é verdade em `exclusive` tanto como em `override`.
 
         Usa a decisão do último tick (`self._desired`) em vez de ir buscar
-        uma leitura nova: o agendamento corre a cada 60s e este a cada 30s,
+        uma leitura nova: quem pergunta corre a cada 60s e este a cada 30s,
         por isso o valor está sempre fresco, e assim evita-se um pedido HTTP
-        extra (e uma possível divergência) a cada verificação do
-        agendamento.
+        extra (e uma possível divergência) a cada verificação.
 
         `_desired` sozinho NÃO chega. A banda morta segura o estado anterior
         por desenho, e à noite -- sem sol -- o sinal assenta lá dentro (~80-95W
         nesta casa). Um dia que acabasse em "charging" ficaria a impor o
         carregamento até de manhã, e a janela de bateria cederia a noite
-        inteira sem nunca chegar a usar o pack. Impor exige portanto um
+        inteira sem nunca chegar a usar o pack. Ceder exige portanto um
         excedente REAL na leitura atual, não uma intenção retida.
         """
         with self._lock:
-            if not (self._config["enabled"]
-                    and self._config["mode"] == "override"
-                    and self._desired == "charging"):
+            if not (self._config["enabled"] and self._desired == "charging"):
                 return False
             if (self._last_fetch_ok_mono is None
                     or time.monotonic() - self._last_fetch_ok_mono
@@ -345,6 +348,24 @@ class GridChargeController:
             signal = self._last_signal
             return (signal is not None
                     and signal <= self._config["export_threshold_w"])
+
+    def is_overriding(self) -> bool:
+        """True quando este controlador está a sobrepor-se ao AGENDAMENTO e
+        este deve ficar de fora.
+
+        Só faz sentido em `mode="override"`. Em `exclusive` os dois nunca
+        estão ligados ao mesmo tempo -- webapp/app.py recusa com
+        409 conflicting_automation -- por isso não há ninguém a quem
+        sobrepor-se, e a resposta é sempre False.
+
+        Não confundir com `is_absorbing_export()`: a janela de bateria move
+        o POP, não o PCP, coexiste com este controlador em qualquer dos
+        modos, e por isso pergunta a outra coisa.
+        """
+        with self._lock:
+            if self._config["mode"] != "override":
+                return False
+        return self.is_absorbing_export()
 
     def set_enabled(self, enabled: bool) -> dict:
         """Flip the enabled flag alone, keeping every other setting --

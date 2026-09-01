@@ -236,14 +236,33 @@ Two drive PCP and must not write at the same time; the third drives POP.
 
 `grid_charge` has a **`mode`**:
 
-- `"exclusive"` — owns PCP outright; `webapp/app.py` refuses to enable
-  either automation while the other is on (`409 conflicting_automation`).
-- `"override"` — **what this installation uses.** Only writes PCP while
-  exporting; otherwise writes nothing and defers. `is_overriding()` is
-  passed to `Scheduler(override_check=...)` in `serve.py` so the scheduler
-  stands down instead of fighting (they poll at 60s vs 30s). Both clear
-  their cached `_last_applied_pcp` when yielding, so the other's write
-  doesn't leave them thinking "already set".
+- `"exclusive"` — **what this installation uses**, with the scheduler off.
+  Owns PCP outright; `webapp/app.py` refuses to enable either automation
+  while the other is on (`409 conflicting_automation`). When there is sun
+  but no surplus it writes `idle_pcp` (`03`), which on this unit means
+  "never charge" — that is what stops the grid topping the pack up during
+  the day and destroying the absorption headroom.
+- `"override"` — only writes PCP while exporting; otherwise writes nothing
+  and defers to the scheduler. `is_overriding()` is passed to
+  `Scheduler(override_check=...)` in `serve.py` so the scheduler stands
+  down instead of fighting (they poll at 60s vs 30s). Both clear their
+  cached `_last_applied_pcp` when yielding, so the other's write doesn't
+  leave them thinking "already set".
+
+  **Do not switch to `override` while the scheduler is disabled.** An
+  earlier version of this file claimed `override` was in use here; it was
+  not, and it would be the wrong choice. "Defers to the scheduler" with no
+  scheduler running means nobody writes PCP outside export, so whatever
+  PCP was last set just stands — including `PCP01` all day, grid-charging
+  the pack back up between export windows.
+
+`is_overriding()` answers "should the *scheduler* stand down", so it is
+False in `exclusive` by construction. **`battery_window` asks
+`is_absorbing_export()` instead**, which is mode-independent: that window
+moves POP, not PCP, so it coexists with the charger in either mode, and
+the charger not running at `POP=02` (gotcha #1) makes them mutually
+exclusive regardless. Wiring the window to `is_overriding()` silently
+disabled its fourth interlock for as long as the mode was `exclusive`.
 
 - `webapp/battery_window.py` — **nightly POP window**, config
   `web_battery_window.json`, added 2026-08-25. Puts the loads on the pack
@@ -279,9 +298,10 @@ output as the loads:
    which is the exact wear the controller exists to prevent.
 3. **Unreadable battery voltage** → utility. Never a reason to stay on
    battery.
-4. **Yields to `grid_charge`** via `override_check` — the charger only runs
-   at `POP=00`, so absorbing export and running loads off the pack are
-   mutually exclusive. **That yield bypasses the anti-flap dwell**, like the
+4. **Yields to `grid_charge`** via `override_check`, wired to
+   `is_absorbing_export()` and **not** `is_overriding()` (see above) — the
+   charger only runs at `POP=00`, so absorbing export and running loads off
+   the pack are mutually exclusive. **That yield bypasses the anti-flap dwell**, like the
    other three. It did not at first, and the consequence was live on
    2026-08-25: the house exported at -19 W, the export controller correctly
    decided to charge, this controller correctly decided to hand over

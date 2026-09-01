@@ -550,6 +550,32 @@ class TestOverrideMode(unittest.TestCase):
         gc.tick()
         self.assertFalse(gc.is_overriding())
 
+    def test_absorbing_export_is_true_in_exclusive_mode_too(self):
+        """The battery window asks this one, and it moves POP, not PCP -- so
+        it coexists with the charger in either mode. The charger does not run
+        at POP=02 (gotcha #1), so absorbing export and putting the loads on
+        the pack are mutually exclusive regardless of `mode`."""
+        _, _, gc, _ = self.make_pair(-300)
+        gc.set_config({"mode": "exclusive", "enabled": True,
+                       "export_threshold_w": -150, "min_switch_interval": 0})
+        self.assertTrue(gc.is_absorbing_export())
+        self.assertFalse(gc.is_overriding())   # ...but the scheduler is moot
+
+    def test_absorbing_export_needs_a_live_surplus(self):
+        _, stub, gc, _ = self.make_pair(-300)
+        gc.set_config({"mode": "exclusive", "enabled": True,
+                       "export_threshold_w": -150, "import_threshold_w": 150,
+                       "stale_after": 120, "min_switch_interval": 0})
+        self.assertTrue(gc.is_absorbing_export())
+        gc._last_fetch_ok_mono -= 121
+        self.assertFalse(gc.is_absorbing_export())
+
+    def test_not_absorbing_export_when_disabled(self):
+        _, _, gc, _ = self.make_pair(-300)
+        gc.set_config({"mode": "exclusive", "enabled": False,
+                       "export_threshold_w": -150, "min_switch_interval": 0})
+        self.assertFalse(gc.is_absorbing_export())
+
     def test_stale_export_does_not_keep_overriding(self):
         _, _, gc, _ = self.make_pair(-300)
         gc.set_config({"mode": "override", "enabled": True,

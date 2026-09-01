@@ -177,9 +177,13 @@ def main() -> int:
 
     # A bateria só é usada quando não há excedente a absorver: o carregador
     # não funciona em POP=02, por isso a janela cede ao excedente em vez de
-    # lutarem pelo mesmo relé. Mesmo padrão que o agendamento usa acima.
+    # lutarem pelo mesmo relé.
+    #
+    # `is_absorbing_export`, não `is_overriding`: esta janela mexe no POP e
+    # coexiste com o carregador em qualquer modo, ao contrário do
+    # agendamento acima, que só precisa de ceder em mode="override".
     battery_window = BatteryWindow(service, path=cfg["battery_window_config"],
-                                   override_check=grid_charge.is_overriding,
+                                   override_check=grid_charge.is_absorbing_export,
                                    trace_dir=cfg.get("gridcharge_trace_dir"),
                                    # A janela diurna condicional decide sobre
                                    # o mesmo sinal que o excedente usa -- ver
