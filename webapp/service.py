@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 from collections import deque
@@ -63,6 +64,22 @@ QPIGS_NUMERIC = [
 # A QPIGS frame shorter than this is a truncated read, not a short device
 # reply -- charge_schedule.py uses the same threshold for the same reason.
 MIN_QPIGS_FIELDS = 14
+
+# If the poller has not managed a single successful read in this long, the
+# process is considered stuck and exits so systemd restarts it.
+#
+# This exists because 2026-09-01 showed the two obvious safety nets both
+# miss the case. The serial thread wedged inside a read at 00:34, holding
+# its lock: /api/status blocked forever, but the process stayed alive, so
+# systemd's Restart=always never fired (it only watches for exit), and
+# /api/health kept answering 200, so a liveness probe saw nothing wrong.
+# The system was dead for 14.5 hours -- no telemetry, and the 04:30 battery
+# window never ran.
+#
+# Generous on purpose: the link drops frames constantly and the poller
+# already backs off to 60 s when erroring, so this must only fire on a link
+# that is genuinely gone, never on ordinary noise.
+STALL_EXIT_S = 900.0
 
 # QMOD single-letter working modes (PI30).
 DEVICE_MODES = {
@@ -554,12 +571,38 @@ class InverterService:
         self._thread = threading.Thread(target=self._poll_loop,
                                         name="inverter-poll", daemon=True)
         self._thread.start()
+        # Separate thread on purpose: it has to keep running when the poll
+        # thread is the one that is stuck. See STALL_EXIT_S.
+        self._stall_thread = threading.Thread(target=self._stall_loop,
+                                              name="inverter-stall",
+                                              daemon=True)
+        self._stall_thread.start()
 
     def stop(self):
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
         self.close()
+
+    def _stall_loop(self):
+        """Exit the process if the poller stops succeeding entirely.
+
+        Deliberately os._exit: a normal exit would wait on the very thread
+        that is stuck. Only fires once there has been at least one success,
+        so an adapter missing at boot does not become a restart loop --
+        that case belongs to usb_watchdog.py, which has attempt limits.
+        """
+        while not self._stop.wait(60.0):
+            if not self._last_success_mono:
+                continue
+            stalled = time.monotonic() - self._last_success_mono
+            if stalled > STALL_EXIT_S:
+                sys.stderr.write(
+                    "[service] no successful read in %.0fs (limit %.0fs) -- "
+                    "exiting so systemd restarts us\n"
+                    % (stalled, STALL_EXIT_S))
+                sys.stderr.flush()
+                os._exit(1)
 
     def _poll_loop(self):
         while not self._stop.is_set():

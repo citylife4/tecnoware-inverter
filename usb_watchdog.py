@@ -61,8 +61,20 @@ def _log(msg: str) -> None:
 
 
 def _service_health(config_path: str, timeout: float = 10.0):
-    """(healthy, detail). Unreachable service is NOT treated as a serial
-    fault -- systemd restarts it, and resetting the bus would not help."""
+    """(healthy, detail). None means "cannot tell, do nothing".
+
+    An unreachable service used to return None here, on the reasoning that
+    systemd would restart it and a bus reset would not help. Both halves
+    were wrong, and it cost 14.5 hours on 2026-09-01: the serial thread
+    wedged holding its lock at 00:34, so /api/status blocked forever while
+    the process stayed alive. systemd's Restart=always never fired -- it
+    only watches for exit -- and this function reported "skipping" every
+    five minutes through the night. The 04:30 battery window never ran and
+    no telemetry was written at all.
+
+    A service that does not answer is now a fault to act on. Only a config
+    we cannot read is genuinely none of our business.
+    """
     try:
         with open(config_path) as fh:
             cfg = json.load(fh)
@@ -78,7 +90,10 @@ def _service_health(config_path: str, timeout: float = 10.0):
         with urllib.request.urlopen(req, timeout=timeout) as r:
             body = json.loads(r.read().decode())
     except Exception as e:                     # noqa: BLE001
-        return None, "service unreachable: %s" % e
+        # Deliberately False, not None: see the docstring. /api/health can
+        # still answer while /api/status blocks on the serial lock, so a
+        # liveness probe would have missed this too.
+        return False, "service unreachable: %s" % e
 
     if body.get("connected"):
         return True, "connected"
@@ -169,20 +184,34 @@ def check_once(config_path: str, dry_run: bool) -> int:
         _log("ok (%s)" % detail)
         return 0
 
-    _log("serial link looks dead: %s" % detail)
+    _log("link or service looks dead: %s" % detail)
+
+    # Restart first, reset the bus only if that was not enough. A wedged
+    # serial thread needs the process replaced, not the bus cycled, and
+    # restarting is much the cheaper of the two -- it does not disturb
+    # anything else on the hub.
+    _log("recovery attempt 1/%d: restarting the service" % MAX_ATTEMPTS)
+    restart_service(dry_run)
+    if dry_run:
+        return 1
+    time.sleep(25)
+    healthy, detail = _service_health(config_path)
+    if healthy:
+        _log("recovered by restart (%s)" % detail)
+        return 0
+    _log("  still down: %s" % detail)
+
     hub = _adapter_hub()
     if hub is None:
         _log("  adapter not present in sysfs at all -- cable or adapter, "
              "needs hands")
         return 2
 
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        _log("recovery attempt %d/%d" % (attempt, MAX_ATTEMPTS))
+    for attempt in range(2, MAX_ATTEMPTS + 1):
+        _log("recovery attempt %d/%d: resetting the bus" % (attempt, MAX_ATTEMPTS))
         reset_bus(hub, dry_run)
         restart_service(dry_run)
-        if dry_run:
-            return 1
-        time.sleep(20)
+        time.sleep(25)
         healthy, detail = _service_health(config_path)
         if healthy:
             _log("recovered (%s)" % detail)

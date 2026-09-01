@@ -321,6 +321,55 @@ First live `POP=02` run with the loads actually on the pack:
   raised `idle_pcp` to `01`. Worth understanding properly before relying on
   the pack being full at 04:30.
 
+- **2026-09-01 00:34 to 15:02 — the whole system was dead for 14.5 hours and
+  both safety nets watched it happen.** The serial thread wedged inside a
+  read while holding its lock. Consequences: no telemetry file was written
+  for the day at all, and the **04:30 battery window never ran** — the first
+  night of the new schedule, missed entirely.
+
+  What makes this worth recording is that the process stayed *alive*:
+
+  - **systemd** `Restart=always` never fired. It watches for the process
+    exiting; this one was hung, not dead.
+  - **`usb_watchdog.py` saw it and skipped on purpose.** It logged
+    `skipping: service unreachable: timed out` every five minutes through
+    the night, because an unreachable service returned `None` ("cannot
+    tell, do nothing") on the reasoning that systemd would handle it and a
+    bus reset would not help. Both halves of that reasoning were wrong.
+  - **A liveness probe would have missed it too.** `/api/health` kept
+    answering 200 the whole time; only `/api/status`, which needs the
+    serial lock, blocked.
+
+  Fixed at both levels, because either alone still leaves a gap:
+
+  1. `_service_health()` now returns **False** for an unreachable service —
+     a fault to act on. Only an unreadable config is still "none of our
+     business". Recovery tries a service restart first (a wedged thread
+     needs the process replaced, not the bus cycled, and it disturbs
+     nothing else on the hub), and falls back to the bus reset.
+  2. `InverterService` grew a `_stall_loop` thread that calls `os._exit(1)`
+     if no read has succeeded in `STALL_EXIT_S` (900 s), so systemd's
+     restart becomes reachable. Separate thread on purpose: it has to keep
+     running when the poll thread is the stuck one. `os._exit` rather than a
+     clean exit for the same reason. It only arms after a first success, so
+     an adapter missing at boot does not become a restart loop — that case
+     belongs to the external watchdog, which has attempt limits.
+
+  The pack was at `POP=00` throughout, so loads stayed on grid and nothing
+  was at risk. That was luck of timing, not design: had it wedged during a
+  window, the pack would have sat discharging with nothing able to command
+  it back.
+
+- **2026-08-31 — the solar Shelly (192.168.188.25) is offline** and has been
+  since at least that morning: no ping, no HTTP, and `auto-energy` reports
+  `ac_solar_w: null` / `house_power_w: null` while its other channels still
+  read fine. This **disarms the night-time protection**: `grid_charge` skips
+  the `disabled_no_solar` branch entirely when solar is `None`, because the
+  test is `solar is not None and solar < SOLAR_FLOOR_W`. The safety rule was
+  written as *proceed unless we know there is no sun*, when it should be
+  *hold unless we know there is sun*. Not yet fixed; needs the Shelly back
+  or the inverted condition corrected.
+
 ---
 
 ## Loads on this installation

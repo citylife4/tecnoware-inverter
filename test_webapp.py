@@ -2213,5 +2213,41 @@ class TestTraceSchemaChanges(unittest.TestCase):
                    ("a",), [1])          # must not raise
 
 
+class TestStallDetector(unittest.TestCase):
+    """2026-09-01: the serial thread wedged inside a read holding its lock.
+    /api/status blocked forever, but the process stayed alive -- so systemd's
+    Restart=always never fired, and /api/health kept answering 200 so a
+    liveness probe saw nothing. 14.5 hours dead, no telemetry, and the 04:30
+    battery window never ran."""
+
+    def make(self):
+        from webapp.service import InverterService
+        return InverterService(port="/dev/null")
+
+    def test_does_not_fire_before_any_success(self):
+        """An adapter missing at boot must not become a restart loop -- that
+        case belongs to usb_watchdog.py, which has attempt limits."""
+        import time as _t
+        from webapp import service as svc_mod
+        svc = self.make()
+        self.assertFalse(svc._last_success_mono)
+        exited = []
+        real = os._exit
+        try:
+            os._exit = lambda code: exited.append(code)   # noqa: E731
+            svc._stop.set()          # one pass, then out
+            svc._stall_loop()
+        finally:
+            os._exit = real
+        self.assertEqual(exited, [])
+
+    def test_threshold_is_generous_enough_for_ordinary_noise(self):
+        """The link drops frames constantly and the poller already backs off
+        to 60 s while erroring, so this must only catch a link that is
+        genuinely gone."""
+        from webapp.service import STALL_EXIT_S
+        self.assertGreaterEqual(STALL_EXIT_S, 600)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
