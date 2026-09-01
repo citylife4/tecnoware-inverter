@@ -49,6 +49,8 @@ import sys
 import urllib.parse
 import urllib.request
 
+from webapp.atomic_write import write_json_atomic
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(HERE, ".notify_state.json")
 
@@ -65,7 +67,7 @@ class Notifier:
 
     def __init__(self, config: dict | None, state_file: str = STATE_FILE):
         cfg = (config or {}).get("telegram") or {}
-        self.enabled = bool(cfg.get("enabled")) and bool(cfg.get("token")) \
+        self.enabled = cfg.get("enabled") is True and bool(cfg.get("token")) \
             and bool(cfg.get("chat_id"))
         self.token = cfg.get("token")
         self.chat_id = cfg.get("chat_id")
@@ -102,11 +104,8 @@ class Notifier:
 
     def _save_state(self, state: dict) -> None:
         try:
-            tmp = self.state_file + ".tmp"
-            with open(tmp, "w") as fh:
-                json.dump(state, fh)
-            os.replace(tmp, self.state_file)
-        except OSError:
+            write_json_atomic(self.state_file, state)
+        except (OSError, TypeError):
             pass
 
     def on_change(self, key: str, value, text: str) -> bool:
@@ -115,11 +114,14 @@ class Notifier:
 
         `value` is what defines "the same situation" -- usually a short
         status string. Keep it coarse: including a timestamp or a voltage
-        would make every check a change and defeat the point.
+        would make every check a change and defeat the point. A failed send
+        is deliberately retried on the next check; otherwise one transient
+        Telegram outage could suppress the only alert for a standing fault.
         """
         state = self._state()
         entry = state.get(key)
-        if isinstance(entry, dict) and entry.get("value") == value:
+        if (isinstance(entry, dict) and entry.get("value") == value
+                and entry.get("sent") is True):
             return False
         sent = self.send(text)
         state[key] = {"value": value,
@@ -141,7 +143,11 @@ class Notifier:
         if state.get("_heartbeat") == today:
             return False
         sent = self.send(text)
-        state["_heartbeat"] = today
+        # Do not consume today's heartbeat on a failed send. The daemon may
+        # get another chance during this hour, which is exactly when a retry
+        # is useful.
+        if sent:
+            state["_heartbeat"] = today
         self._save_state(state)
         return sent
 

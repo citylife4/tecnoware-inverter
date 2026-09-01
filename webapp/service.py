@@ -20,6 +20,7 @@ observed on this hardware and is documented in CLAUDE.md:
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import threading
@@ -110,8 +111,11 @@ def parse_qpigs(raw: str) -> dict:
         if i >= len(parts):
             break
         try:
-            out[name] = conv(parts[i])
-        except ValueError:
+            value = conv(parts[i])
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError("non-finite numeric field")
+            out[name] = value
+        except (ValueError, OverflowError):
             # Keep the raw text rather than dropping the field, so a
             # firmware quirk shows up in the UI instead of silently vanishing.
             out[name] = parts[i]
@@ -530,10 +534,12 @@ class InverterService:
             age = time.monotonic() - self._last_success_mono
             if age < max(self.poll_interval * 3, 30):
                 v = snap.get("battery_voltage")
-                return v if isinstance(v, (int, float)) else None
+                return (v if isinstance(v, (int, float))
+                        and not isinstance(v, bool) and math.isfinite(v) else None)
         try:
             v = self.read_status().get("battery_voltage")
-            return v if isinstance(v, (int, float)) else None
+            return (v if isinstance(v, (int, float))
+                    and not isinstance(v, bool) and math.isfinite(v) else None)
         except InverterError:
             return None
 

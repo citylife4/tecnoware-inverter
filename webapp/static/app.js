@@ -22,6 +22,9 @@ const KIND_LABELS = {
 const $ = (sel) => document.querySelector(sel);
 const fmt = (v, digits = 1) =>
   (v === null || v === undefined || v === "") ? "—" : Number(v).toFixed(digits);
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+})[ch]);
 
 let pollTimer = null;
 let latestStatus = null;
@@ -272,9 +275,9 @@ async function loadAudit() {
   $("#audit-table tbody").innerHTML = data.audit.length
     ? data.audit.map((a) => `<tr>
         <td>${new Date(a.at).toLocaleString()}</td>
-        <td class="muted">${a.source || "manual"}</td>
-        <td><code>${a.command}</code></td>
-        <td class="${a.ok ? "" : "err"}">${a.response || "—"}</td></tr>`).join("")
+        <td class="muted">${esc(a.source || "manual")}</td>
+        <td><code>${esc(a.command)}</code></td>
+        <td class="${a.ok ? "" : "err"}">${esc(a.response || "—")}</td></tr>`).join("")
     : `<tr><td colspan="4" class="muted">Ainda não foram enviados comandos de escrita.</td></tr>`;
 }
 
@@ -295,10 +298,10 @@ async function loadRatings() {
   if (!d.ok) return;
   $("#ratings-table tbody").innerHTML = Object.entries(d.ratings).map(([k, v]) => {
     const extra = v.actual_volts !== undefined
-      ? ` <span class="muted">→ ${v.actual_volts} V no conjunto</span>`
-      : (v.label ? ` <span class="muted">(${UI_LABELS.batteryTypes[v.label] || v.label})</span>` : "");
-    return `<tr><td class="name">${UI_LABELS.ratings[k] || k.replace(/_/g, " ")}</td>
-            <td>${v.value} <span class="muted">${v.unit || ""}</span>${extra}</td></tr>`;
+      ? ` <span class="muted">→ ${esc(v.actual_volts)} V no conjunto</span>`
+      : (v.label ? ` <span class="muted">(${esc(UI_LABELS.batteryTypes[v.label] || v.label)})</span>` : "");
+    return `<tr><td class="name">${esc(UI_LABELS.ratings[k] || k.replace(/_/g, " "))}</td>
+            <td>${esc(v.value)} <span class="muted">${esc(v.unit || "")}</span>${extra}</td></tr>`;
   }).join("");
 }
 
@@ -308,7 +311,7 @@ function logConsole(text, cls = "") {
   const out = $("#console-out");
   const stamp = new Date().toLocaleTimeString();
   out.insertAdjacentHTML("afterbegin",
-    `<span class="${cls}">[${stamp}] ${text}</span>\n`);
+    `<span class="${esc(cls)}">[${stamp}] ${esc(text)}</span>\n`);
 }
 
 function describe(res) {
@@ -441,7 +444,8 @@ function markCurrentPriorities(lastKnown) {
 
 function fmtRule(r) {
   if (!r) return "nenhuma regra corresponde à hora atual";
-  return `${r.from}–${r.to} → PCP${r.pcp}${r.why ? ` (${r.why})` : ""}`;
+  return `${esc(r.from)}–${esc(r.to)} → PCP${esc(r.pcp)}`
+    + (r.why ? ` (${esc(r.why)})` : "");
 }
 
 function renderSchedule(state) {
@@ -457,9 +461,9 @@ function renderSchedule(state) {
   const body = $("#sched-table tbody");
   body.innerHTML = state.rules.length
     ? state.rules.map((r, i) => `<tr>
-        <td>${r.from}</td><td>${r.to}</td>
-        <td><span class="code">PCP${r.pcp}</span></td>
-        <td class="name">${r.why || ""}</td>
+        <td>${esc(r.from)}</td><td>${esc(r.to)}</td>
+        <td><span class="code">PCP${esc(r.pcp)}</span></td>
+        <td class="name">${esc(r.why || "")}</td>
         <td><button class="ghost" data-del="${i}">Remover</button></td></tr>`).join("")
     : `<tr><td colspan="5" class="muted">Ainda sem regras — adicione uma abaixo.</td></tr>`;
   body.querySelectorAll("[data-del]").forEach((b) => {
@@ -467,11 +471,11 @@ function renderSchedule(state) {
   });
 
   let cur = `<span class="muted">Regra ativa agora:</span> ${fmtRule(state.current_rule)}`;
-  if (state.override_reason) cur += `<br><span class="warn small">${state.override_reason}</span>`;
+  if (state.override_reason) cur += `<br><span class="warn small">${esc(state.override_reason)}</span>`;
   if (state.last_run) {
     const t = new Date(state.last_run.at).toLocaleTimeString();
     const cls = state.last_run.applied ? "ok" : (state.last_run.note.startsWith("error") ? "err" : "");
-    cur += `<br><span class="muted">Última verificação às ${t}:</span> <span class="${cls}">${state.last_run.note}</span>`;
+    cur += `<br><span class="muted">Última verificação às ${t}:</span> <span class="${cls}">${esc(state.last_run.note)}</span>`;
   }
   $("#sched-current").innerHTML = cur;
 }
@@ -615,8 +619,8 @@ function renderGridCharge(state) {
   if (state.last_run) {
     const t = new Date(state.last_run.at).toLocaleTimeString();
     const cls = state.last_run.applied ? "ok" : (state.last_run.note.startsWith("error") ? "err" : "");
-    cur += `<br><span class="muted">Última verificação às ${t}:</span> <span class="${cls}">${state.last_run.note}</span>`;
-    if (state.last_run.why) cur += `<br><span class="warn small">${state.last_run.why}</span>`;
+    cur += `<br><span class="muted">Última verificação às ${t}:</span> <span class="${cls}">${esc(state.last_run.note)}</span>`;
+    if (state.last_run.why) cur += `<br><span class="warn small">${esc(state.last_run.why)}</span>`;
   }
   $("#gc-current").innerHTML = cur;
 }
@@ -766,7 +770,7 @@ function renderBatteryWindow(state) {
   const parts = [];
   if (state.detail) {
     const tone = BW_REASON_TONE[state.reason] || "muted";
-    parts.push(`<span class="${tone === "muted" ? "muted" : ""}">${state.detail}</span>`);
+    parts.push(`<span class="${tone === "muted" ? "muted" : ""}">${esc(state.detail)}</span>`);
   }
   if (v !== null && v !== undefined && cfg.floor_voltage !== undefined) {
     const margin = v - cfg.floor_voltage;

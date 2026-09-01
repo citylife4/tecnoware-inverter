@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from datetime import datetime, time as dtime
@@ -40,6 +41,7 @@ from datetime import datetime, time as dtime
 import serial
 
 from transport import InverterConnection, InverterError
+from webapp.atomic_write import write_json_atomic
 
 VALID_PCP = {"00", "01", "02", "03"}
 STATE_FILE_DEFAULT = ".charge_schedule_state.json"
@@ -98,13 +100,17 @@ def read_status(conn: InverterConnection, attempts: int = 5) -> dict:
             time.sleep(0.5)
             continue
         try:
-            return {
+            status = {
                 "battery_voltage": float(parts[8]),
                 "charging_current": int(parts[9]),
                 "battery_capacity": int(parts[10]),
                 "pv_voltage": float(parts[13]),
             }
-        except ValueError as e:
+            if not all(math.isfinite(status[key])
+                       for key in ("battery_voltage", "pv_voltage")):
+                raise ValueError("non-finite numeric field")
+            return status
+        except (ValueError, OverflowError) as e:
             last_err = InverterError(f"unparsable QPIGS {raw!r}: {e}")
             time.sleep(0.5)
     raise InverterError(f"could not read a valid QPIGS after {attempts} tries: {last_err}")
@@ -120,7 +126,8 @@ def main() -> int:
                     help="apply even if it matches the last applied value")
     args = ap.parse_args()
 
-    cfg = json.load(open(args.config))
+    with open(args.config) as fh:
+        cfg = json.load(fh)
     rules = cfg["rules"]
     for r in rules:
         if r["pcp"] not in VALID_PCP:
@@ -147,14 +154,15 @@ def main() -> int:
             # Safety override: never leave the pack on solar-only if it is
             # already low -- that is how you flatten a battery overnight.
             floor = cfg.get("min_battery_voltage")
-            if target == "03" and floor is not None and status["battery_voltage"] < floor:
+            if target == "03" and floor is not None and status["battery_voltage"] <= floor:
                 target = "01"
-                why = (f"OVERRIDE: battery {status['battery_voltage']}V below "
+                why = (f"OVERRIDE: battery {status['battery_voltage']}V at or below "
                        f"{floor}V floor, forcing utility charging")
 
             state_path = cfg.get("state_file", STATE_FILE_DEFAULT)
             try:
-                last = json.load(open(state_path)).get("pcp")
+                with open(state_path) as fh:
+                    last = json.load(fh).get("pcp")
             except (OSError, ValueError):
                 last = None
 
@@ -172,8 +180,8 @@ def main() -> int:
                   f"cap {status['battery_capacity']}% pv {status['pv_voltage']}V")
 
             if ok:
-                json.dump({"pcp": target, "at": now.isoformat()},
-                          open(state_path, "w"))
+                write_json_atomic(
+                    state_path, {"pcp": target, "at": now.isoformat()})
                 after = read_status(conn)
                 print(f"   after : batt {after['battery_voltage']}V "
                       f"chg {after['charging_current']}A "

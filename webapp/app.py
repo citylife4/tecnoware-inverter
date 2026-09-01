@@ -91,12 +91,17 @@ def create_app(service, scheduler=None, grid_charge=None,
         return redirect(url_for("login", next=request.path))
 
     def require_json_write(fn):
-        """Writes must be JSON. This is the CSRF interlock -- see module docstring."""
+        """Writes must contain a JSON object. This is the CSRF interlock --
+        see the module docstring -- and also keeps malformed JSON from being
+        mistaken for an empty configuration update."""
         @functools.wraps(fn)
         def wrapper(*a, **kw):
             if not request.is_json:
                 return _fail("writes require Content-Type: application/json",
                              code="bad_content_type", status=415)
+            if not isinstance(request.get_json(silent=True), dict):
+                return _fail("request body must be a valid JSON object",
+                             code="bad_json", status=400)
             return fn(*a, **kw)
         return wrapper
 
@@ -275,8 +280,10 @@ def create_app(service, scheduler=None, grid_charge=None,
         if scheduler is None:
             return _no_scheduler()
         body = request.get_json(silent=True) or {}
-        enabled = bool(body.get("enabled", False))
         try:
+            enabled = body.get("enabled", False)
+            if not isinstance(enabled, bool):
+                raise ValueError("enabled must be a boolean")
             _check_schedule_enable(enabled)
             state = scheduler.set_state(enabled, body.get("rules", []))
         except CommandRejected as e:
@@ -309,7 +316,10 @@ def create_app(service, scheduler=None, grid_charge=None,
             return _no_grid_charge()
         body = request.get_json(silent=True) or {}
         try:
-            _check_gridcharge_enable(bool(body.get("enabled", False)),
+            enabled = body.get("enabled", False)
+            if not isinstance(enabled, bool):
+                raise ValueError("enabled must be a boolean")
+            _check_gridcharge_enable(enabled,
                                      str(body.get("mode", "exclusive")))
             state = grid_charge.set_config(body)
         except CommandRejected as e:
@@ -399,7 +409,10 @@ def create_app(service, scheduler=None, grid_charge=None,
         through the policy in safety.py first."""
         body = request.get_json(silent=True) or {}
         raw = str(body.get("command", "")).strip().upper()
-        confirm = bool(body.get("confirm", False))
+        # Only the JSON boolean true is an explicit confirmation. In
+        # particular, the string "false" must not become truthy and bypass
+        # confirmation for commands such as SOFF or REEP.
+        confirm = body.get("confirm") is True
         try:
             result = _run_command(raw, confirm)
         except CommandRejected as e:
@@ -415,7 +428,7 @@ def create_app(service, scheduler=None, grid_charge=None,
             return _fail(f"invalid {name} {value!r}", code="invalid_value",
                          valid=valid)
         try:
-            result = _run_command(prefix + value, bool(body.get("confirm", False)))
+            result = _run_command(prefix + value, body.get("confirm") is True)
         except CommandRejected as e:
             return _fail(e.message, code=e.code, status=409, hint=e.hint)
         except InverterError as e:
@@ -427,7 +440,7 @@ def create_app(service, scheduler=None, grid_charge=None,
     @app.route("/api/charger-priority", methods=["POST"])
     @require_json_write
     def api_charger_priority():
-        """PCP. 03 (solar-only) is refused below min_battery_voltage."""
+        """PCP. 03 (solar-only) is refused at or below min_battery_voltage."""
         return _priority_endpoint("PCP", safety.PCP_VALUES, "charger priority")
 
     @app.route("/api/output-priority", methods=["POST"])

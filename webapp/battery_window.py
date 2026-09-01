@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import threading
 from datetime import datetime, timezone
@@ -52,6 +53,7 @@ from datetime import datetime, timezone
 from charge_schedule import parse_hhmm, rule_active
 from transport import InverterError
 from webapp.atomic_write import write_json_atomic
+from webapp.safety import is_finite_number
 from webapp.trace import append_row
 
 GRID_POP = "00"       # utility first -- loads on grid, charger able to work
@@ -205,7 +207,8 @@ def validate_config(cfg: dict) -> dict:
     out = dict(DEFAULT_CONFIG)
     out.update(cfg)
 
-    out["enabled"] = bool(out["enabled"])
+    if not isinstance(out["enabled"], bool):
+        raise ValueError("enabled must be a boolean")
     for key in ("from", "to"):
         try:
             parse_hhmm(out[key])
@@ -215,8 +218,10 @@ def validate_config(cfg: dict) -> dict:
     for key in ("floor_voltage", "resume_voltage"):
         try:
             out[key] = float(out[key])
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             raise ValueError(f"{key} must be a number")
+        if not math.isfinite(out[key]):
+            raise ValueError(f"{key} must be finite")
     if out["floor_voltage"] < ABSOLUTE_FLOOR_V:
         raise ValueError(
             f"floor_voltage {out['floor_voltage']}V is below the "
@@ -226,9 +231,14 @@ def validate_config(cfg: dict) -> dict:
         raise ValueError("resume_voltage must be above floor_voltage, "
                          "otherwise the relay would toggle at the floor")
 
+    raw_confirmations = out["floor_confirmations"]
     try:
-        out["floor_confirmations"] = int(out["floor_confirmations"])
-    except (TypeError, ValueError):
+        out["floor_confirmations"] = int(raw_confirmations)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("floor_confirmations must be an integer")
+    if (isinstance(raw_confirmations, bool)
+            or (isinstance(raw_confirmations, float)
+                and not raw_confirmations.is_integer())):
         raise ValueError("floor_confirmations must be an integer")
     if out["floor_confirmations"] < 1:
         raise ValueError("floor_confirmations must be at least 1")
@@ -236,8 +246,10 @@ def validate_config(cfg: dict) -> dict:
     for key in ("poll_interval", "min_switch_interval"):
         try:
             out[key] = float(out[key])
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             raise ValueError(f"{key} must be a number")
+        if not math.isfinite(out[key]):
+            raise ValueError(f"{key} must be finite")
         if out[key] < 0:
             raise ValueError(f"{key} must not be negative")
     if out["poll_interval"] <= 0:
@@ -245,7 +257,8 @@ def validate_config(cfg: dict) -> dict:
     # min_switch_interval == 0 disables the anti-flap dwell, matching the
     # convention scheduler.py and grid_charge.py already use in tests.
 
-    out["daytime_enabled"] = bool(out["daytime_enabled"])
+    if not isinstance(out["daytime_enabled"], bool):
+        raise ValueError("daytime_enabled must be a boolean")
     for key in ("daytime_from", "daytime_to"):
         try:
             parse_hhmm(out[key])
@@ -255,8 +268,10 @@ def validate_config(cfg: dict) -> dict:
                 "daytime_min_switch_interval"):
         try:
             out[key] = float(out[key])
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             raise ValueError(f"{key} must be a number")
+        if not math.isfinite(out[key]):
+            raise ValueError(f"{key} must be finite")
     if out["daytime_exit_w"] >= out["daytime_enter_w"]:
         raise ValueError("daytime_exit_w must be below daytime_enter_w -- "
                          "they are a hysteresis band, and the signal's "
@@ -363,6 +378,10 @@ class BatteryWindow:
 
     # ---- API ------------------------------------------------------------
 
+    def _battery_voltage(self):
+        value = self.service.battery_voltage()
+        return value if is_finite_number(value) else None
+
     def get_state(self) -> dict:
         with self._lock:
             target, reason, detail = self._decide()
@@ -373,7 +392,7 @@ class BatteryWindow:
                 "detail": detail,
                 "recovering": self._recovering,
                 "below_floor_readings": self._below_floor,
-                "battery_voltage": self.service.battery_voltage(),
+                "battery_voltage": self._battery_voltage(),
                 # The device's own live QMOD letter, alongside our belief
                 # above -- a pure read, unlike _reconcile_with_device()
                 # (which only runs from a real tick), so the dashboard can
@@ -555,7 +574,7 @@ class BatteryWindow:
                 "carregamento por excedente a absorver — o carregador só "
                 "funciona com POP=00")
 
-        v = self.service.battery_voltage()
+        v = self._battery_voltage()
         if v is None:
             return GRID_POP, "unknown_voltage", (
                 "tensão da bateria ilegível — em POP=02 nada mais protege "
@@ -621,7 +640,7 @@ class BatteryWindow:
         # get_state() stays a pure read with no side effects.
         mismatch = self._reconcile_with_device()
 
-        v = self.service.battery_voltage()
+        v = self._battery_voltage()
         previous_runtime = (self._recovering, self._below_floor)
         if isinstance(v, (int, float)):
             when = (now or datetime.now()).time()

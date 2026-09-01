@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import threading
 import time
@@ -126,7 +127,8 @@ def validate_config(cfg: dict) -> dict:
     if unknown:
         raise ValueError(f"unknown config key(s): {sorted(unknown)}")
     out.update(cfg)
-    out["enabled"] = bool(out["enabled"])
+    if not isinstance(out["enabled"], bool):
+        raise ValueError("enabled must be a boolean")
 
     if out["mode"] not in MODES:
         raise ValueError(f"mode must be one of {list(MODES)}, got {out['mode']!r}")
@@ -139,11 +141,18 @@ def validate_config(cfg: dict) -> dict:
                "import_threshold_w", "min_switch_interval", "stale_after"):
         try:
             out[key] = float(out[key])
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             raise ValueError(f"{key} must be a number, got {cfg.get(key)!r}")
+        if not math.isfinite(out[key]):
+            raise ValueError(f"{key} must be finite, got {cfg.get(key)!r}")
 
     if out["poll_interval"] < 5:
         raise ValueError("poll_interval must be at least 5 seconds")
+    if out["http_timeout"] <= 0:
+        raise ValueError("http_timeout must be positive")
+    for key in ("min_switch_interval", "stale_after"):
+        if out[key] < 0:
+            raise ValueError(f"{key} must not be negative")
     if out["export_threshold_w"] >= out["import_threshold_w"]:
         raise ValueError("export_threshold_w must be lower than "
                          "import_threshold_w -- they define a hysteresis band")
@@ -317,6 +326,10 @@ class GridChargeController:
                     and self._config["mode"] == "override"
                     and self._desired == "charging"):
                 return False
+            if (self._last_fetch_ok_mono is None
+                    or time.monotonic() - self._last_fetch_ok_mono
+                    > self._config["stale_after"]):
+                return False
             signal = self._last_signal
             return (signal is not None
                     and signal <= self._config["export_threshold_w"])
@@ -348,19 +361,24 @@ class GridChargeController:
             resp = requests.get(cfg["source_url"], timeout=cfg["http_timeout"])
             resp.raise_for_status()
             latest = resp.json()["latest"]
+            if not isinstance(latest, dict):
+                raise ValueError("latest must be an object")
+            inv = latest.get("inverter_input_w")
+            sol = latest.get("ac_solar_w")
+            values = (float(latest["net_balance"]),
+                      None if inv is None else float(inv),
+                      None if sol is None else float(sol))
+            if any(v is not None and not math.isfinite(v) for v in values):
+                raise ValueError("non-finite live reading")
             # Stashed whole for webapp/energy_view.py. The control path only
             # needs two numbers, but the dashboard wants the solar/house
             # split too, and re-polling the same endpoint for it would be
             # a second HTTP call to say the same thing.
             with self._lock:
                 self._last_payload = latest
-            inv = latest.get("inverter_input_w")
-            sol = latest.get("ac_solar_w")
-            return (float(latest["net_balance"]),
-                    None if inv is None else float(inv),
-                    None if sol is None else float(sol),
-                    latest.get("timestamp"))
-        except (requests.RequestException, ValueError, KeyError, TypeError):
+            return (*values, latest.get("timestamp"))
+        except (requests.RequestException, ValueError, KeyError, TypeError,
+                OverflowError):
             return None, None, None, None
 
     def _evaluate(self):

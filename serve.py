@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import signal
 import sys
@@ -80,7 +81,10 @@ def load_config(path: str) -> dict:
             raw = fh.read()
         if raw.strip():
             try:
-                cfg.update(json.loads(raw))
+                decoded = json.loads(raw)
+                if not isinstance(decoded, dict):
+                    raise ValueError("top-level value must be an object")
+                cfg.update(decoded)
             except ValueError as e:
                 # Refuse rather than regenerate: silently minting a new token
                 # would lock out every client that already has the old one.
@@ -93,6 +97,15 @@ def load_config(path: str) -> dict:
 
     # Mint the secrets on first run rather than shipping a default token
     # that everyone would forget to change.
+    if not isinstance(cfg.get("allow_writes"), bool):
+        raise ConfigError("allow_writes must be a JSON boolean")
+    floor = cfg.get("min_battery_voltage")
+    if (floor is not None
+            and (isinstance(floor, bool)
+                 or not isinstance(floor, (int, float))
+                 or not math.isfinite(floor)
+                 or floor <= 0)):
+        raise ConfigError("min_battery_voltage must be a positive finite number or null")
     changed = False
     for key in ("token", "secret_key"):
         if not cfg.get(key):

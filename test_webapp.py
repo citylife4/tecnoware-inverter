@@ -228,6 +228,12 @@ class TestParsers(unittest.TestCase):
         with self.assertRaises(InverterError):
             parse_qpigs("(232.0 49.9 231.0")
 
+    def test_qpigs_does_not_accept_non_finite_voltage_as_numeric(self):
+        raw = SAMPLE_QPIGS.replace("24.20 000 050", "nan 000 050", 1)
+        status = parse_qpigs(raw)
+        self.assertEqual(status["battery_voltage"], "nan")
+        self.assertNotIn("battery_power_w", status)
+
     def test_qpiri_scales_12v_block_setpoints(self):
         r = parse_qpiri(SAMPLE_QPIRI)
         # 13.5 V per 12V block on a 24V pack -> 27.0 V actual
@@ -274,6 +280,12 @@ class TestPolicy(unittest.TestCase):
                                 battery_voltage=23.4, min_battery_voltage=24.0)
         self.assertEqual(cm.exception.code, "battery_too_low")
 
+    def test_solar_only_blocked_exactly_at_floor(self):
+        with self.assertRaises(CommandRejected) as cm:
+            safety.check_policy("PCP03", confirm=False, allow_writes=True,
+                                battery_voltage=24.0, min_battery_voltage=24.0)
+        self.assertEqual(cm.exception.code, "battery_too_low")
+
     def test_solar_only_allowed_above_floor(self):
         info = safety.check_policy("PCP03", confirm=False, allow_writes=True,
                                    battery_voltage=26.5, min_battery_voltage=24.0)
@@ -281,10 +293,12 @@ class TestPolicy(unittest.TestCase):
 
     def test_solar_only_blocked_when_voltage_unknown(self):
         # Unknown voltage must fail closed, not open.
-        with self.assertRaises(CommandRejected) as cm:
-            safety.check_policy("PCP03", confirm=False, allow_writes=True,
-                                battery_voltage=None, min_battery_voltage=24.0)
-        self.assertEqual(cm.exception.code, "battery_unknown")
+        for voltage in (None, float("nan"), float("inf"), True):
+            with self.subTest(voltage=voltage), self.assertRaises(CommandRejected) as cm:
+                safety.check_policy("PCP03", confirm=False, allow_writes=True,
+                                    battery_voltage=voltage,
+                                    min_battery_voltage=24.0)
+            self.assertEqual(cm.exception.code, "battery_unknown")
 
     def test_other_pcp_values_unaffected_by_floor(self):
         for value in ("00", "01", "02"):
@@ -321,6 +335,22 @@ class TestApi(unittest.TestCase):
     def test_writes_require_json_content_type(self):
         r = self.client.post("/api/command", data="command=SOFF", headers=AUTH)
         self.assertEqual(r.status_code, 415)
+
+    def test_writes_reject_malformed_or_non_object_json(self):
+        for payload in ("{", "[]", '"command=SOFF"'):
+            with self.subTest(payload=payload):
+                r = self.client.post("/api/command", data=payload,
+                                     content_type="application/json", headers=AUTH)
+                self.assertEqual(r.status_code, 400)
+                self.assertEqual(r.get_json()["code"], "bad_json")
+        self.assertEqual(self.service.sent, [])
+
+    def test_confirmation_requires_the_json_boolean_true(self):
+        r = post(self.client, "/api/command",
+                 {"command": "SOFF", "confirm": "false"})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.get_json()["code"], "confirmation_required")
+        self.assertEqual(self.service.sent, [])
 
     def test_charger_priority_write(self):
         r = post(self.client, "/api/charger-priority", {"value": "01"})
@@ -516,6 +546,15 @@ class TestOverrideMode(unittest.TestCase):
         self.assertTrue(gc.is_overriding())
         stub.net_balance = 400          # a importar
         gc.tick()
+        self.assertFalse(gc.is_overriding())
+
+    def test_stale_export_does_not_keep_overriding(self):
+        _, _, gc, _ = self.make_pair(-300)
+        gc.set_config({"mode": "override", "enabled": True,
+                       "export_threshold_w": -150, "stale_after": 120,
+                       "min_switch_interval": 0})
+        self.assertTrue(gc.is_overriding())
+        gc._last_fetch_ok_mono -= 121
         self.assertFalse(gc.is_overriding())
 
     # ---- who writes PCP ----
@@ -905,6 +944,12 @@ class TestScheduler(unittest.TestCase):
         _, sched = self.make()
         self.assertFalse(sched.get_state()["enabled"])
 
+    def test_non_boolean_enabled_in_state_file_fails_disabled(self):
+        with open(self.path, "w") as fh:
+            json.dump({"enabled": "false", "rules": []}, fh)
+        _, sched = self.make()
+        self.assertFalse(sched.get_state()["enabled"])
+
 
 class TestScheduleApi(unittest.TestCase):
     def setUp(self):
@@ -1008,6 +1053,18 @@ class TestGridChargeValidation(unittest.TestCase):
     def test_rejects_too_fast_polling(self):
         with self.assertRaises(ValueError):
             validate_config({"poll_interval": 1})
+
+    def test_rejects_non_boolean_enabled(self):
+        with self.assertRaises(ValueError):
+            validate_config({"enabled": "false"})
+
+    def test_rejects_non_finite_or_negative_timing_values(self):
+        for cfg in ({"export_threshold_w": float("nan")},
+                    {"http_timeout": 0},
+                    {"min_switch_interval": -1},
+                    {"stale_after": -1}):
+            with self.subTest(cfg=cfg), self.assertRaises(ValueError):
+                validate_config(cfg)
 
 
 class TestGridChargeController(unittest.TestCase):
@@ -1477,6 +1534,26 @@ class TestConfigDurability(unittest.TestCase):
         with self.assertRaises(serve.ConfigError):
             serve.load_config(self.path)
 
+    def test_non_object_config_is_reported_as_a_config_error(self):
+        with open(self.path, "w") as fh:
+            fh.write("[]")
+        with self.assertRaises(serve.ConfigError):
+            serve.load_config(self.path)
+
+    def test_non_boolean_allow_writes_is_reported_as_a_config_error(self):
+        with open(self.path, "w") as fh:
+            json.dump({"allow_writes": "false"}, fh)
+        with self.assertRaises(serve.ConfigError):
+            serve.load_config(self.path)
+
+    def test_invalid_battery_floor_is_reported_as_a_config_error(self):
+        for value in ("24", float("nan"), 0, True):
+            with self.subTest(value=value):
+                with open(self.path, "w") as fh:
+                    json.dump({"min_battery_voltage": value}, fh)
+                with self.assertRaises(serve.ConfigError):
+                    serve.load_config(self.path)
+
     def test_save_leaves_no_temp_file_behind(self):
         serve.load_config(self.path)
         self.assertEqual(sorted(os.listdir(self.dir)), ["web.json"])
@@ -1485,11 +1562,13 @@ class TestConfigDurability(unittest.TestCase):
         # If serialisation blows up mid-write, the existing config must be
         # left intact rather than truncated.
         cfg = serve.load_config(self.path)
-        original = open(self.path).read()
+        with open(self.path) as fh:
+            original = fh.read()
         cfg["bad"] = {1, 2}          # a set is not JSON-serialisable
         with self.assertRaises(TypeError):
             serve.save_config(self.path, cfg)
-        self.assertEqual(open(self.path).read(), original)
+        with open(self.path) as fh:
+            self.assertEqual(fh.read(), original)
         self.assertEqual(sorted(os.listdir(self.dir)), ["web.json"])
 
 
@@ -1731,12 +1810,14 @@ class TestBatteryWindow(unittest.TestCase):
             validate_window_config({"floor_confirmations": 0})
 
     def test_unreadable_voltage_goes_to_grid(self):
-        service, bw = self.make(battery_voltage=None)
-        self.enable(bw)
-        service.sent.clear()
-        r = bw.tick(now=self.NIGHT)
-        self.assertEqual(r["target"], GRID_POP)
-        self.assertEqual(r["reason"], "unknown_voltage")
+        for voltage in (None, float("nan"), float("inf"), True):
+            with self.subTest(voltage=voltage):
+                service, bw = self.make(battery_voltage=voltage)
+                self.enable(bw)
+                service.sent.clear()
+                r = bw.tick(now=self.NIGHT)
+                self.assertEqual(r["target"], GRID_POP)
+                self.assertEqual(r["reason"], "unknown_voltage")
 
     def test_yields_while_grid_charge_absorbs_export(self):
         """The charger only runs at POP=00, so battery mode and absorbing
@@ -2149,6 +2230,16 @@ class TestBatteryWindowValidation(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_window_config({"nonsense": 1})
 
+    def test_rejects_non_boolean_or_non_finite_safety_values(self):
+        for cfg in ({"enabled": "false"},
+                    {"daytime_enabled": "false"},
+                    {"floor_voltage": float("nan")},
+                    {"daytime_enter_w": float("inf")},
+                    {"floor_confirmations": float("inf")},
+                    {"floor_confirmations": 2.5}):
+            with self.subTest(cfg=cfg), self.assertRaises(ValueError):
+                validate_window_config(cfg)
+
     def test_bad_time_is_refused(self):
         with self.assertRaises(ValueError):
             validate_window_config({"from": "25:99"})
@@ -2436,6 +2527,12 @@ class TestNotifier(unittest.TestCase):
         self.assertFalse(n.send("anything"))       # must not raise
         self.assertFalse(n.on_change("k", "v", "t"))
 
+    def test_string_false_does_not_enable_notifications(self):
+        from notify import Notifier
+        n = Notifier({"telegram": {"enabled": "false", "token": "t",
+                                    "chat_id": "c"}}, state_file=self.state)
+        self.assertFalse(n.enabled)
+
     def test_send_failure_does_not_raise(self):
         """An alerting channel that can break the thing it watches is worse
         than no alerting channel."""
@@ -2444,6 +2541,25 @@ class TestNotifier(unittest.TestCase):
                                    "chat_id": "c"}}, state_file=self.state)
         # Real send against an unroutable host, short timeout via bad token.
         self.assertFalse(n.send("x"))              # must not raise
+
+    def test_failed_change_notification_is_retried(self):
+        n = self.make()
+        outcomes = iter((False, True))
+        n.send = lambda text: (self.sent.append(text), next(outcomes))[1]
+        self.assertFalse(n.on_change("link", "down", "fault"))
+        self.assertTrue(n.on_change("link", "down", "fault"))
+        self.assertFalse(n.on_change("link", "down", "fault"))
+        self.assertEqual(self.sent, ["fault", "fault"])
+
+    def test_failed_heartbeat_is_retried_during_its_hour(self):
+        now = dt.datetime.now().hour
+        n = self.make(heartbeat_hour=now)
+        outcomes = iter((False, True))
+        n.send = lambda text: (self.sent.append(text), next(outcomes))[1]
+        self.assertFalse(n.heartbeat("alive"))
+        self.assertTrue(n.heartbeat("alive"))
+        self.assertFalse(n.heartbeat("alive"))
+        self.assertEqual(self.sent, ["alive", "alive"])
 
     def test_corrupt_state_file_does_not_lose_alerting(self):
         with open(self.state, "w") as fh:

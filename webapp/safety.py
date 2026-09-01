@@ -13,6 +13,8 @@ command is allowed to reach transport.py.
 
 from __future__ import annotations
 
+import math
+
 from commands import QUERY_COMMANDS, SET_COMMANDS
 
 # Set commands that are recoverable and routinely useful: priorities,
@@ -77,6 +79,12 @@ OUTPUT_PRIORITY_VALUES = {
 SOLAR_ONLY_PCP = "03"
 
 
+def is_finite_number(value) -> bool:
+    return (isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value))
+
+
 def apply_low_battery_floor(service, target: str):
     """If `target` is the solar-only PCP and the battery is at/under
     `service.min_battery_voltage` (or unreadable), force utility-fallback
@@ -93,12 +101,15 @@ def apply_low_battery_floor(service, target: str):
     floor = service.min_battery_voltage
     if floor is None:
         return target, None
+    if not is_finite_number(floor):
+        return "01", ("OVERRIDE: battery safety floor is invalid -- "
+                      "forcing utility charging rather than risk solar-only")
     v = service.battery_voltage()
-    if v is None:
+    if not is_finite_number(v):
         return "01", ("OVERRIDE: battery voltage could not be read -- "
                       "forcing utility charging rather than risk solar-only")
-    if v < floor:
-        return "01", (f"OVERRIDE: battery {v:.2f}V below {floor:.2f}V floor "
+    if v <= floor:
+        return "01", (f"OVERRIDE: battery {v:.2f}V at or below {floor:.2f}V floor "
                       f"-- forcing utility charging")
     return target, None
 
@@ -196,16 +207,22 @@ def check_policy(raw: str, confirm: bool, allow_writes: bool,
 
     if info["prefix"] == "PCP" and info["command"][3:5] == SOLAR_ONLY_PCP:
         if min_battery_voltage is not None:
-            if battery_voltage is None:
+            if not is_finite_number(min_battery_voltage):
+                raise CommandRejected(
+                    "refusing PCP03 (solar-only) because the configured battery "
+                    "safety floor is invalid",
+                    hint="fix min_battery_voltage in the server config",
+                    code="battery_floor_invalid")
+            if not is_finite_number(battery_voltage):
                 raise CommandRejected(
                     "refusing PCP03 (solar-only) because battery voltage could "
                     "not be read to check it against the safety floor",
                     hint="fix the QPIGS read first, or lower/remove min_battery_voltage",
                     code="battery_unknown")
-            if battery_voltage < min_battery_voltage:
+            if battery_voltage <= min_battery_voltage:
                 raise CommandRejected(
                     f"refusing PCP03 (solar-only): battery is {battery_voltage:.2f}V, "
-                    f"below the {min_battery_voltage:.2f}V safety floor. Solar-only "
+                    f"at or below the {min_battery_voltage:.2f}V safety floor. Solar-only "
                     f"charging with no sun will keep draining the pack.",
                     hint="use PCP01 (solar first, utility fallback) instead",
                     code="battery_too_low")

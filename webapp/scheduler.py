@@ -101,7 +101,12 @@ class Scheduler:
             if not raw.strip():
                 return dict(DEFAULT_STATE)
             data = json.loads(raw)
-            return {"enabled": bool(data.get("enabled", False)),
+            if not isinstance(data, dict):
+                raise ValueError("state must be an object")
+            enabled = data.get("enabled", False)
+            if not isinstance(enabled, bool):
+                raise ValueError("enabled must be a boolean")
+            return {"enabled": enabled,
                     "rules": validate_rules(data.get("rules", []))}
         except (ValueError, OSError):
             # A corrupt or unreadable state file shouldn't crash the server
@@ -134,6 +139,8 @@ class Scheduler:
             }
 
     def set_state(self, enabled: bool, rules: list) -> dict:
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be a boolean")
         rules = validate_rules(rules)
         with self._lock:
             self._state = {"enabled": bool(enabled), "rules": rules}
