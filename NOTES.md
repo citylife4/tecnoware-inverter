@@ -663,6 +663,37 @@ this project's `/api/*` (token in `web.json`). Keep the inverter UI on
 `grid_charge` `source_url` is `http://127.0.0.1:8000/api/live`. Stale
 reading still means idle.
 
+### The daytime window's threshold was set from the wrong end — 2026-09-01
+
+`daytime_enter_w` shipped at 150 W. Measured over the afternoon of
+2026-09-01 (15:04-19:00, all the data there is for that day — the service
+was dead until 15:04), the surplus signal never got near it:
+
+    min -128   p25 -102   median -25   p75 +26   max +94   (n=467)
+
+    above 150 W:   0 samples   (0%)
+    above  80 W:  96 samples  (21%)
+
+So the window could not have opened on any sample that day. 150 W was
+above the observed maximum, not merely conservative. Lowered to **80 W**;
+`daytime_exit_w` stays at 50 W.
+
+The thresholds still cannot collide with the charger: the window leaves
+battery mode below 50 W and the charger only starts at or below 30 W, so
+there is a 20 W gap between them. That separation is what makes the
+number safe to lower, not the yield interlock — though as of today that
+interlock is finally live too (it was wired to `is_overriding()`, which is
+always False in `mode="exclusive"`; it now asks `is_absorbing_export()`).
+
+One afternoon is not a season. Re-read
+`telemetry/gridcharge-*.csv` with `read_telemetry.py` after a few full
+days before moving it again — this is the third threshold on this
+installation to be guessed wrong on the first try.
+
+Same day, the export charger did work correctly: one clean span
+15:04 → 17:30 (2 h 26), two state changes all day, no flapping.
+
+
 ---
 
 ### Open, roughly by importance
