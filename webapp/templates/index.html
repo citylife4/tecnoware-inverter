@@ -322,6 +322,29 @@
         <button class="ghost" id="bw-apply-now">Aplicar agora</button>
       </div>
 
+      <h3>Janela diurna (condicional)</h3>
+      <label class="chk"><input type="checkbox" id="bw-daytime-enabled">
+        Usar a bateria também de dia, quando for seguro</label>
+      <div class="control-grid">
+        <label class="field">Das
+          <input type="time" id="bw-daytime-from"></label>
+        <label class="field">Às
+          <input type="time" id="bw-daytime-to"></label>
+        <label class="field">Entrar acima de (W)
+          <input type="number" id="bw-daytime-enter" step="1"></label>
+        <label class="field">Sair abaixo de (W)
+          <input type="number" id="bw-daytime-exit" step="1"></label>
+      </div>
+      <p class="muted small">De dia, passar as cargas para a bateria
+        <strong>aumenta</strong> a exportação: o inversor deixa de puxar da
+        rede, e o contador desce na mesma medida. Por isso esta janela só
+        abre quando o <em>saldo sem o inversor</em> está acima do valor de
+        entrada &mdash; esse saldo é exactamente o que o contador passa a
+        marcar em modo bateria, portanto positivo garante que descarregar não
+        provoca exportação. Nessas alturas descarregar poupa compra à rede e
+        abre espaço para absorver mais tarde. Dois valores em vez de um
+        porque a mediana diurna anda perto de zero e um só oscilaria.</p>
+
       <h3>Horário da bomba</h3>
       <div class="control-grid">
         <label class="field">Bomba começa às

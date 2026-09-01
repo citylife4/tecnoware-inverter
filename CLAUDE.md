@@ -303,6 +303,33 @@ corrupt `QPIGS` frames (gotcha #8), and **the pack sags ~0.4 V while the
 fridge compressor runs at only 46 W** (measured — see NOTES.md). Either would end a
 night's discharge on a value that was never the pack's real state.
 
+### The conditional daytime window
+
+Added 2026-09-01. A second window (`daytime_*` keys) that discharges during
+daylight, but **only while the surplus signal says it is safe**.
+
+The signal is `net_balance - inverter_input_w`, which is exactly the grid
+balance the house would show with the inverter drawing nothing — i.e. what
+the meter reads the moment the loads move to the pack. So a positive signal
+is a direct guarantee that discharging cannot push the meter into export,
+and a negative one is a direct prediction of how much it would.
+
+Measured on this house: the daytime signal is above 0 W for **47%** of
+samples and its median sits at **−7 W**. Hence two thresholds
+(`daytime_enter_w` 150, `daytime_exit_w` 50) rather than one — a single
+threshold would chatter across that median — and a much larger dwell
+(`daytime_min_switch_interval`, 1200 s) than the nightly window needs, since
+this one crosses its band far more often.
+
+Everything else still applies: the pump block, the voltage floor (whose
+counter now runs during either window, not just the nightly one), and the
+yield to `grid_charge`. A missing or stale signal keeps the window shut.
+
+Note the latch's release stays keyed to the **nightly** window, so "one
+discharge per night" survives while the daytime mode is free to cycle as
+conditions allow — cycling is that mode's whole point, and it is bounded by
+the signal condition anyway.
+
 ### A daytime battery window can CAUSE export
 
 Observed 2026-08-25 while the test window was open in daylight: with the

@@ -271,6 +271,24 @@ class GridChargeController:
                 self._tick(force=True)
         return self.get_state()
 
+    def last_signal(self):
+        """(signal_w, fresh) -- the surplus signal and whether the reading
+        behind it is recent enough to act on.
+
+        The signal is `net_balance - inverter_input_w`, which makes it
+        exactly the grid balance the house would show **if this inverter
+        drew nothing** -- i.e. what it becomes the moment the loads move to
+        the battery. That is why BatteryWindow uses it to decide whether a
+        daytime discharge is safe: a positive signal means the house would
+        still be importing without the inverter, so removing its load cannot
+        push the meter into export.
+        """
+        with self._lock:
+            if self._last_signal is None or self._last_fetch_ok_mono is None:
+                return None, False
+            age = time.monotonic() - self._last_fetch_ok_mono
+            return self._last_signal, age <= self._config["stale_after"]
+
     def last_live_payload(self):
         """The most recent auto-energy `latest` dict, or None. Read-only
         view for the dashboard -- see webapp/energy_view.py."""

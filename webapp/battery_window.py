@@ -139,6 +139,32 @@ DEFAULT_CONFIG = {
     # POP throws a physical relay -- audible, and mechanical wear. Much
     # more conservative than the PCP controllers' dwell.
     "min_switch_interval": 600.0,
+    # A second, CONDITIONAL window for daylight hours. Off by default.
+    #
+    # A daytime discharge is normally the wrong thing here: moving the loads
+    # to the pack removes the inverter's draw from the meter, so the house
+    # exports *more* while it runs. Measured 2026-09-01 at 16:14 -- grid
+    # -50 W, inverter drawing 52 W, so battery mode would have taken export
+    # to -102 W.
+    #
+    # But the surplus signal says exactly when that is not true. It equals
+    # the grid balance the house would show with the inverter drawing
+    # nothing, which is precisely what battery mode produces. Positive
+    # signal means the house would still be importing, so discharging is
+    # free of export risk -- and it uses stored energy and opens absorption
+    # headroom for later. On this house that holds for ~47% of daylight
+    # samples.
+    #
+    # Two thresholds, not one: the signal's daytime median sits near zero
+    # (-7 W measured), so a single one would chatter across it.
+    "daytime_enabled": False,
+    "daytime_from": "08:00",
+    "daytime_to": "19:00",
+    "daytime_enter_w": 150.0,   # enter battery only well clear of export
+    "daytime_exit_w": 50.0,     # leave as soon as the margin thins
+    # POP throws a physical relay, and daytime conditions cross the band far
+    # more often than the once-a-night pattern this class started with.
+    "daytime_min_switch_interval": 1200.0,
     # The pump's hours. Defaults to DEFAULT_PUMP_WINDOW; a config written
     # before this key existed inherits it rather than losing the block.
     "pump_window": [dict(w) for w in DEFAULT_PUMP_WINDOW],
@@ -219,6 +245,25 @@ def validate_config(cfg: dict) -> dict:
     # min_switch_interval == 0 disables the anti-flap dwell, matching the
     # convention scheduler.py and grid_charge.py already use in tests.
 
+    out["daytime_enabled"] = bool(out["daytime_enabled"])
+    for key in ("daytime_from", "daytime_to"):
+        try:
+            parse_hhmm(out[key])
+        except (ValueError, AttributeError, TypeError):
+            raise ValueError(f"{key} must be \"HH:MM\" (24h), got {out[key]!r}")
+    for key in ("daytime_enter_w", "daytime_exit_w",
+                "daytime_min_switch_interval"):
+        try:
+            out[key] = float(out[key])
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} must be a number")
+    if out["daytime_exit_w"] >= out["daytime_enter_w"]:
+        raise ValueError("daytime_exit_w must be below daytime_enter_w -- "
+                         "they are a hysteresis band, and the signal's "
+                         "daytime median sits near zero")
+    if out["daytime_min_switch_interval"] < 0:
+        raise ValueError("daytime_min_switch_interval must not be negative")
+
     out["forbidden"] = _validate_windows(out["forbidden"], "forbidden")
     out["pump_window"] = _validate_windows(out["pump_window"], "pump_window")
     return out
@@ -237,7 +282,7 @@ class BatteryWindow:
     lock, retries and audit log with every other write source."""
 
     def __init__(self, service, path: str, override_check=None,
-                 trace_dir=None):
+                 trace_dir=None, signal_source=None):
         self.service = service
         self.path = path
         # One CSV per day of what was decided and why. The telemetry log
@@ -248,6 +293,11 @@ class BatteryWindow:
         # Callable returning True while grid_charge is absorbing export.
         # The charger only works at POP=00, so battery mode has to yield.
         self._override_check = override_check
+        # Callable returning (signal_w, fresh) -- see
+        # GridChargeController.last_signal(). Only the conditional daytime
+        # window uses it; without it that window simply never opens, which
+        # is the safe direction.
+        self._signal_source = signal_source
 
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -450,6 +500,21 @@ class BatteryWindow:
         self._pop_drift_writes = 0
         return None
 
+    def _surplus_signal(self):
+        """(signal, fresh), or (None, False) when it cannot be had. A missing
+        or stale reading must never open the daytime window: without it there
+        is no way to know that discharging would not push the meter into
+        export."""
+        if self._signal_source is None:
+            return None, False
+        try:
+            signal, fresh = self._signal_source()
+        except Exception:
+            return None, False
+        if not isinstance(signal, (int, float)):
+            return None, False
+        return signal, bool(fresh)
+
     def _decide(self, now=None):
         """Return (target_pop, reason, detail). Every path that is not a
         clean 'battery window is open' returns GRID_POP."""
@@ -466,7 +531,11 @@ class BatteryWindow:
         # showed 33 ticks of "yielding" during an afternoon when the window
         # was shut and nothing was being yielded. Everything below this line
         # therefore only applies when the window is genuinely open.
-        if not rule_active(t, parse_hhmm(cfg["from"]), parse_hhmm(cfg["to"])):
+        in_night = rule_active(t, parse_hhmm(cfg["from"]), parse_hhmm(cfg["to"]))
+        in_day = (cfg["daytime_enabled"] and
+                  rule_active(t, parse_hhmm(cfg["daytime_from"]),
+                              parse_hhmm(cfg["daytime_to"])))
+        if not in_night and not in_day:
             return GRID_POP, "outside", (
                 f"fora da janela {cfg['from']}-{cfg['to']}")
 
@@ -509,6 +578,31 @@ class BatteryWindow:
                 f"já descarregou nesta janela ({v:.2f}V) — "
                 f"só volta à bateria na próxima")
 
+        if not in_night:
+            # Daytime hours: allowed only while the surplus signal says the
+            # house would still be importing without this inverter. That
+            # signal IS the grid balance battery mode produces, so a
+            # positive one is a direct guarantee that discharging cannot
+            # push the meter into export.
+            signal, fresh = self._surplus_signal()
+            if signal is None or not fresh:
+                return GRID_POP, "daytime_unknown", (
+                    "sem leitura fiável do saldo da rede — não dá para "
+                    "garantir que descarregar não provoca exportação")
+            # Hysteresis: enter well clear of export, leave as soon as the
+            # margin thins. The daytime median sits near zero, so a single
+            # threshold would chatter across it.
+            threshold = (cfg["daytime_exit_w"]
+                         if self._last_applied_pop == BATTERY_POP
+                         else cfg["daytime_enter_w"])
+            if signal < threshold:
+                return GRID_POP, "daytime_surplus", (
+                    f"saldo sem o inversor {signal:.0f}W < {threshold:.0f}W "
+                    f"— descarregar agora aumentaria a exportação")
+            return BATTERY_POP, "daytime", (
+                f"janela diurna {cfg['daytime_from']}-{cfg['daytime_to']}, "
+                f"saldo sem o inversor {signal:.0f}W, bateria {v:.2f}V")
+
         return BATTERY_POP, "window", (
             f"janela {cfg['from']}-{cfg['to']}, bateria {v:.2f}V")
 
@@ -531,8 +625,15 @@ class BatteryWindow:
         previous_runtime = (self._recovering, self._below_floor)
         if isinstance(v, (int, float)):
             when = (now or datetime.now()).time()
-            in_window = rule_active(when, parse_hhmm(cfg["from"]),
-                                    parse_hhmm(cfg["to"]))
+            in_night = rule_active(when, parse_hhmm(cfg["from"]),
+                                   parse_hhmm(cfg["to"]))
+            # The floor must count during ANY window that can discharge,
+            # not just the nightly one -- otherwise a daytime discharge runs
+            # with no floor protection at all.
+            in_window = in_night or (
+                cfg["daytime_enabled"] and
+                rule_active(when, parse_hhmm(cfg["daytime_from"]),
+                            parse_hhmm(cfg["daytime_to"])))
             # Only count while the window is open. Outside it the pack is
             # on the charger and its terminal voltage says nothing about
             # state of charge -- counting there would latch the window shut
@@ -547,9 +648,13 @@ class BatteryWindow:
             if (not self._recovering
                     and self._below_floor >= cfg["floor_confirmations"]):
                 self._recovering = True
-            elif (self._recovering and not in_window
+            elif (self._recovering and not in_night
                     and v >= cfg["resume_voltage"]):
-                # Window closed and the pack is back up: arm for tonight.
+                # Nightly window closed and the pack is back up: re-arm.
+                # Keyed to the nightly window only, so "one discharge per
+                # night" survives while the daytime mode is still free to
+                # cycle as conditions allow -- cycling is that mode's whole
+                # point, and it is bounded by the signal condition anyway.
                 self._recovering = False
                 self._below_floor = 0
         if previous_runtime != (self._recovering, self._below_floor):
@@ -579,7 +684,12 @@ class BatteryWindow:
                   "device_mismatch": mismatch}
 
         now_mono = _time.monotonic()
-        dwell_ok = (now_mono - self._last_switch_mono) >= cfg["min_switch_interval"]
+        # The daytime mode crosses its band far more often than the nightly
+        # window changes state, so it gets its own, larger dwell.
+        dwell = (cfg["daytime_min_switch_interval"]
+                 if reason in ("daytime", "daytime_surplus")
+                 else cfg["min_switch_interval"])
+        dwell_ok = (now_mono - self._last_switch_mono) >= dwell
         # Going back to utility is a safety action; it never waits out the
         # anti-flap timer. Only ENTERING battery mode is debounced -- that is
         # the direction that costs a relay throw for no safety benefit.
@@ -598,6 +708,10 @@ class BatteryWindow:
             # time this fires; the write only converges our own belief with
             # it. No reason to make that wait out a relay-wear cooldown.
             "hardware_override",
+            # Leaving battery because the export margin thinned is a
+            # compliance action: every tick spent waiting is a tick spent
+            # exporting. Same reasoning as "yielding".
+            "daytime_surplus", "daytime_unknown",
             # Re-asserting POP after it drifted out of sync is corrective,
             # not discretionary: every tick spent waiting is a tick the pack
             # is being cycled by the device instead of by us.
@@ -611,7 +725,7 @@ class BatteryWindow:
             result["note"] = f"já em POP{target}; nada a fazer"
             result["applied"] = True
         elif not force and not urgent and not dwell_ok:
-            remaining = round(cfg["min_switch_interval"] - (now_mono - self._last_switch_mono), 1)
+            remaining = round(dwell - (now_mono - self._last_switch_mono), 1)
             result["note"] = f"a aguardar {remaining}s (anti-flap do relé)"
         else:
             try:

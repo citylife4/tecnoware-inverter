@@ -704,6 +704,10 @@ const BW_FIELDS = [
   ["bw-poll-interval", "poll_interval", "num"],
   ["bw-min-switch", "min_switch_interval", "num"],
   ["bw-floor-confirmations", "floor_confirmations", "num"],
+  ["bw-daytime-from", "daytime_from", "str"],
+  ["bw-daytime-to", "daytime_to", "str"],
+  ["bw-daytime-enter", "daytime_enter_w", "num"],
+  ["bw-daytime-exit", "daytime_exit_w", "num"],
 ];
 
 /* Qual dos travões está a decidir. `detail` já vem em pt-PT do servidor, por
@@ -731,6 +735,9 @@ function renderBatteryWindow(state) {
     if (!el || document.activeElement === el) return;
     el.value = cfg[key];
   });
+
+  const dayBox = document.querySelector("#bw-daytime-enabled");
+  if (dayBox && document.activeElement !== dayBox) dayBox.checked = !!cfg.daytime_enabled;
 
   const absEl = document.querySelector("#bw-abs-floor");
   if (absEl && state.absolute_floor_v !== undefined) absEl.textContent = state.absolute_floor_v;
@@ -852,7 +859,9 @@ async function saveBatteryWindow(overrides) {
   else if (!from && !to) pump_window = [];
   else pump_window = (batteryWindowState.config || {}).pump_window || [];
 
+  const dayEl = document.querySelector("#bw-daytime-enabled");
   const body = { ...values, ...overrides, pump_window,
+                 daytime_enabled: dayEl ? dayEl.checked : false,
                  forbidden: (batteryWindowState.config || {}).forbidden || [] };
   const d = await api("/api/battery-window", { method: "PUT", body: JSON.stringify(body) });
   if (d.ok) { batteryWindowState = d; renderBatteryWindow(d); }

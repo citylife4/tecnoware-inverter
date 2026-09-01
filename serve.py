@@ -167,7 +167,11 @@ def main() -> int:
     # lutarem pelo mesmo relé. Mesmo padrão que o agendamento usa acima.
     battery_window = BatteryWindow(service, path=cfg["battery_window_config"],
                                    override_check=grid_charge.is_overriding,
-                                   trace_dir=cfg.get("gridcharge_trace_dir"))
+                                   trace_dir=cfg.get("gridcharge_trace_dir"),
+                                   # A janela diurna condicional decide sobre
+                                   # o mesmo sinal que o excedente usa -- ver
+                                   # GridChargeController.last_signal().
+                                   signal_source=grid_charge.last_signal)
 
     scheduler = Scheduler(service, path=cfg["schedule_config"],
                           poll_interval=float(cfg["schedule_poll_interval"]),

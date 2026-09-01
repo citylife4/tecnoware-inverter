@@ -1504,9 +1504,14 @@ class TestBatteryWindow(unittest.TestCase):
         self.path = os.path.join(self.tmp.name, "win.json")
         self.addCleanup(self.tmp.cleanup)
 
-    def make(self, battery_voltage=27.0, override=None, **kw):
+    def make(self, battery_voltage=27.0, override=None, signal=None, **kw):
         service = FakeService(battery_voltage=battery_voltage, **kw)
-        bw = BatteryWindow(service, self.path, override_check=override)
+        # `signal` is the surplus signal the daytime window decides on:
+        # (watts, fresh). None means no source at all, which must keep that
+        # window shut.
+        src = (lambda: signal) if signal is not None else None
+        bw = BatteryWindow(service, self.path, override_check=override,
+                           signal_source=src)
         return service, bw
 
     # A time comfortably inside the default 21:15->08:00 window and clear of
@@ -1997,6 +2002,98 @@ class TestBatteryWindow(unittest.TestCase):
         last = rows[-1]
         self.assertEqual(last["device_mode"], "B")
         self.assertEqual(last["device_mismatch"], "pop_drift")
+
+    # ---- conditional daytime window -------------------------------------
+    #
+    # Moving the loads to the pack removes the inverter's draw from the
+    # meter, so the house exports MORE while it discharges -- measured
+    # 2026-09-01: grid -50 W with the inverter drawing 52 W, so battery mode
+    # would have taken export to -102 W. The surplus signal is exactly the
+    # balance battery mode produces, so a positive one is a direct guarantee
+    # that discharging cannot push the meter into export.
+
+    DAYTIME = datetime(2026, 8, 25, 14, 0)
+
+    def enable_daytime(self, bw, now=None, **over):
+        cfg = {"enabled": True, "min_switch_interval": 0,
+               "daytime_enabled": True, "daytime_min_switch_interval": 0}
+        cfg.update(over)
+        return self.enable(bw, now=now or self.DAY, **cfg)
+
+    def test_daytime_discharges_while_the_house_still_imports(self):
+        service, bw = self.make(battery_voltage=27.0, signal=(300.0, True))
+        self.enable_daytime(bw)
+        r = bw.tick(now=self.DAYTIME)
+        self.assertEqual(r["target"], BATTERY_POP)
+        self.assertEqual(r["reason"], "daytime")
+
+    def test_daytime_refuses_when_discharging_would_export(self):
+        """The live case: signal -102 W means battery mode puts the meter at
+        -102 W. Discharging to create headroom would double the export it
+        was meant to prevent."""
+        service, bw = self.make(battery_voltage=27.0, signal=(-102.0, True))
+        self.enable_daytime(bw)
+        service.sent.clear()
+        r = bw.tick(now=self.DAYTIME)
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertEqual(r["reason"], "daytime_surplus")
+        self.assertNotIn("POP02", service.sent)
+
+    def test_daytime_needs_a_fresh_signal(self):
+        """A stale reading cannot guarantee anything about export."""
+        service, bw = self.make(battery_voltage=27.0, signal=(300.0, False))
+        self.enable_daytime(bw)
+        r = bw.tick(now=self.DAYTIME)
+        self.assertEqual(r["reason"], "daytime_unknown")
+        self.assertEqual(r["target"], GRID_POP)
+
+    def test_daytime_stays_shut_without_a_signal_source(self):
+        service, bw = self.make(battery_voltage=27.0)      # no source wired
+        self.enable_daytime(bw)
+        r = bw.tick(now=self.DAYTIME)
+        self.assertEqual(r["reason"], "daytime_unknown")
+
+    def test_daytime_hysteresis_holds_through_the_band(self):
+        """The daytime median sits near zero, so a single threshold would
+        chatter. Once discharging, it holds down to daytime_exit_w."""
+        held = {"v": (300.0, True)}
+        service = FakeService(battery_voltage=27.0)
+        bw = BatteryWindow(service, self.path, signal_source=lambda: held["v"])
+        self.enable(bw, now=self.DAY, enabled=True, min_switch_interval=0,
+                    daytime_enabled=True, daytime_min_switch_interval=0)
+        self.assertEqual(bw.tick(now=self.DAYTIME)["target"], BATTERY_POP)
+        held["v"] = (100.0, True)      # below enter (150) but above exit (50)
+        self.assertEqual(bw.tick(now=self.DAYTIME)["target"], BATTERY_POP)
+        held["v"] = (40.0, True)       # below exit -- margin gone
+        self.assertEqual(bw.tick(now=self.DAYTIME)["target"], GRID_POP)
+
+    def test_daytime_still_respects_the_pump_block(self):
+        service, bw = self.make(battery_voltage=27.0, signal=(300.0, True))
+        self.enable_daytime(bw, daytime_from="00:00", daytime_to="23:59")
+        r = bw.tick(now=dt.datetime(2026, 8, 25, 20, 0))
+        self.assertEqual(r["reason"], "forbidden")
+
+    def test_daytime_still_respects_the_floor(self):
+        """A daytime discharge must be floor-protected too -- the counter
+        used to run only during the nightly window."""
+        service, bw = self.make(battery_voltage=27.0, signal=(300.0, True))
+        self.enable_daytime(bw, floor_confirmations=1)
+        self.assertEqual(bw.tick(now=self.DAYTIME)["target"], BATTERY_POP)
+        service._battery_voltage = 23.5
+        r = bw.tick(now=self.DAYTIME)
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertEqual(r["reason"], "floor")
+
+    def test_daytime_disabled_by_default(self):
+        service, bw = self.make(battery_voltage=27.0, signal=(300.0, True))
+        self.enable(bw, now=self.DAY)          # daytime_enabled untouched
+        r = bw.tick(now=self.DAYTIME)
+        self.assertEqual(r["reason"], "outside")
+
+    def test_exit_thresholds_must_form_a_band(self):
+        with self.assertRaises(ValueError):
+            validate_window_config({"daytime_enter_w": 50,
+                                    "daytime_exit_w": 150})
 
     def test_config_round_trips(self):
         service, bw = self.make()
