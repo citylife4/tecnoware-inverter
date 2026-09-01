@@ -205,6 +205,14 @@ port 8000; `grid_charge` polls `http://127.0.0.1:8000/api/live`.
    + fsync + rename + fsync dir). `web.json` was once found zero-length
    after an unclean reboot, losing the API token. If you add another
    config/state file, use that helper, not a bare `open(..., "w")`.
+   **A config file that fails validation is not an error you will see by
+   accident**: `_load()` falls back to `DEFAULT_CONFIG`, which is
+   `enabled: False`, and drops the window hours and thresholds with it. So
+   an automation showing "desativada" may mean "rejected", not "switched
+   off" — check `config_error` in its API response (it is also printed to
+   the journal and shown on the dashboard). Safe for `battery_window`;
+   **not** safe for `grid_charge`, where disabled means export goes
+   unabsorbed.
 4. **The UI is pt-PT; the API is English.** Display strings are in
    `webapp/ui_labels.py`, injected into the page, deliberately separate
    from what the API returns so scripts keep a stable contract. Tests

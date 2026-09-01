@@ -52,6 +52,7 @@ from datetime import datetime, timezone
 
 from charge_schedule import parse_hhmm, rule_active
 from transport import InverterError
+from webapp import config_error
 from webapp.atomic_write import write_json_atomic
 from webapp.safety import is_finite_number
 from webapp.trace import append_row
@@ -331,6 +332,9 @@ class BatteryWindow:
     # ---- persistence ----------------------------------------------------
 
     def _load(self) -> dict:
+        # Cleared here rather than only on failure, so a later reload that
+        # succeeds takes the warning back off the dashboard.
+        self._config_error = None
         if not os.path.exists(self.path):
             return dict(DEFAULT_CONFIG)
         try:
@@ -339,9 +343,12 @@ class BatteryWindow:
             if not raw.strip():
                 return dict(DEFAULT_CONFIG)
             return validate_config(json.loads(raw))
-        except (ValueError, OSError):
+        except (ValueError, OSError) as e:
             # Never let stored automation config crash the server. Starting
-            # disabled is the safe direction: no POP writes at all.
+            # disabled is the safe direction: no POP writes at all. But it
+            # also drops the window hours and the pump window, and used to do
+            # it silently -- see webapp/config_error.py.
+            self._config_error = config_error.report(self.path, e)
             return dict(DEFAULT_CONFIG)
 
     def _save(self) -> None:
@@ -392,6 +399,7 @@ class BatteryWindow:
                 "detail": detail,
                 "recovering": self._recovering,
                 "below_floor_readings": self._below_floor,
+                "config_error": self._config_error,
                 "battery_voltage": self._battery_voltage(),
                 # The device's own live QMOD letter, alongside our belief
                 # above -- a pure read, unlike _reconcile_with_device()
@@ -418,6 +426,9 @@ class BatteryWindow:
             merged = dict(self._config)
             merged.update(updates or {})
             self._config = validate_config(merged)
+            # A config that validated and was written is no longer the one
+            # that got rejected at boot.
+            self._config_error = None
             self._save()
             self._tick(force=True, now=now)
         return self.get_state()

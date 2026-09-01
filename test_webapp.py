@@ -9,6 +9,8 @@ Runs on Python 3.9 (the inverter Pi) and newer.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import stat
@@ -2567,6 +2569,98 @@ class TestNotifier(unittest.TestCase):
         n = self.make()
         n.on_change("link", "down", "fault")
         self.assertEqual(self.sent, ["fault"])
+
+
+class TestRejectedConfigIsVisible(unittest.TestCase):
+    """A stored config that fails validation drops the controller back to
+    DEFAULT_CONFIG, which is `enabled: False`. For battery_window that is the
+    safe direction; for grid_charge it is not -- a disabled charger means
+    export goes unabsorbed, and exporting is not permitted at this
+    installation. Either way it also silently discards the window hours, the
+    thresholds and the pump window, so the failure has to be visible rather
+    than looking like somebody switched the automation off.
+
+    The validators got stricter (`"enabled": 1` used to be coerced to True and
+    now raises), so this path is easier to reach than it was.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def write(self, name, text):
+        path = os.path.join(self.tmp.name, name)
+        with open(path, "w") as fh:
+            fh.write(text)
+        return path
+
+    def build(self, name, text, factory):
+        """Construct a controller over `text` and hand back its state plus
+        whatever it printed to stderr."""
+        path = self.write(name, text)
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            controller = factory(path)
+        return controller, controller.get_state(), buf.getvalue()
+
+    # A type error that the old lenient validators would have swallowed:
+    # bool(1) is True, so this used to enable the automation silently.
+    BAD = json.dumps({"enabled": 1, "from": "04:30", "to": "08:00"})
+
+    def test_grid_charge_reports_the_rejection(self):
+        gc, state, err = self.build(
+            "web_gridcharge.json", self.BAD,
+            lambda p: GridChargeController(FakeService(), p,
+                                           fetch_fn=FetchStub(None)))
+        self.assertFalse(state["enabled"])
+        self.assertIn("web_gridcharge.json", state["config_error"])
+        self.assertIn("DESATIVADA", state["config_error"])
+        self.assertIn("web_gridcharge.json", err)
+
+    def test_battery_window_reports_the_rejection(self):
+        bw, state, err = self.build(
+            "win.json", self.BAD,
+            lambda p: BatteryWindow(FakeService(battery_voltage=27.0), p))
+        self.assertFalse(state["config"]["enabled"])
+        self.assertIn("win.json", state["config_error"])
+        self.assertIn("win.json", err)
+
+    def test_scheduler_reports_the_rejection(self):
+        sched, state, err = self.build(
+            "web_schedule.json", json.dumps({"enabled": 1, "rules": []}),
+            lambda p: Scheduler(FakeService(), p))
+        self.assertFalse(state["enabled"])
+        self.assertIn("web_schedule.json", state["config_error"])
+        self.assertIn("web_schedule.json", err)
+
+    def test_a_valid_config_reports_no_error(self):
+        good = json.dumps({"enabled": True, "min_switch_interval": 0})
+        gc, state, err = self.build(
+            "web_gridcharge.json", good,
+            lambda p: GridChargeController(FakeService(), p,
+                                           fetch_fn=FetchStub(None)))
+        self.assertTrue(state["enabled"])
+        self.assertIsNone(state["config_error"])
+        self.assertEqual(err, "")
+
+    def test_saving_a_good_config_clears_a_previous_rejection(self):
+        """Otherwise the dashboard would keep shouting about a file the user
+        has already fixed from that same dashboard."""
+        gc, state, _ = self.build(
+            "web_gridcharge.json", self.BAD,
+            lambda p: GridChargeController(FakeService(), p,
+                                           fetch_fn=FetchStub(None)))
+        self.assertIsNotNone(state["config_error"])
+        gc.set_config({"enabled": False})
+        self.assertIsNone(gc.get_state()["config_error"])
+
+    def test_a_missing_file_is_not_an_error(self):
+        """First run has no config at all. That is normal, not a fault."""
+        gc = GridChargeController(FakeService(),
+                                  os.path.join(self.tmp.name, "absent.json"),
+                                  fetch_fn=FetchStub(None))
+        self.assertIsNone(gc.get_state()["config_error"])
+
 
 
 if __name__ == "__main__":

@@ -471,6 +471,7 @@ function renderSchedule(state) {
   });
 
   let cur = `<span class="muted">Regra ativa agora:</span> ${fmtRule(state.current_rule)}`;
+  if (state.config_error) cur += `<br><span class="err small">\u26a0 ${esc(state.config_error)}</span>`;
   if (state.override_reason) cur += `<br><span class="warn small">${esc(state.override_reason)}</span>`;
   if (state.last_run) {
     const t = new Date(state.last_run.at).toLocaleTimeString();
@@ -575,14 +576,13 @@ function renderGridCharge(state) {
   $("#gc-status").className = `badge ${state.enabled ? "" : "muted"}`;
   if (!state.allow_writes) $("#gc-status").textContent += " (servidor só-leitura — não aplicado)";
 
+  // config_error outranks pop_warning: if the stored config was rejected,
+  // nothing below is the configuration the user thinks they are looking at.
   const popWarnEl = document.querySelector("#gc-pop-warning");
   if (popWarnEl) {
-    if (state.pop_warning) {
-      popWarnEl.textContent = `⚠ ${state.pop_warning}`;
-      popWarnEl.hidden = false;
-    } else {
-      popWarnEl.hidden = true;
-    }
+    const warning = state.config_error || state.pop_warning;
+    popWarnEl.textContent = warning ? `⚠ ${warning}` : "";
+    popWarnEl.hidden = !warning;
   }
 
   GC_FIELDS.forEach(([id, key, type]) => {
@@ -757,12 +757,18 @@ function renderBatteryWindow(state) {
 
   const hf = document.querySelector("#bw-hard-forbidden");
   if (hf) {
-    hf.textContent = state.pump_unprotected
-      ? "\u26a0 Sem horário de bomba definido: nada impede a bateria de "
+    // config_error first: with the stored config rejected, the pump window
+    // shown above is the built-in default, not what is on disk.
+    let hfText = "";
+    if (state.config_error) {
+      hfText = "\u26a0 " + state.config_error;
+    } else if (state.pump_unprotected) {
+      hfText = "\u26a0 Sem horário de bomba definido: nada impede a bateria de "
         + "alimentar as cargas a qualquer hora. Correto só se a bomba já não "
-        + "estiver na saída protegida."
-      : "";
-    hf.hidden = !state.pump_unprotected;
+        + "estiver na saída protegida.";
+    }
+    hf.textContent = hfText;
+    hf.hidden = !hfText;
   }
 
   // Estado atual: o alvo, a razão, e a tensão contra o piso.

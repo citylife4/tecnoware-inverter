@@ -49,6 +49,7 @@ from datetime import datetime, timezone
 import requests
 
 from transport import InverterError
+from webapp import config_error
 from webapp.atomic_write import write_json_atomic
 from webapp.trace import append_row
 from webapp.safety import PCP_VALUES, apply_low_battery_floor
@@ -202,6 +203,9 @@ class GridChargeController:
     # ---- persistence ------------------------------------------------------
 
     def _load(self) -> dict:
+        # Cleared here rather than only on failure, so a later reload that
+        # succeeds takes the warning back off the dashboard.
+        self._config_error = None
         if not os.path.exists(self.path):
             return dict(DEFAULT_CONFIG)
         try:
@@ -210,7 +214,11 @@ class GridChargeController:
             if not raw.strip():
                 return dict(DEFAULT_CONFIG)
             return validate_config(json.loads(raw))
-        except (ValueError, OSError):
+        except (ValueError, OSError) as e:
+            # Falling back to defaults means enabled=False. For this
+            # controller that is not the safe direction -- see
+            # webapp/config_error.py -- so say so instead of going quiet.
+            self._config_error = config_error.report(self.path, e)
             return dict(DEFAULT_CONFIG)
 
     def _save(self) -> None:
@@ -227,6 +235,7 @@ class GridChargeController:
                 "allow_writes": self.service.allow_writes,
                 "min_battery_voltage": self.service.min_battery_voltage,
                 "pop_warning": self._pop_warning(),
+                "config_error": self._config_error,
                 "current": {
                     "net_balance_w": self._last_net_balance,
                     "inverter_input_w": self._last_inverter_input,
@@ -275,6 +284,9 @@ class GridChargeController:
         cfg = validate_config(updates)
         with self._lock:
             self._config = cfg
+            # A config that validated and was written is no longer the one
+            # that got rejected at boot.
+            self._config_error = None
             self._save()
             if cfg["enabled"]:
                 self._tick(force=True)

@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 
 from charge_schedule import VALID_PCP, parse_hhmm, pick_rule  # noqa: F401  (re-exported)
 from transport import InverterError
+from webapp import config_error
 from webapp.atomic_write import write_json_atomic
 from webapp.safety import apply_low_battery_floor
 
@@ -93,6 +94,9 @@ class Scheduler:
     # ---- persistence ----------------------------------------------------
 
     def _load(self) -> dict:
+        # Cleared here rather than only on failure, so a later reload that
+        # succeeds takes the warning back off the dashboard.
+        self._config_error = None
         if not os.path.exists(self.path):
             return dict(DEFAULT_STATE)
         try:
@@ -108,10 +112,13 @@ class Scheduler:
                 raise ValueError("enabled must be a boolean")
             return {"enabled": enabled,
                     "rules": validate_rules(data.get("rules", []))}
-        except (ValueError, OSError):
+        except (ValueError, OSError) as e:
             # A corrupt or unreadable state file shouldn't crash the server
             # over stored automation config -- start disabled, let the user
-            # re-save the schedule from the dashboard.
+            # re-save the schedule from the dashboard. Say so, though: the
+            # rules are dropped too, and silence looks like a deliberate
+            # "desativado". See webapp/config_error.py.
+            self._config_error = config_error.report(self.path, e)
             return dict(DEFAULT_STATE)
 
     def _save(self) -> None:
@@ -135,6 +142,7 @@ class Scheduler:
                 "current_rule": rule,
                 "current_target": target,
                 "override_reason": override,
+                "config_error": self._config_error,
                 "last_run": self._last_run,
             }
 
@@ -144,6 +152,9 @@ class Scheduler:
         rules = validate_rules(rules)
         with self._lock:
             self._state = {"enabled": bool(enabled), "rules": rules}
+            # A state that validated and was written is no longer the one
+            # that got rejected at boot.
+            self._config_error = None
             self._save()
             if self._state["enabled"]:
                 # Apply immediately rather than making an edit wait up to
