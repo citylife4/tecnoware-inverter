@@ -252,7 +252,12 @@ def main() -> int:
     ap.add_argument("--interval", type=float, default=300.0,
                     help="seconds between checks in --daemon mode")
     ap.add_argument("--daemon", action="store_true")
-    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="do not touch the USB bus or restart anything. "
+                         "NOTE: alerts are still sent -- this flag is about "
+                         "not disturbing the hardware, not about staying "
+                         "quiet. Disable telegram in the config you point at "
+                         "if you are only exercising the logic.")
     args = ap.parse_args()
 
     if not args.daemon:

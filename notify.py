@@ -30,6 +30,13 @@ token), under a "telegram" key:
     }
 
     python3 notify.py --test            send a test message and exit
+
+**Exercising an alert path writes to the shared state file**, which then
+disagrees with reality: the next healthy check reports a recovery that never
+happened. Worse, a dry-run of the watchdog still sends -- "dry run" there
+means it will not touch the USB bus, not that it stays quiet. Point
+--state-file (or usb_watchdog's config) somewhere disposable first. Learned
+by sending the user a false outage alert on 2026-09-01.
 """
 
 from __future__ import annotations
@@ -154,9 +161,13 @@ def main() -> int:
     ap.add_argument("--config", default=os.path.join(HERE, "web.json"))
     ap.add_argument("--test", action="store_true", help="send a test message")
     ap.add_argument("--message", help="send this text and exit")
+    ap.add_argument("--state-file", default=STATE_FILE,
+                    help="where the last-reported condition is kept; point "
+                         "this somewhere disposable when exercising alert "
+                         "paths, or the run will overwrite the live state")
     args = ap.parse_args()
 
-    n = Notifier(load_config(args.config))
+    n = Notifier(load_config(args.config), state_file=args.state_file)
     if not n.enabled:
         print("telegram nao configurado (ver o docstring deste ficheiro)")
         return 2
