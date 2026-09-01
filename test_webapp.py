@@ -1151,13 +1151,43 @@ class TestGridChargeController(unittest.TestCase):
         self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
         self.assertEqual(service.sent, ["PCP01"])
 
-    def test_missing_solar_reading_does_not_disable_the_controller(self):
-        """A meter that stops reporting solar must not be read as nightfall."""
+    def test_export_stands_in_for_a_missing_solar_reading(self):
+        """The solar Shelly went offline on 2026-08-31 and auto-energy began
+        reporting ac_solar_w as null. Export is still proof of generation --
+        you cannot export without generating -- so a negative signal settles
+        the question without the meter."""
         service, stub, gc = self.make(net_balance=-200)
         gc.set_config({"enabled": True, "min_switch_interval": 0})
         stub.ac_solar_w = None
         gc.tick()
         self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
+
+    def test_missing_solar_without_export_holds(self):
+        """The original rule read "proceed unless we know there is no sun",
+        which with a missing reading disarmed the night-time protection
+        entirely -- backwards for a safety check. At night the signal sits
+        at +80-100 W on this house, which correctly reads as no generation."""
+        service, stub, gc = self.make(net_balance=-200)   # sunny to start
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
+        service.sent.clear()
+        stub.ac_solar_w = None      # meter offline...
+        stub.net_balance = 90       # ...and the house is importing: night
+        gc.tick()
+        self.assertEqual(gc.get_state()["current"]["desired_state"],
+                         "disabled_no_solar")
+        self.assertEqual(service.sent, [])
+
+    def test_a_known_zero_solar_still_wins_over_export(self):
+        """A working meter reading below the floor is direct evidence and
+        takes precedence -- the export fallback is only for when there is no
+        reading at all."""
+        service, stub, gc = self.make(net_balance=-200)
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        stub.ac_solar_w = 0.0
+        gc.tick()
+        self.assertEqual(gc.get_state()["current"]["desired_state"],
+                         "disabled_no_solar")
 
     def test_trace_records_the_decision_with_a_timestamp(self):
         """The tick result calls it "at"; the CSV column is "ts". Getting

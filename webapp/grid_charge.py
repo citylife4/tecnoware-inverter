@@ -381,14 +381,36 @@ class GridChargeController:
         else:
             balance = self._last_signal
             solar = self._last_solar
-            if solar is not None and solar < SOLAR_FLOOR_W:
+
+            # Is anything generating? Answered before the hysteresis, which
+            # would otherwise hold the day's last state right through the
+            # night -- the signal settles at +80-100 W on this house after
+            # dark, which is inside the dead-band.
+            if solar is not None:
+                # A working meter is direct evidence and takes precedence.
+                generating = solar >= SOLAR_FLOOR_W
+            else:
+                # No meter: its Shelly has been offline since 2026-08-31,
+                # and auto-energy reports ac_solar_w as null. Export still
+                # settles it -- you cannot export without generating. The
+                # signal is net_balance minus the inverter's own draw, so
+                # the charger cannot drive it negative by running.
+                #
+                # The rule this replaces read "proceed unless we know there
+                # is no sun", which with a missing reading disarmed the
+                # night-time protection entirely: backwards for a safety
+                # check.
+                generating = balance < 0
+
+            if not generating:
                 # No generation means no export-control work exists. This is
                 # distinct from "idle", which owns PCP03 in exclusive mode.
                 # Returning no target also bypasses the low-battery PCP01
                 # override: battery maintenance is outside this controller's
                 # job while the sun is down.
                 return "disabled_no_solar", None, None, known
-            elif balance <= cfg["export_threshold_w"]:
+
+            if balance <= cfg["export_threshold_w"]:
                 desired = "charging"
             elif balance >= cfg["import_threshold_w"]:
                 desired = "idle"

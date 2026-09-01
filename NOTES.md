@@ -367,8 +367,22 @@ First live `POP=02` run with the loads actually on the pack:
   the `disabled_no_solar` branch entirely when solar is `None`, because the
   test is `solar is not None and solar < SOLAR_FLOOR_W`. The safety rule was
   written as *proceed unless we know there is no sun*, when it should be
-  *hold unless we know there is sun*. Not yet fixed; needs the Shelly back
-  or the inverted condition corrected.
+  *hold unless we know there is sun*.
+
+  **Fixed 2026-09-01, and the fallback is better than simply holding.**
+  Export is proof of generation — you cannot export without generating — so
+  with no solar reading the controller uses a negative surplus signal to
+  settle the question instead. The signal is `net_balance` minus the
+  inverter's own draw, so the charger cannot drive it negative by running,
+  and after dark it sits at +80-100 W on this house, which correctly reads
+  as no generation. A *working* meter below `SOLAR_FLOOR_W` still takes
+  precedence: direct evidence beats inference. Confirmed live the same
+  afternoon with the Shelly still down: `solar: None`, signal −126.5 W,
+  decision `charging`, `PCP01` applied.
+
+  The Shelly itself is still offline and worth recovering — the fallback
+  only works while something is actually exporting, so it cannot tell
+  "cloudy midday" from "night".
 
 ---
 
