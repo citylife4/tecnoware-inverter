@@ -694,6 +694,65 @@ Same day, the export charger did work correctly: one clean span
 15:04 → 17:30 (2 h 26), two state changes all day, no flapping.
 
 
+### First clean run of the 04:30-08:00 window — 2026-09-02
+
+The configuration deployed on 2026-09-01 completed a full night. It behaved
+exactly as designed, and produced two results that contradict numbers
+recorded here earlier.
+
+**The run itself.** One POP write, at 04:30:19, "aplicado"; the device
+followed L->B within a minute and stayed there. No `hardware_override`, no
+`pop_drift`, no floor event, the latch never closed, `config_error` clear on
+all three controllers. Four corrupt `QMOD` frames arrived during the night
+and were filtered rather than read as a mode change (the validation added
+2026-08-27, working). `grid_charge` sat at `disabled_no_solar` for all 816
+ticks and wrote no PCP, which is what it should do in the dark.
+
+**The discharge is load-limited, not pack-limited.**
+
+    26.7 V -> 25.8 V in 15 min      surface charge, not capacity
+    min 25.0 V, 25.2 V at 07:53     floor is 24.0 -- never approached
+    load 1 W for 72% of samples, 47 W for 28% (compressor duty cycle)
+    mean 13.8 W over 3.37 h  ->  ~46 Wh delivered
+
+46 Wh out of ~360 Wh usable. The window is doing its job; there is simply
+almost nothing on the protected output to discharge into. **Judge that
+against export, not against the pack**: measured export here is 0-140
+Wh/day, so one night covers a typical day outright and about a third of a
+bad one. The constraint on headroom is the load, and the obvious lever is
+window *length*, not anything about the battery.
+
+**Contradiction 1 — program 12 did not change over at ~25.4 V.** This file
+states (twice, and `webapp/battery_window.py:94` with it) that the unit
+hands the loads back to utility at ~25.4 V, measured as six cycles in four
+hours on 2026-08-25; `floor_voltage` was originally sized at 25.6 V *because
+of* that number, and the 04:30 window was planned expecting "program 12 cuts
+around 06:50 at ~24.8 V". Tonight the pack sat at **25.0 V and the inverter
+stayed in battery mode**, for 3 h 23 and counting.
+
+The likeliest explanation is that **`PBCV24.0` did take effect** after all.
+It was ACKed on 2026-08-25 and has been carried under "applied but NOT yet
+verified" ever since, unconfirmable because `QPIRI` still reports 22.0 V
+(gotcha #2) and because no run since has taken the pack low enough to test
+it. This is the first evidence either way, and it is consistent: a
+changeover moved from ~25.4 V to 24.0 V explains both the old six cycles and
+tonight's absence of any.
+
+**Not yet proven, and do not record it as proven.** Tonight bounds the
+threshold below 25.0 V; it does not locate it. The window is time-bounded
+and the load is tiny, so the pack cannot reach 24 V inside 3.5 hours -- this
+configuration will never find the number on its own.
+
+**Contradiction 2 — nothing, but a confirmation at scale.**
+`battery_discharge_current` read **0.0 A on 931 of 935 samples** while the
+pack was demonstrably supplying 47 W, with two absurd frames above 100 A.
+That matches the 2026-08-25 finding exactly and settles it: the field is not
+merely unreliable, it is not populated in battery mode. `battery_capacity`
+is nearly as bad -- 80% on 913 samples, with 18 spurious 50s, two 100s and
+two 26s -- so the SoC readout is quantised and noisy, not a measurement.
+Voltage trend and `ac_output_active_power` remain the only usable pair.
+
+
 ---
 
 ### Open, roughly by importance
