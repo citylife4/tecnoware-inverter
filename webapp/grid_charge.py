@@ -558,8 +558,20 @@ class GridChargeController:
                 if ok:
                     self._last_applied_pcp = target
                     self._last_switch_mono = now_mono
+                else:
+                    # A garbled reply is not proof the write failed -- on this
+                    # link it usually means it worked and the reply came back
+                    # mangled (gotcha #8). Keeping the old value would let the
+                    # next tick conclude "already PCPxx; nothing to do" about a
+                    # state nothing has confirmed. None means unknown, and the
+                    # next tick writes for real. There is no way to read PCP
+                    # back from this unit, so this cache is the only belief
+                    # there is -- all the more reason not to fill it with a
+                    # guess.
+                    self._last_applied_pcp = None
             except InverterError as e:
                 result["note"] = f"error: {e}"
+                self._last_applied_pcp = None
 
         self._last_run = result
         self._append_trace(result)

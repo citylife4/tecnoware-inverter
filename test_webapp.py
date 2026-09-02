@@ -2736,5 +2736,105 @@ class TestRejectedConfigIsVisible(unittest.TestCase):
 
 
 
+class TestGarbledSetReplyIsNotProofOfFailure(unittest.TestCase):
+    """Reproduces 2026-09-02 08:16:21 on the live installation.
+
+    battery_window wrote POP00, the inverter obeyed within 16 s, and the
+    reply came back as `\xe5\xf3\xf6 \xe6\xf4 ...`. Because the reply did
+    not start with "(ACK", the controller kept believing POP02 -- so one tick
+    later _reconcile_with_device() compared that stale belief against a
+    device sitting in L, called the device's own compliance a
+    `hardware_override`, latched the night's discharge as spent, and threw
+    the relay a second time.
+
+    It was harmless at 08:17 (pack above resume_voltage, outside the nightly
+    window, so the latch released at once). The same corrupt frame at 05:00
+    would have ended that night's discharge on a mangled reply -- and gotcha
+    #8 says these frames are routine on this link.
+    """
+
+    GARBLED = "\xe5\xf3\xf6   \xe6\xf4   \t \t"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.tmp.name, "win.json")
+        self.addCleanup(self.tmp.cleanup)
+
+    def make(self, **kw):
+        service = FakeService(battery_voltage=25.1, **kw)
+        return service, BatteryWindow(service, self.path)
+
+    def test_garbled_pop_reply_does_not_become_a_hardware_override(self):
+        service, bw = self.make(device_mode="B")
+        # Get the controller genuinely believing it applied POP02.
+        bw.set_config({"enabled": True, "min_switch_interval": 0,
+                       "floor_voltage": 24.0},
+                      now=datetime(2026, 9, 2, 23, 0))
+        self.assertEqual(bw._last_applied_pop, BATTERY_POP)
+
+        # Now the write that gets mangled on the way back, while the device
+        # actually obeys and moves to L.
+        service._ack = False
+        service.send_set = lambda c, source="manual": self.GARBLED
+        bw._tick(force=True, now=datetime(2026, 9, 2, 12, 0))
+        service._device_mode = "L"          # the inverter did as it was told
+
+        state = bw._tick(now=datetime(2026, 9, 2, 12, 1))
+        self.assertNotEqual(state["reason"], "hardware_override")
+        self.assertFalse(bw._recovering,
+                         "a garbled reply must not latch the discharge")
+
+    def test_an_unacknowledged_write_leaves_the_belief_unknown(self):
+        service, bw = self.make(device_mode="B")
+        bw.set_config({"enabled": True, "min_switch_interval": 0},
+                      now=datetime(2026, 9, 2, 23, 0))
+        service.send_set = lambda c, source="manual": self.GARBLED
+        bw._tick(force=True, now=datetime(2026, 9, 2, 12, 0))
+        self.assertIsNone(bw._last_applied_pop,
+                          "None is 'unknown'; the old value would be a guess")
+
+    def test_a_timed_out_write_also_leaves_it_unknown(self):
+        """The 09:29:01 grid_charge failure that day was a timeout, not a
+        garbled frame. Same evidence, same conclusion: nothing was proven."""
+        service, bw = self.make(device_mode="B")
+        bw.set_config({"enabled": True, "min_switch_interval": 0},
+                      now=datetime(2026, 9, 2, 23, 0))
+
+        def boom(command, source="manual"):
+            raise InverterError("no response to set command (timeout)")
+
+        service.send_set = boom
+        bw._tick(force=True, now=datetime(2026, 9, 2, 12, 0))
+        self.assertIsNone(bw._last_applied_pop)
+
+    def test_the_next_tick_writes_for_real_instead_of_no_opping(self):
+        """Unknown must converge, not stall: the write path has to issue a
+        real command rather than concluding 'already POPxx; nothing to do'."""
+        service, bw = self.make(device_mode="L")
+        bw.set_config({"enabled": True, "min_switch_interval": 0},
+                      now=datetime(2026, 9, 2, 12, 0))
+        service.sent.clear()
+        bw._last_applied_pop = None
+        bw._tick(now=datetime(2026, 9, 2, 12, 1))
+        self.assertTrue(service.sent, "an unknown belief must produce a write")
+
+    def test_grid_charge_forgets_an_unacknowledged_pcp(self):
+        """Same bug, worse blind spot: PCP cannot be read back from this
+        unit at all, so this cache is the only belief there is."""
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        service = FakeService()
+        gc = GridChargeController(service, os.path.join(d.name, "gc.json"),
+                                  fetch_fn=FetchStub(-300))
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        self.assertEqual(gc._last_applied_pcp, "01")
+        service.send_set = lambda c, source="manual": self.GARBLED
+        # force, so the write is actually attempted rather than short-circuited
+        # by "already PCP01; nothing to do".
+        gc._tick(force=True)
+        self.assertIsNone(gc._last_applied_pcp)
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

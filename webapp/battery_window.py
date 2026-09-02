@@ -459,6 +459,37 @@ class BatteryWindow:
             # do their job.
             return False
 
+    def _forget_applied_pop(self) -> None:
+        """After a write whose outcome we do not know, believe nothing.
+
+        A set command that comes back garbled, or times out, has NOT been
+        shown to fail -- on this link it very often means the inverter did
+        exactly as it was told and the reply got mangled on the way back
+        (gotcha #8). Keeping the previous value asserts "the write did not
+        happen", which is a claim the evidence does not support.
+
+        Seen live 2026-09-02 08:16:21: POP00 was written, the reply came
+        back as `åóö æô ...`, the inverter obeyed within 16 s -- and one
+        tick later _reconcile_with_device() compared its stale POP02 belief
+        against a device sitting in L, called the device's own compliance a
+        `hardware_override`, latched the night's discharge as spent and
+        threw the relay a second time. Harmless at 08:17 because the pack
+        was above resume_voltage and outside the nightly window; the same
+        frame at 05:00 would have ended the discharge on a corrupt reply.
+
+        None means "unknown", which is the truth. Both reconciler branches
+        require a definite belief, so neither can fire on it, and the write
+        path sees `target != None` and converges with a real write on the
+        next tick -- re-sending a POP the device already holds moves no
+        relay.
+
+        `_last_switch_mono` is deliberately NOT advanced: the next action is
+        a converging retry of the same target, not a state change, and
+        making it wait out the anti-flap dwell would just extend the window
+        during which nothing knows where the inverter is.
+        """
+        self._last_applied_pop = None
+
     def _reconcile_with_device(self) -> str | None:
         """Compare what we last applied against the device's own reported
         mode (QMOD), which is always ground truth. Returns a short reason
@@ -774,8 +805,11 @@ class BatteryWindow:
                 if ok:
                     self._last_applied_pop = target
                     self._last_switch_mono = now_mono
+                else:
+                    self._forget_applied_pop()
             except InverterError as e:
                 result["note"] = f"erro: {e}"
+                self._forget_applied_pop()
 
         self._last_run = result
         self._append_trace(result)
