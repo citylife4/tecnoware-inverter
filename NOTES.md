@@ -872,6 +872,56 @@ export-adjacent risk is judged worth the hardware. Recorded here so the
 decision can be made from these numbers rather than none.
 
 
+### The nightly window was leaving capacity unused — 2026-09-03
+
+Extended from **04:30-08:00 to 01:00-08:00**. The reason it had been cut
+short no longer existed, and nobody had gone back to check.
+
+**Why it was 04:30 in the first place.** With `floor_voltage` at 25.5 V the
+window hit the floor in 1h33, latched, and then sat part-charged for 4h30 —
+the loads on grid, the pack neither supplying nor receiving, which is the
+one state to avoid with lead-acid. Moving the start to 04:30 put the
+discharge against dawn instead.
+
+**Why that no longer applies.** The floor is 24.0 V now, and the pack is not
+getting anywhere near it. Measured 2026-09-03:
+
+    04:30 -> 07:50   3.33 h   27.0 -> 25.0 V   ~45 Wh   floor 24.0 V never approached
+
+It is stopping on the clock, not on the floor, with a whole volt of margin
+left. That is unused capacity, and the latch — the mechanism the short
+window was protecting against — never even armed.
+
+**What the extension buys.** Seven hours at the measured ~14 W gives ~95 Wh
+instead of ~45 Wh. The full 21:15-08:00 would give ~150 Wh, against measured
+export of 58-124 Wh/day, so the order of magnitude is right. Going to 01:00
+first rather than straight to 21:15 keeps one clean comparison against the
+nights already recorded.
+
+**The wear cost is small, and worth stating because it sounds worse than it
+is.** 98 Wh out of a 720 Wh pack is ~14% depth of discharge — still the
+shallow-cycling regime the SOLARX-30 datasheet rates at ~2000 cycles, not
+the ~650-700 at 63% DoD. This moves from *very* shallow to shallow.
+
+**What it does NOT fix, and the thing to actually watch.** Headroom does not
+convert 1:1 into absorbed export, because the charger cannot throttle: it
+draws ~350-560 W or nothing, refills opportunistically through the morning,
+and is full before export starts. On 2026-09-03 the pack was full at 09:37
+and export ran from 10:07. So the question the next few days answer is
+narrow: **is the pack still accepting charge past 10:00, and does daily
+export fall below ~110 Wh?** If it is full by 09:30 regardless, the extra
+headroom is being spent on morning grid power rather than on midday surplus,
+and the answer is the dump load after all.
+
+**Also seen the same day, and in the wrong direction:** the daytime window
+discharged the pack 17:33-18:35, and it then recharged from the grid at 11 A
+between 18:35 and 19:20 — after sunset. `PCP01` was already standing, so the
+return to `POP=00` recharged immediately rather than waiting for surplus.
+Only ~14 Wh, but it is a round-trip loss, not a saving. Worth a rule that
+stops the charger refilling a pack that was deliberately emptied, once there
+is data to argue the thresholds from.
+
+
 ---
 
 ### Open, roughly by importance
