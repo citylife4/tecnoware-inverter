@@ -922,6 +922,55 @@ stops the charger refilling a pack that was deliberately emptied, once there
 is data to argue the thresholds from.
 
 
+### The DVR recorded nothing for four days, and everything looked fine — 2026-09-03
+
+Found by accident while looking at SD-card pressure. The Pi has a **28.6 GB
+SanDisk USB stick** (label `dvr-usb`, ext4) that the DVR records to:
+`/opt/dvr/shinobi/videos` is a symlink to `/mnt/usb/shinobi/videos`, and the
+Shinobi container bind-mounts that symlink.
+
+**It had been unmounted since 2026-08-30 18:29:18.** `mnt-usb.mount` ran for
+3h28m from boot and then went inactive; the by-id symlink was recreated four
+seconds later, so the stick dropped off the bus and re-enumerated — from
+`/dev/sda` to `/dev/sdb` — after systemd had already torn the mount down.
+`nofail` in fstab did exactly what it is for and said nothing.
+
+**Every surface said it was healthy.** The fstab UUID matched the stick. The
+mountpoint existed. Inside the container `df` reported
+`/dev/sda1 29G 2.3G 25G 9%` — plausible numbers, read from stale mount
+metadata pointing at a device node that no longer existed. Only actual I/O
+failed:
+
+    ls /home/Shinobi/videos  ->  Input/output error
+
+Four days of recordings lost, with a working NVR UI and a container marked
+`Up 3 days`.
+
+**Two things worth taking from it.** First, nothing was written to the SD
+card underneath: checked by bind-mounting `/` elsewhere and looking beneath
+the mountpoint, which was empty. So this was not silently eating the SD card
+— it was simply losing the footage. Second, **`os.path.ismount()` would not
+have caught it either.** The stale case is *mounted but dead*: statvfs
+answers happily and only a real write fails. `daily_report.storage_problems()`
+therefore writes a probe file rather than trusting the flag.
+
+**Fixed** by mounting the stick (`sudo mount /mnt/usb`) and restarting the
+Shinobi container so it re-resolved the bind mount to `/dev/sdb1`. Verified:
+reads work, writes work, 25 GB free.
+
+**Not fixed: the recovery is manual.** Docker resolves bind mounts at
+container start, so even an automount that remounted the stick would leave
+the container pointing at the dead node until restarted. Detection is now in
+the daily report; automatic repair (a unit that restarts Shinobi when the
+mount reappears) is not built.
+
+**Likely cause, unproven:** `usb_watchdog.py` recovers the inverter adapter
+by unbinding and rebinding the parent hub `1-1`, which resets *every* device
+on that hub — the DVR stick included. The journal has rotated past 08-30, so
+this cannot be confirmed. Worth checking the next time the watchdog fires,
+and worth considering whether the hub-level reset should be narrowed.
+
+
 ---
 
 ### Open, roughly by importance

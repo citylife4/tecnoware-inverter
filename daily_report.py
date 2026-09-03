@@ -38,6 +38,8 @@ import read_telemetry
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TELEMETRY_DIR = os.path.join(HERE, "telemetry")
+# The DVR records here through a symlink from /opt/dvr/shinobi/videos.
+USB_MOUNT = "/mnt/usb"
 
 # The CSVs are written with UTC timestamps; everything a person reads should
 # be local. Computed rather than hardcoded so this does not silently drift an
@@ -151,6 +153,51 @@ def charge_stopped_at(rows):
     return last_on
 
 
+def storage_problems():
+    """Disk pressure, and the DVR's USB stick actually being usable.
+
+    Added 2026-09-03 after finding the stick had dropped off the bus on
+    08-30 at 18:29 and never come back. Everything *looked* fine: the mount
+    unit had gone quietly inactive (nofail did its job), the container still
+    reported `29G 2.3G 25G 9%` from stale metadata, and Shinobi had been
+    recording nothing for four days. `ls` inside the container returned
+    "Input/output error" against /dev/sda1 -- the device node the stick had
+    before it re-enumerated as sdb.
+
+    Nothing was watching, which is the whole failure. Checking the mount
+    flag alone is not enough either: the mountpoint can exist and be empty
+    while the real filesystem is elsewhere, so this writes a file.
+    """
+    problems = []
+
+    stat = os.statvfs("/")
+    free_gb = stat.f_bavail * stat.f_frsize / 1e9
+    used_pct = 100 * (1 - stat.f_bavail / stat.f_blocks)
+    if free_gb < 2.0:
+        problems.append(f"cartao SD quase cheio: {free_gb:.1f} GB livres ({used_pct:.0f}%)")
+    elif used_pct >= 85:
+        problems.append(f"cartao SD a {used_pct:.0f}% ({free_gb:.1f} GB livres)")
+
+    if not os.path.ismount(USB_MOUNT):
+        problems.append(f"pen do DVR nao montada em {USB_MOUNT}")
+    else:
+        probe = os.path.join(USB_MOUNT, ".daily_report_write_test")
+        try:
+            with open(probe, "w") as fh:
+                fh.write("ok")
+            os.unlink(probe)
+        except OSError as e:
+            # The interesting case: mounted but dead. A stale device node
+            # answers statvfs happily and fails on real I/O.
+            problems.append(f"pen do DVR montada mas sem escrita ({e.__class__.__name__})")
+        else:
+            ustat = os.statvfs(USB_MOUNT)
+            ufree = ustat.f_bavail * ustat.f_frsize / 1e9
+            if ufree < 2.0:
+                problems.append(f"pen do DVR quase cheia: {ufree:.1f} GB livres")
+    return problems
+
+
 def build(date: str) -> str:
     tel = os.path.join(TELEMETRY_DIR, f"telemetry-{date}.csv")
     gcp = os.path.join(TELEMETRY_DIR, f"gridcharge-{date}.csv")
@@ -208,6 +255,7 @@ def build(date: str) -> str:
         if failed:
             problems.append(f"escritas PCP falhadas x{failed}")
 
+    problems.extend(storage_problems())
     lines.append("Problemas: " + ("; ".join(problems) if problems else "nenhum"))
     return "\n".join(lines)
 
