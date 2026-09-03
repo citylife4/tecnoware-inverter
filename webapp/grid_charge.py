@@ -78,7 +78,36 @@ CHARGING_POP = "00"
 # In particular it must not alternate idle_pcp with the low-battery override
 # through the night -- that caused repeated PCP03 -> PCP01 -> PCP03 charger
 # cycles on the live installation on 2026-08-26.
+#
+# Kept as the nominal floor and as the midpoint of the band below.
 SOLAR_FLOOR_W = 5.0
+
+# ...but a bare threshold is not enough, and this was the last one in the
+# system without hysteresis. Every other threshold here grew a band and a
+# confirmation count after a flap, and on 2026-09-03 this one had its turn:
+# at first light the panels sat right on 5 W --
+#
+#     07:20  0.4 W    07:40  4.3 W    07:50  7.3 W    08:00  10.2 W
+#
+# -- so `generating` flipped on and off for a quarter of an hour. The surplus
+# signal never moved (+17 to +23 W throughout); only this test did. It
+# propagated straight to the relay: desired_state flapped, is_absorbing_export()
+# followed, battery_window alternated yielding/window, and POP was written
+# three times in five minutes, cutting that night's discharge short.
+SOLAR_ON_W = 8.0
+SOLAR_OFF_W = 3.0
+
+# And a band alone would not be enough either, because the *source* is
+# unreliable. The solar meter is a Shelly Plus 1PM at -87 dBm (measured
+# 2026-09-03, uptime 240 h -- it never rebooted, it just falls off the AP).
+# At that signal level the failure is not a clean outage but dropped frames,
+# so `ac_solar_w` alternates between a number and null tick by tick -- which
+# switches which test is used, not merely where the reading sits. Requiring
+# consecutive agreement covers both causes with one mechanism.
+#
+# 3 x 30 s poll = 90 s to change its mind. Against a sunrise that takes 40
+# minutes to cross the band, that is nothing.
+GENERATING_CONFIRMATIONS = 3
 
 DEFAULT_CONFIG = {
     "enabled": False,
@@ -199,6 +228,10 @@ class GridChargeController:
         self._last_payload = None
         self._last_remote_ts = None
         self._last_run = None
+        # Debounced "is anything generating?" -- None until the first
+        # definite evidence. See _generating_with_hysteresis().
+        self._generating = None
+        self._generating_pending = 0
 
     # ---- persistence ------------------------------------------------------
 
@@ -421,6 +454,55 @@ class GridChargeController:
                 OverflowError):
             return None, None, None, None
 
+    @staticmethod
+    def _generation_evidence(solar, balance):
+        """What this tick alone says: True, False, or None for 'no opinion'.
+
+        A working meter is direct evidence and takes precedence, but only
+        outside the SOLAR_OFF_W..SOLAR_ON_W band -- inside it the reading is
+        not distinguishable from the noise a sunrise makes crossing it.
+
+        With no reading at all, export settles the question: you cannot
+        export without generating. The signal is net_balance minus the
+        inverter's own draw, so the charger cannot drive it negative by
+        running. The rule this replaced read "proceed unless we know there
+        is no sun", which with a missing reading disarmed the night-time
+        protection entirely -- backwards for a safety check.
+        """
+        if solar is None:
+            return balance < 0
+        if solar >= SOLAR_ON_W:
+            return True
+        if solar <= SOLAR_OFF_W:
+            return False
+        return None
+
+    def _generating_with_hysteresis(self, solar, balance):
+        """Debounced answer to "is anything generating?".
+
+        Changing the answer needs GENERATING_CONFIRMATIONS consecutive ticks
+        that agree; anything else resets the count. The first definite
+        evidence after a restart is adopted outright, since there is no
+        previous answer to defend and refusing to decide for 90 s would just
+        be a slower way of saying "no sun".
+        """
+        observed = self._generation_evidence(solar, balance)
+        if observed is None:
+            self._generating_pending = 0
+        elif self._generating is None:
+            self._generating = observed
+            self._generating_pending = 0
+        elif observed == self._generating:
+            self._generating_pending = 0
+        else:
+            self._generating_pending += 1
+            if self._generating_pending >= GENERATING_CONFIRMATIONS:
+                self._generating = observed
+                self._generating_pending = 0
+        # None only before any definite evidence has ever arrived, and
+        # "unknown" must not authorise charging.
+        return bool(self._generating)
+
     def _evaluate(self):
         cfg = self._config
         net, inverter_w, solar_w, remote_ts = self._fetch_fn()
@@ -462,21 +544,7 @@ class GridChargeController:
             # would otherwise hold the day's last state right through the
             # night -- the signal settles at +80-100 W on this house after
             # dark, which is inside the dead-band.
-            if solar is not None:
-                # A working meter is direct evidence and takes precedence.
-                generating = solar >= SOLAR_FLOOR_W
-            else:
-                # No meter: its Shelly has been offline since 2026-08-31,
-                # and auto-energy reports ac_solar_w as null. Export still
-                # settles it -- you cannot export without generating. The
-                # signal is net_balance minus the inverter's own draw, so
-                # the charger cannot drive it negative by running.
-                #
-                # The rule this replaces read "proceed unless we know there
-                # is no sun", which with a missing reading disarmed the
-                # night-time protection entirely: backwards for a safety
-                # check.
-                generating = balance < 0
+            generating = self._generating_with_hysteresis(solar, balance)
 
             if not generating:
                 # No generation means no export-control work exists. This is

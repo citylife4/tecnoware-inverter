@@ -360,8 +360,36 @@ First live `POP=02` run with the loads actually on the pack:
   window, the pack would have sat discharging with nothing able to command
   it back.
 
-- **2026-08-31 — the solar Shelly (192.168.188.25) is offline** and has been
-  since at least that morning: no ping, no HTTP, and `auto-energy` reports
+- **2026-09-03 correction: the solar Shelly was never offline, it is out of
+  wifi range.** Recorded below for two days as physically absent and needing
+  someone on site. It is not. Queried directly on 2026-09-03:
+
+      uptime            864711 s  =  240 h  =  10 days
+      restart_required  False
+      RSSI              -87 dBm
+      model             SNSW-001P16EU (Shelly Plus 1PM, Gen2)
+      fw                20260311-095847/1.7.5-g9979d16
+
+  It has been powered and running continuously right through the period we
+  called it dead — no reboot, no DHCP change, same IP. **-87 dBm is the
+  cause**: marginal signal, where a device drops off the AP and returns on
+  its own. The fix is an AP or repeater nearer the panels, not a site visit.
+
+  It also explains an old note in CLAUDE.md that direct Shelly HTTP "did not
+  work when tried from either Pi (empty response)". It is a **Gen2** device:
+  `/status` returns 404, `/rpc/Shelly.GetStatus` works. Wrong URL, not wrong
+  network. It does not answer ICMP either, so `ping` is not a test of
+  whether it is alive — use the RPC endpoint.
+
+  Consequence for the fallback below: it was written for a *clean* outage
+  (meter gone, `ac_solar_w` null, export decides). At this signal level the
+  real failure is dropped frames, so `ac_solar_w` alternates between a
+  number and null tick by tick — which switches which *test* is used, not
+  merely where the reading sits. That is why `generating` is now debounced;
+  see the 2026-09-03 dawn flap entry.
+
+- **2026-08-31 — the solar Shelly (192.168.188.25) appeared offline** and did
+  so since at least that morning: no ping, no HTTP, and `auto-energy` reports
   `ac_solar_w: null` / `house_power_w: null` while its other channels still
   read fine. This **disarms the night-time protection**: `grid_charge` skips
   the `disabled_no_solar` branch entirely when solar is `None`, because the
@@ -751,6 +779,45 @@ merely unreliable, it is not populated in battery mode. `battery_capacity`
 is nearly as bad -- 80% on 913 samples, with 18 spurious 50s, two 100s and
 two 26s -- so the SoC readout is quantised and noisy, not a measurement.
 Voltage trend and `ac_output_active_power` remain the only usable pair.
+
+
+### The dawn flap — the last threshold without hysteresis, 2026-09-03
+
+`SOLAR_FLOOR_W` was a bare 5.0 W comparison. Every other threshold in this
+system has a band and a confirmation count, and each one grew them after a
+flap; this one had its turn at sunrise.
+
+The measured ramp, from `auto-energy` (10-minute buckets):
+
+    07:20  0.4 W    07:40  4.3 W    07:50  7.3 W    08:00  10.2 W
+
+Twenty minutes sitting on the threshold. `generating` flipped on and off
+eight times between 07:45 and 07:57. **The surplus signal never moved** —
++17 to +23 W throughout — so nothing about the actual export decision
+changed; only this one test did.
+
+It reached the relay, because everything downstream keys off it:
+
+    desired_state flaps -> is_absorbing_export() follows
+      -> battery_window alternates yielding/window -> POP is written
+
+Three POP writes in five minutes (07:46, 07:47, 07:50), and the night's
+discharge was cut short — the pack went back to 27.0 V at 07:47 having been
+at 25.1 V. Only the asymmetric dwell kept it from being worse: `yielding` is
+dwell-exempt, returning to `window` is not, so most of the oscillation was
+absorbed as "a aguardar 419s".
+
+**Fixed with a band (3 W off, 8 W on) plus 3 confirmations.** Two causes,
+one mechanism: the threshold had no hysteresis, *and* the meter is at
+-87 dBm and drops frames, so `ac_solar_w` alternates between a number and
+null — which switches which test is used, not just where the reading sits.
+A confirmation count covers both, because it requires consecutive agreement
+regardless of why the samples disagree.
+
+90 s to change its mind, against a sunrise that takes 40 minutes to cross
+the band. The first definite evidence after a restart is adopted outright:
+there is no previous answer to defend, and refusing to decide for 90 s is
+just a slower way of saying "no sun".
 
 
 ---

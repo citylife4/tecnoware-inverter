@@ -31,7 +31,9 @@ from webapp.battery_window import (
 
 def bw_runtime_path(config_path: str) -> str:
     return config_path + ".state"
-from webapp.grid_charge import GridChargeController, validate_config
+from webapp.grid_charge import (GENERATING_CONFIRMATIONS, SOLAR_OFF_W,
+                                SOLAR_ON_W, GridChargeController,
+                                validate_config)
 from webapp.safety import CommandRejected
 from webapp.scheduler import Scheduler, validate_rules
 from webapp.service import parse_qpigs, parse_qpiri
@@ -1206,7 +1208,8 @@ class TestGridChargeController(unittest.TestCase):
         service.sent.clear()
         stub.net_balance = 90        # dusk: inside the 30-150 dead-band...
         stub.ac_solar_w = 0.0        # ...and the sun has gone
-        gc.tick()
+        for _ in range(GENERATING_CONFIRMATIONS):
+            gc.tick()                # debounced: sunset is not one sample
         self.assertEqual(gc.get_state()["current"]["desired_state"], "disabled_no_solar")
         self.assertEqual(service.sent, [])   # no PCP write, not even PCP03
 
@@ -1232,7 +1235,8 @@ class TestGridChargeController(unittest.TestCase):
         gc.set_config({"enabled": True, "min_switch_interval": 0})
         self.assertEqual(service.sent, [])
         stub.ac_solar_w = 500.0      # sunrise
-        gc.tick()
+        for _ in range(GENERATING_CONFIRMATIONS):
+            gc.tick()
         self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
         self.assertEqual(service.sent, ["PCP01"])
 
@@ -1258,7 +1262,8 @@ class TestGridChargeController(unittest.TestCase):
         service.sent.clear()
         stub.ac_solar_w = None      # meter offline...
         stub.net_balance = 90       # ...and the house is importing: night
-        gc.tick()
+        for _ in range(GENERATING_CONFIRMATIONS):
+            gc.tick()
         self.assertEqual(gc.get_state()["current"]["desired_state"],
                          "disabled_no_solar")
         self.assertEqual(service.sent, [])
@@ -1270,7 +1275,8 @@ class TestGridChargeController(unittest.TestCase):
         service, stub, gc = self.make(net_balance=-200)
         gc.set_config({"enabled": True, "min_switch_interval": 0})
         stub.ac_solar_w = 0.0
-        gc.tick()
+        for _ in range(GENERATING_CONFIRMATIONS):
+            gc.tick()
         self.assertEqual(gc.get_state()["current"]["desired_state"],
                          "disabled_no_solar")
 
@@ -2833,6 +2839,103 @@ class TestGarbledSetReplyIsNotProofOfFailure(unittest.TestCase):
         # by "already PCP01; nothing to do".
         gc._tick(force=True)
         self.assertIsNone(gc._last_applied_pcp)
+
+
+
+class TestGeneratingIsDebounced(unittest.TestCase):
+    """Reproduces the 2026-09-03 dawn flap.
+
+    Solar sat on the old bare 5 W floor for a quarter of an hour --
+    07:20 0.4 W, 07:40 4.3 W, 07:50 7.3 W, 08:00 10.2 W -- so `generating`
+    flipped on and off repeatedly. The surplus signal never moved (+17 to
+    +23 W throughout); only this test did. It reached the relay:
+    desired_state flapped, is_absorbing_export() followed, battery_window
+    alternated yielding/window, POP was written three times in five minutes
+    and that night's discharge was cut short.
+
+    Two independent causes, one mechanism: the threshold had no band, and
+    the meter is a Shelly at -87 dBm whose readings drop out frame by frame.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "gc.json")
+
+    def make(self, solar, net_balance=-200):
+        service = FakeService()
+        stub = FetchStub(net_balance)
+        stub.ac_solar_w = solar
+        gc = GridChargeController(service, self.path, fetch_fn=stub)
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        return service, stub, gc
+
+    def generating(self, gc):
+        return gc._generating
+
+    def test_a_sunrise_crossing_the_band_does_not_flap(self):
+        """The measured ramp, sample by sample. Exactly one transition."""
+        service, stub, gc = self.make(solar=0.0)
+        self.assertFalse(self.generating(gc))
+        flips = 0
+        previous = self.generating(gc)
+        for w in (0.4, 1.9, 4.3, 4.9, 5.1, 4.6, 5.4, 7.3, 6.8, 7.9,
+                  10.2, 12.0, 14.0):
+            stub.ac_solar_w = w
+            gc.tick()
+            if self.generating(gc) != previous:
+                flips += 1
+                previous = self.generating(gc)
+        self.assertTrue(self.generating(gc), "must end up generating")
+        self.assertEqual(flips, 1, "a sunrise is one transition, not several")
+
+    def test_readings_inside_the_band_hold_the_previous_answer(self):
+        service, stub, gc = self.make(solar=0.0)
+        stub.ac_solar_w = (SOLAR_ON_W + SOLAR_OFF_W) / 2
+        for _ in range(GENERATING_CONFIRMATIONS * 2):
+            gc.tick()
+        self.assertFalse(self.generating(gc),
+                         "inside the band is 'no opinion', not 'yes'")
+
+    def test_one_dropped_reading_does_not_flip_it(self):
+        """The -87 dBm failure mode: ac_solar_w goes null for a tick while
+        the house happens to be importing, which the fallback reads as
+        night. One frame must not stop the charger."""
+        service, stub, gc = self.make(solar=500.0)
+        self.assertTrue(self.generating(gc))
+        stub.ac_solar_w = None
+        stub.net_balance = 90          # importing -> fallback says "no sun"
+        gc.tick()
+        self.assertTrue(self.generating(gc),
+                        "one dropped frame is not sunset")
+
+    def test_sustained_loss_still_wins(self):
+        """Debounced, not ignored: a meter that stays gone with the house
+        importing is night, and must still disable the controller."""
+        service, stub, gc = self.make(solar=500.0)
+        stub.ac_solar_w = None
+        stub.net_balance = 90
+        for _ in range(GENERATING_CONFIRMATIONS):
+            gc.tick()
+        self.assertFalse(self.generating(gc))
+        self.assertEqual(gc.get_state()["current"]["desired_state"],
+                         "disabled_no_solar")
+
+    def test_first_evidence_after_a_restart_is_adopted_at_once(self):
+        """There is no previous answer to defend, and refusing to decide for
+        90 s would just be a slower way of saying 'no sun'."""
+        _, _, gc = self.make(solar=500.0)
+        self.assertTrue(self.generating(gc))
+
+    def test_unknown_never_authorises_charging(self):
+        """Before any definite evidence, the answer is False, not None."""
+        service = FakeService()
+        stub = FetchStub(-200)
+        stub.ac_solar_w = (SOLAR_ON_W + SOLAR_OFF_W) / 2   # inside the band
+        gc = GridChargeController(service, self.path, fetch_fn=stub)
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        self.assertIsNone(gc._generating)
+        self.assertEqual(gc.get_state()["current"]["desired_state"],
+                         "disabled_no_solar")
 
 
 
