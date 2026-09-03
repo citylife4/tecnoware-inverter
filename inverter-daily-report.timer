@@ -1,0 +1,15 @@
+[Unit]
+Description=Send the daily inverter summary after sunset
+
+[Timer]
+# 21:22 local: after the sun is down, so the day's export total is final,
+# and well before the 01:00 battery window opens.
+OnCalendar=*-*-* 21:22:00
+# The Pi is not always up at that moment. Without this, a reboot spanning
+# the timer silently skips a day -- and the whole value of a daily report is
+# that its absence means something is broken.
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

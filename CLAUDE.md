@@ -518,6 +518,16 @@ dead for 14.5 hours with nobody watching:
 The daily heartbeat is what makes silence informative: with it, no message
 means the notifier itself broke. Without it, no message means nothing.
 
+`daily_report.py` is the other half and deliberately breaks the first rule:
+it sends the ordinary numbers every day — export Wh, battery Wh delivered
+per window, when charging stopped, any failures — whether or not anything
+went wrong. Alerting on state changes cannot answer "did that config change
+reduce export?", which needs the boring numbers daily. Run by
+`inverter-daily-report.timer` at 21:22 (`Persistent=true`, so a reboot
+spanning the timer catches up rather than silently skipping a day). It reads
+the CSVs only and never opens the serial port, so it is safe alongside
+`serve.py`. Test with `--stdout`, which sends nothing.
+
 ## Where the rest went
 
 Deliberately **not** in this file, to keep it short enough to load every

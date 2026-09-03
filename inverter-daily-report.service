@@ -1,0 +1,16 @@
+[Unit]
+Description=Daily Telegram summary of the inverter installation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=greenv
+WorkingDirectory=/home/greenv/dev/tecnoware-inverter
+ExecStart=/usr/bin/python3 /home/greenv/dev/tecnoware-inverter/daily_report.py
+StandardOutput=journal
+StandardError=journal
+
+# Reads the telemetry CSVs only -- it never opens the serial port, so it is
+# safe to run alongside inverter-web.service (which holds /dev/ttyUSB0
+# exclusively).
