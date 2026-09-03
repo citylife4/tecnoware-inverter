@@ -438,11 +438,15 @@ is `0.0`. This is a legal requirement, not an optimisation — do not
   ~100% self-consumed. Capturing all of it is worth roughly **EUR 10/year**.
 
 **Known limitation, unsolved:** the override absorbs export by starting the
-charger. Once the battery is full the charger tapers to float and draws
-almost nothing, so there is no way to absorb export at that point via PCP.
-A hard zero-export guarantee needs generation curtailment (the solar Shelly
-at `192.168.188.25` is a Plus 1PM with a controllable relay) or a dump
-load. The user has ruled out cutting the Shelly for now.
+charger. Once the battery is full the charger tapers to float (~90-110 W)
+and draws almost nothing next to what solar can produce at midday, so
+there is no way to absorb export at that point via PCP — confirmed on
+2026-09-01/02/03, exporting 58-124 Wh/day even with the nightly window
+running. A hard zero-export guarantee needs generation curtailment (the
+solar Shelly at `192.168.188.25` is a Plus 1PM with a controllable relay,
+ruled out) or a dump load — sized at 100-200 W from those three days'
+worst-case draw in NOTES.md ("Dump load — sizing it from three days of
+real export"), not yet built.
 
 ## Related project on this network: `auto-energy`
 

@@ -820,6 +820,58 @@ there is no previous answer to defend, and refusing to decide for 90 s is
 just a slower way of saying "no sun".
 
 
+### Dump load — sizing it from three days of real export, 2026-09-03
+
+Not built. This is the option CLAUDE.md's "Known limitation, unsolved" and
+the Open list below have pointed at since 2026-08-25 without numbers behind
+it. There are now three consecutive days of export to size from, so it is
+worth writing down properly before it turns into another guessed threshold.
+
+**Why the battery route has a hard ceiling, not just room to tune.** The
+protected output averages ~14 W (measured 2026-09-02, fridge duty-cycling at
+28%), so headroom created overnight can only ever be ~50-170 Wh depending on
+window length -- the load is the limit, not the pack. And the charger has no
+middle gear: ~90-110 W at float, ~350-560 W actually charging, nothing in
+between. Extending the nightly window is still worth doing and still free,
+but it cannot close this gap; it only buys a few extra minutes of charging
+against a multi-hour export window.
+
+**Three full days, all following the same shape** -- pack full by
+mid-morning, charger tapers to float, midday solar exceeds float draw:
+
+    2026-09-01:  57.5 Wh exported |  160/1178 samples negative | worst -70.6 W
+    2026-09-02: 123.8 Wh exported |  464/2842 samples negative | worst -78.6 W
+    2026-09-03: 105.1 Wh exported |  311/1809 samples negative | worst -70.3 W (partial day)
+
+Worst instantaneous draw across all three days: **-78.6 W**. The inverter's
+own float draw (~90-110 W) already covers a good fraction of a typical
+sample; what is missing is consistently under 100 W, not the multi-hundred-W
+gap PCP alone would suggest.
+
+**Sizing conclusion: this does not need a big load.** Something resistive in
+the 100-200 W range -- a towel rail, a small heater, an immersion element on
+a timer window -- switched on the same surplus signal the charger already
+uses would cover the measured worst case with margin, without needing
+anything close to kW-scale.
+
+**Control shape, not yet built:** the mechanism already exists in
+`grid_charge.py` -- `surplus_signal = net_balance - inverter_input_w`, the
+same debounced generation check, the same hysteresis pattern. A dump load
+would be a second, independent consumer of that signal (own thresholds, own
+relay, own dwell), not a modification to the charger. It needs a
+Shelly-class relay on the load and nothing more from the existing
+automations -- `battery_window` and `grid_charge` do not need to know it
+exists, because it does not touch POP or PCP.
+
+**Still the user's call, not a default to build toward:** generation
+curtailment via the solar Shelly's relay was ruled out earlier for
+unrelated reasons (see CLAUDE.md), and a dump load has a real running cost
+of its own -- it turns unusable surplus into heat somewhere, which is only
+worth it if that heat is useful (hot water) or the EUR 10/year of avoided
+export-adjacent risk is judged worth the hardware. Recorded here so the
+decision can be made from these numbers rather than none.
+
+
 ---
 
 ### Open, roughly by importance
@@ -835,8 +887,10 @@ just a slower way of saying "no sun".
   needs the pack near 24 V in battery mode and seen to start recharging.
   **Do not record as done until observed.**
 - **Zero export cannot currently be guaranteed** — see the limitation under
-  CLAUDE.md's "Why grid-export exists here". Options are generation curtailment via the
-  solar Shelly's relay (user has ruled it out for now) or a dump load.
+  CLAUDE.md's "Why grid-export exists here", and "Dump load — sizing it from
+  three days of real export" above for the numbers. Generation curtailment via
+  the solar Shelly's relay has been ruled out; a dump load is sized (100-200 W)
+  but not built, and is the user's call given its own running cost.
 - **The pump shares the protected output and trips the inverter on
   battery** — see "Loads on this installation". Moving it off is the
   highest-value physical change available and blocks any reliable backup
