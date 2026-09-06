@@ -546,7 +546,8 @@ Nothing needs to be left running on the assistant side.
    the pack, alternating POP is worth building; if it drains far faster
    than solar can refill, that is just buying grid power at night to run a
    fridge at ~90% efficiency, and `POP=00` stays correct.
-4. **Re-verify `PBCV24.0`** once the pack is resting rather than charging.
+4. ~~**Re-verify `PBCV24.0`**~~ — done 2026-09-06, threshold bracketed at
+   23.9-24.0 V over three nights of the extended window.
 
 User's own jobs, independent of the above: set the charge current from the
 **front panel** (gotcha #10 — the single change most likely to extend the
@@ -665,9 +666,23 @@ measurement. Treat the percentages as approximate, not calibrated.
   24.0 that was written, and it is well above the 23.0 V the manual gives as
   program 12's default. So either `PBCV` is not the setting that governs this
   changeover, or the value in effect is neither of the two known candidates.
-  Unresolved — but **25.4 V is the number that actually governs behaviour**,
-  and `webapp/battery_window.py` is configured against it, not against
-  `QPIRI`.
+  **Resolved 2026-09-06: `PBCV24.0` did take effect.** Three nights of the
+  01:00-08:00 window bracket the changeover tightly, because the pack now
+  routinely reaches the low 24s:
+
+      2026-09-04  23.9 V under load  ->  inverter left battery mode ITSELF at 07:59:47
+      2026-09-05  24.1 V minimum     ->  stayed in battery mode
+      2026-09-06  24.0 V minimum     ->  stayed in battery mode
+
+  So the threshold sits between 23.9 and 24.0 V — one telemetry quantum from
+  the 24.0 that was written, and nowhere near either the 22.0 `QPIRI` still
+  reports or the ~25.4 V measured on 2026-08-25. The write worked; `QPIRI`
+  was simply never going to show it (gotcha #2).
+
+  The 2026-08-25 observation is not withdrawn, it is *superseded*: 25.4 V
+  was real at the time, measured six times in four hours. What changed since
+  is the `PBCV24.0` write itself. Anything still configured against 25.4 V
+  is configured against a number that no longer applies.
 
 ---
 
@@ -981,10 +996,11 @@ and worth considering whether the hub-level reset should be narrowed.
   time. Blocked on measuring the fridge's real daily consumption — a full
   day of `telemetry/` plus `auto-energy` data was being collected
   overnight for exactly this.
-- **`PBCV24.0` is ACKed but unverified** (gotcha #2/#5). Intent was to
-  raise the recharge point from a near-flat 22.0 V to 50%. Confirming it
-  needs the pack near 24 V in battery mode and seen to start recharging.
-  **Do not record as done until observed.**
+- ~~**`PBCV24.0` is ACKed but unverified**~~ — **closed 2026-09-06.** The
+  longer battery window finally took the pack low enough to test it: the
+  inverter changed over by itself at 23.9 V on 09-04 and held at 24.0-24.1 V
+  on 09-05/06. Threshold is 23.9-24.0 V, matching what was written. See the
+  entry under "Applied but NOT yet verified" above.
 - **Zero export cannot currently be guaranteed** — see the limitation under
   CLAUDE.md's "Why grid-export exists here", and "Dump load — sizing it from
   three days of real export" above for the numbers. Generation curtailment via

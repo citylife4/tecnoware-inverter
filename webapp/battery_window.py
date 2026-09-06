@@ -90,9 +90,24 @@ ABSOLUTE_FLOOR_V = 24.0
 # this, i.e. with the fridge compressor stopped. The pack sags ~0.4 V at just
 # 46 W (measured 2026-08-25), so a sample taken mid-cycle reads well below
 # where the pack actually sits, and a floor set just above the inverter's own
-# switch-back point would latch on it. Missing a genuine crossing this way is
-# the safe direction: program 12 hands the loads back to utility at ~25.4 V
-# regardless, so the hardware backstops us.
+# switch-back point would latch on it.
+#
+# The hardware still backstops a missed crossing, but the margin is now thin
+# and that is worth knowing before touching floor_voltage. This comment used
+# to say program 12 changes over at ~25.4 V, which was true when measured on
+# 2026-08-25 and is not any more: `PBCV24.0` took effect, and three nights of
+# the long window bracket the changeover at 23.9-24.0 V (2026-09-04 the
+# inverter left battery mode itself at 23.9 V; 09-05 and 09-06 it held at
+# 24.0-24.1 V). See NOTES.md.
+#
+# So the backstop now sits essentially ON the 24.0 V floor rather than 1.4 V
+# above it. In practice the hardware tends to act first, because this gate
+# discards exactly the sagged readings that would otherwise trip the software
+# floor -- observed 2026-09-04, where below_floor never left 0 and the
+# inverter changed over on its own. That is still the safe direction, but
+# there is no longer room to lower floor_voltage on the assumption that
+# something else will catch it. ABSOLUTE_FLOOR_V refuses anything lower
+# anyway.
 FLOOR_MAX_LOAD_W = 10
 
 # Above this AC input voltage the grid is considered present. Used only to
