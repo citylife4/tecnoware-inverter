@@ -1,0 +1,15 @@
+[Unit]
+Description=Send the overnight summary at 09:00
+
+[Timer]
+# An hour after the 08:00 window close, so the night is complete and the
+# morning charge has had time to show whether the pack still has headroom.
+OnCalendar=*-*-* 09:00:00
+# Deliberately NOT Persistent: unlike the evening report, a missed morning
+# summary is stale by the time it would fire. The 21:22 report covers the
+# same day anyway, so nothing is lost by skipping it.
+Persistent=false
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

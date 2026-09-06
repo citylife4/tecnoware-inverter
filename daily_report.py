@@ -198,6 +198,96 @@ def storage_problems():
     return problems
 
 
+def problems_for(date: str):
+    """Fault counts for one day, shared by both reports."""
+    gcp = os.path.join(TELEMETRY_DIR, f"gridcharge-{date}.csv")
+    bwp = os.path.join(TELEMETRY_DIR, f"batterywindow-{date}.csv")
+    out = []
+    if os.path.exists(bwp):
+        bw = _read_csv(bwp)
+        reasons = collections.Counter(r.get("reason") for r in bw)
+        if reasons.get("hardware_override"):
+            out.append(f"hardware_override x{reasons['hardware_override']}")
+        if reasons.get("pop_drift_stuck"):
+            out.append(f"pop_drift_stuck x{reasons['pop_drift_stuck']}")
+        failed = sum(1 for r in bw if "sem ACK" in (r.get("note") or "")
+                     or (r.get("note") or "").startswith("erro"))
+        if failed:
+            out.append(f"escritas POP falhadas x{failed}")
+    if os.path.exists(gcp):
+        failed = sum(1 for r in _read_csv(gcp) if "error" in (r.get("note") or "")
+                     or "not acknowledge" in (r.get("note") or ""))
+        if failed:
+            out.append(f"escritas PCP falhadas x{failed}")
+    return out
+
+
+def telemetry_gaps(rows, min_seconds=120):
+    """Stretches where the logger stopped. A gap over ~900 s means the stall
+    detector fired and systemd restarted the service -- worth surfacing,
+    because the service coming back on its own is exactly the kind of thing
+    nobody notices (2026-09-06: 947 s, the first time it ever fired)."""
+    ts = [_to_local(r["ts"]) for r in rows]
+    ts = [t for t in ts if t]
+    return [(ts[i - 1], ts[i], (ts[i] - ts[i - 1]).total_seconds())
+            for i in range(1, len(ts))
+            if (ts[i] - ts[i - 1]).total_seconds() > min_seconds]
+
+
+def build_morning(date: str) -> str:
+    """Sent at 09:00, an hour after the night window closes.
+
+    Deliberately a different question from the 21:22 report: that one closes
+    the books on a finished day, this one says what happened overnight while
+    nobody was looking and whether the pack still has room going into the
+    day. No interpretation -- just the numbers, so it keeps working with no
+    Claude session attached.
+    """
+    tel = os.path.join(TELEMETRY_DIR, f"telemetry-{date}.csv")
+    lines = [f"Bom dia - resumo da noite {date}"]
+
+    if not os.path.exists(tel):
+        lines.append("Sem telemetria. Verificar o servico.")
+        return "\n".join(lines)
+
+    rows, skipped = read_telemetry.load(tel)
+    spans = [s for s in battery_spans(rows) if s["start"].hour < 9]
+    if spans:
+        delivered = sum(s["wh"] for s in spans)
+        lines.append(f"Janela noturna: {delivered:.0f} Wh")
+        for s in spans:
+            lines.append(f"  {s['start']:%H:%M}-{s['end']:%H:%M} ({s['hours']:.1f}h) "
+                         f"{s['v_start']:.1f}->{s['v_min']:.1f}V {s['wh']:.0f}Wh")
+    else:
+        lines.append("Janela noturna: NAO CORREU esta noite")
+
+    # State right now: still charging means there is headroom left for the
+    # day's surplus, which is the whole point of the long window.
+    last = rows[-1] if rows else {}
+    v = _num(last.get("battery_voltage"))
+    amps = _num(last.get("battery_charging_current"))
+    mode = last.get("mode")
+    when = _to_local(last.get("ts", "")) if last.get("ts") else None
+    if v is not None:
+        charging = "a carregar" if (amps and 0 < amps < 100) else "sem carga"
+        lines.append(f"Agora ({when:%H:%M}): modo {mode}, {v:.1f} V, {charging}"
+                     if when else f"Agora: modo {mode}, {v:.1f} V, {charging}")
+
+    gcp = os.path.join(TELEMETRY_DIR, f"gridcharge-{date}.csv")
+    if os.path.exists(gcp):
+        wh, neg, total, worst = export_wh(_read_csv(gcp))
+        lines.append(f"Exportado ate agora: {wh:.1f} Wh ({neg}/{total} amostras)")
+
+    problems = problems_for(date)
+    for a, b, secs in telemetry_gaps(rows):
+        problems.append(f"falha de registo {secs / 60:.0f} min ({a:%H:%M}-{b:%H:%M})")
+    if skipped:
+        problems.append(f"{skipped} linhas corrompidas")
+    problems.extend(storage_problems())
+    lines.append("Problemas: " + ("; ".join(problems) if problems else "nenhum"))
+    return "\n".join(lines)
+
+
 def build(date: str) -> str:
     tel = os.path.join(TELEMETRY_DIR, f"telemetry-{date}.csv")
     gcp = os.path.join(TELEMETRY_DIR, f"gridcharge-{date}.csv")
@@ -233,27 +323,11 @@ def build(date: str) -> str:
     else:
         lines.append("Bateria: sem dados")
 
-    problems = []
     if os.path.exists(bwp):
-        bw = _read_csv(bwp)
-        reasons = collections.Counter(r.get("reason") for r in bw)
-        overrides = reasons.get("hardware_override", 0)
-        if overrides:
-            problems.append(f"hardware_override x{overrides}")
-        if reasons.get("pop_drift_stuck"):
-            problems.append(f"pop_drift_stuck x{reasons['pop_drift_stuck']}")
-        failed = sum(1 for r in bw if "sem ACK" in (r.get("note") or "")
-                     or (r.get("note") or "").startswith("erro"))
-        if failed:
-            problems.append(f"escritas POP falhadas x{failed}")
-        if reasons.get("daytime"):
-            lines.append(f"Janela diurna abriu ({reasons['daytime']} ticks)")
-    if os.path.exists(gcp):
-        gc = _read_csv(gcp)
-        failed = sum(1 for r in gc if "error" in (r.get("note") or "")
-                     or "not acknowledge" in (r.get("note") or ""))
-        if failed:
-            problems.append(f"escritas PCP falhadas x{failed}")
+        daytime = collections.Counter(r.get("reason") for r in _read_csv(bwp)).get("daytime")
+        if daytime:
+            lines.append(f"Janela diurna abriu ({daytime} ticks)")
+    problems = problems_for(date)
 
     problems.extend(storage_problems())
     lines.append("Problemas: " + ("; ".join(problems) if problems else "nenhum"))
@@ -268,10 +342,13 @@ def main() -> int:
                     help="YYYY-MM-DD; defaults to today (local)")
     ap.add_argument("--stdout", action="store_true",
                     help="print the report instead of sending it")
+    ap.add_argument("--morning", action="store_true",
+                    help="overnight summary (sent at 09:00) instead of the "
+                         "end-of-day one")
     args = ap.parse_args()
 
     date = args.date or dt.date.today().isoformat()
-    text = build(date)
+    text = build_morning(date) if args.morning else build(date)
 
     if args.stdout:
         print(text)

@@ -518,7 +518,15 @@ dead for 14.5 hours with nobody watching:
 The daily heartbeat is what makes silence informative: with it, no message
 means the notifier itself broke. Without it, no message means nothing.
 
-`daily_report.py` is the other half and deliberately breaks the first rule:
+Two scheduled reports, both script-only so they keep working with no Claude
+session attached: **`--morning` at 09:00** (`inverter-morning-report.timer`)
+covers the overnight window, the current state and whether the pack still
+has headroom going into the day; the **end-of-day at 21:22**
+(`inverter-daily-report.timer`) closes the books. The morning one is
+deliberately *not* `Persistent=true` — a missed morning summary is stale by
+the time it would fire, and the evening report covers the same day anyway.
+
+`daily_report.py` deliberately breaks the first rule:
 it sends the ordinary numbers every day — export Wh, battery Wh delivered
 per window, when charging stopped, any failures — whether or not anything
 went wrong. Alerting on state changes cannot answer "did that config change

@@ -1,0 +1,15 @@
+[Unit]
+Description=Morning Telegram summary of the overnight battery window
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=greenv
+WorkingDirectory=/home/greenv/dev/tecnoware-inverter
+ExecStart=/usr/bin/python3 /home/greenv/dev/tecnoware-inverter/daily_report.py --morning
+StandardOutput=journal
+StandardError=journal
+
+# Reads the telemetry CSVs only -- never opens the serial port, so it is
+# safe alongside inverter-web.service.
