@@ -62,15 +62,17 @@ Flag if deep cycles exceed ~1/day or depth passes ~20%.
 
 ## 3. Live concern: the service stalls
 
-The serial thread wedges; the stall detector (`STALL_EXIT_S = 900` in
+The serial thread wedges; the stall detector (`STALL_EXIT_S = 300` in
 `webapp/service.py`) exits and systemd restarts it.
 
     09-04 18:44   15 min
     09-06 04:28   16 min
     09-08 03:00   16 min
 
-Roughly every other day, steady, **not accelerating**. Costs ~15 min of
-monitoring each time (~0.6% of uptime).
+Roughly every other day, steady, **not accelerating**. Each cost ~15 min of
+monitoring under the old 900 s threshold; from 09-09 it should be ~5 min, so
+watch that the next one is shorter — that is the check that the change
+actually worked.
 
 **There is no leading indicator** — checked 09-08. Sample interval in the
 hour before each stall is identical to quiet reference windows (median 11 s,
