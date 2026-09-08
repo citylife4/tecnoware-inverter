@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-08
+Last updated: 2026-09-09
 
 ---
 
@@ -82,10 +82,24 @@ is the right mechanism.
 Root cause unidentified. USB degradation is the suspect but nothing in the
 data points at it directly.
 
-**Open suggestion, not applied:** lower `STALL_EXIT_S` to 300 s. Recovery in
-~5 min instead of 15. Polling is 10 s, so 300 s is already 30 consecutive
-failed reads, and the slowest legitimate operation is a 10 s set command; a
-false positive costs a 20 s restart.
+**Applied 2026-09-09:** `STALL_EXIT_S` lowered 900 -> 300 s, so recovery is
+~5 min instead of ~15. Sized from the archive: across 107115 intervals over
+16 days the gap between successful reads is p99.99 33 s and the worst on any
+ordinary day 25-39 s, so 300 s is ~9x the worst normal reading.
+
+**Also fixed the same day: `usb_watchdog` was never catching these at all.**
+`_service_health()` returned early on `connected`, which made its staleness
+check dead code in exactly the case it was written for — `connected` is
+`_latest is not None and _latest_error is None`, so a poller wedged *inside*
+a read keeps it True forever while nothing is read. All three stalls ran the
+full 900 s to the process-level detector while the watchdog logged
+"ok (connected)" every five minutes. Staleness is now checked first and
+unconditionally; `connected` is necessary, not sufficient. Six regression
+tests added — there were none before.
+
+Two independent mechanisms now cover this: the in-process detector at
+300-360 s, and the watchdog at 300-600 s (its own poll interval), whose
+first remedy is a service restart.
 
 ## 4. Standing, lower priority
 

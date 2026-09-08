@@ -77,10 +77,27 @@ MIN_QPIGS_FIELDS = 14
 # The system was dead for 14.5 hours -- no telemetry, and the 04:30 battery
 # window never ran.
 #
-# Generous on purpose: the link drops frames constantly and the poller
-# already backs off to 60 s when erroring, so this must only fire on a link
-# that is genuinely gone, never on ordinary noise.
-STALL_EXIT_S = 900.0
+# Must only fire on a link that is genuinely gone, never on ordinary noise
+# -- the link drops frames constantly and the poller backs off to 40 s while
+# erroring (poll_interval * 4, capped at 60).
+#
+# Lowered from 900 s on 2026-09-09, and sized from the record rather than
+# guessed. Across 107115 intervals over 16 days of telemetry, the gap
+# between successful reads is p99 19 s, p99.9 24 s, p99.99 33 s, and the
+# worst on any ordinary day is 25-39 s. The only larger gaps in the whole
+# archive are 111 s on 08-24 (during heavy manual testing) and 535 s on
+# 08-30 at 18:29 -- which was the USB bus re-enumerating, i.e. a real
+# disturbance that arguably should have restarted the service anyway.
+#
+# 300 s is therefore ~9x the p99.99 and ~8x the worst normal day, while
+# cutting recovery from ~15 min to ~5. The stall thread wakes every 60 s, so
+# it actually fires between 300 and 360 s.
+#
+# Three stalls in five days (09-04 18:44, 09-06 04:28, 09-08 03:00) each ran
+# the full 900 s. They arrive without warning: sample intervals in the hour
+# before each are indistinguishable from quiet periods, so nothing gradual
+# can be detected earlier and a fixed timeout is the right mechanism.
+STALL_EXIT_S = 300.0
 
 # QMOD single-letter working modes (PI30).
 DEVICE_MODES = {

@@ -2493,12 +2493,33 @@ class TestStallDetector(unittest.TestCase):
             os._exit = real
         self.assertEqual(exited, [])
 
-    def test_threshold_is_generous_enough_for_ordinary_noise(self):
-        """The link drops frames constantly and the poller already backs off
-        to 60 s while erroring, so this must only catch a link that is
-        genuinely gone."""
+    def test_threshold_only_catches_a_link_that_is_genuinely_gone(self):
+        """The link drops frames constantly and the poller backs off to 40 s
+        while erroring (poll_interval * 4, capped at 60), so this must never
+        fire on ordinary noise.
+
+        The bound used to be 600 s, which was a guess made with no data. It
+        is now anchored on the archive: across 107115 intervals over 16 days,
+        the gap between successful reads is p99 19 s, p99.9 24 s, p99.99
+        33 s, and the worst on any ordinary day is 25-39 s. The only larger
+        gaps in the whole record are 111 s during heavy manual testing and
+        535 s while the USB bus re-enumerated -- a real disturbance, not
+        noise.
+
+        180 s is ~5x the worst ordinary reading, which is the property this
+        test is actually defending. The deployed 300 s sits comfortably
+        inside it.
+        """
         from webapp.service import STALL_EXIT_S
-        self.assertGreaterEqual(STALL_EXIT_S, 600)
+        self.assertGreaterEqual(STALL_EXIT_S, 180)
+
+    def test_threshold_still_recovers_promptly(self):
+        """The other half, which the old bound did not express: a stall costs
+        monitoring and can land mid-window (2026-09-08 hit the middle of the
+        01:00 discharge). Three stalls in five days each ran the full 900 s,
+        which is why that value was lowered."""
+        from webapp.service import STALL_EXIT_S
+        self.assertLessEqual(STALL_EXIT_S, 600)
 
 
 class TestNotifier(unittest.TestCase):
@@ -2936,6 +2957,103 @@ class TestGeneratingIsDebounced(unittest.TestCase):
         self.assertIsNone(gc._generating)
         self.assertEqual(gc.get_state()["current"]["desired_state"],
                          "disabled_no_solar")
+
+
+
+class TestWatchdogHealthCheck(unittest.TestCase):
+    """usb_watchdog._service_health.
+
+    The bug this guards against, found 2026-09-09: `connected` short-
+    circuited the staleness check with an early `return True`, which made
+    that check dead code in exactly the case it was written for. The flag is
+    `_latest is not None and _latest_error is None`, so a poller wedged
+    *inside* a read never sets the error and never clears the last good
+    frame -- it stays True indefinitely while nothing is read. That is the
+    2026-09-01 failure verbatim. Live consequence: the stalls of 09-04, 09-06
+    and 09-08 each ran the full 900 s to the process-level detector while the
+    watchdog logged "ok (connected)" every five minutes.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.cfg = os.path.join(self.tmp.name, "web.json")
+        with open(self.cfg, "w") as fh:
+            json.dump({"http_port": 9099, "token": "t"}, fh)
+
+    def health(self, body):
+        """Run _service_health against a canned /api/status body."""
+        import usb_watchdog
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self._payload = json.dumps(payload).encode()
+            def read(self):
+                return self._payload
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        real = usb_watchdog.urllib.request.urlopen
+        usb_watchdog.urllib.request.urlopen = lambda *a, **k: FakeResponse(body)
+        try:
+            return usb_watchdog._service_health(self.cfg)
+        finally:
+            usb_watchdog.urllib.request.urlopen = real
+
+    @staticmethod
+    def _ago(seconds):
+        return (dt.datetime.now(dt.timezone.utc)
+                - dt.timedelta(seconds=seconds)).isoformat()
+
+    def test_connected_does_not_excuse_a_stale_read(self):
+        """The whole bug in one assertion."""
+        healthy, detail = self.health(
+            {"connected": True, "last_success": self._ago(900)})
+        self.assertFalse(healthy, "a wedged poller keeps connected=True")
+        self.assertIn("900", detail)
+
+    def test_connected_and_fresh_is_healthy(self):
+        healthy, _ = self.health(
+            {"connected": True, "last_success": self._ago(15)})
+        self.assertTrue(healthy)
+
+    def test_fresh_but_not_connected_is_a_fault(self):
+        """connected is necessary as well as insufficient."""
+        healthy, detail = self.health(
+            {"connected": False, "last_success": self._ago(15),
+             "error": "serial busy"})
+        self.assertFalse(healthy)
+        self.assertIn("serial busy", detail)
+
+    def test_never_read_since_start_is_a_fault(self):
+        healthy, detail = self.health({"connected": True, "last_success": None})
+        self.assertFalse(healthy)
+        self.assertIn("never read", detail)
+
+    def test_unreachable_service_is_a_fault_not_a_skip(self):
+        """Returning None here cost 14.5 hours on 2026-09-01."""
+        import usb_watchdog
+        real = usb_watchdog.urllib.request.urlopen
+        def boom(*a, **k):
+            raise OSError("timed out")
+        usb_watchdog.urllib.request.urlopen = boom
+        try:
+            healthy, detail = usb_watchdog._service_health(self.cfg)
+        finally:
+            usb_watchdog.urllib.request.urlopen = real
+        self.assertFalse(healthy)
+        self.assertIsNotNone(healthy, "None means 'skip', which is what failed before")
+        self.assertIn("unreachable", detail)
+
+    def test_unreadable_config_is_the_one_real_skip(self):
+        """A config we cannot read is genuinely none of our business."""
+        import usb_watchdog
+        healthy, detail = usb_watchdog._service_health(
+            os.path.join(self.tmp.name, "absent.json"))
+        self.assertIsNone(healthy)
+        self.assertIn("config unreadable", detail)
 
 
 

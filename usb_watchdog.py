@@ -97,9 +97,22 @@ def _service_health(config_path: str, timeout: float = 10.0):
         # liveness probe would have missed this too.
         return False, "service unreachable: %s" % e
 
-    if body.get("connected"):
-        return True, "connected"
-
+    # Staleness is checked FIRST, and unconditionally.
+    #
+    # `connected` used to short-circuit this: `if body.get("connected"):
+    # return True`. That made the staleness check below dead code in the one
+    # case it was written for. The flag is
+    # `_latest is not None and _latest_error is None`, so a poller wedged
+    # *inside* a read never sets the error and never clears the last good
+    # frame -- it stays True indefinitely while nothing is being read. That
+    # is exactly the 2026-09-01 failure this function's docstring describes,
+    # and the early return walked straight past the guard added to catch it.
+    #
+    # Observed live: the stalls of 2026-09-04, 09-06 and 09-08 each ran the
+    # full 900 s to the process-level detector in webapp/service.py, while
+    # this watchdog logged "ok (connected)" every five minutes throughout.
+    # `connected` is a necessary condition for health, never a sufficient
+    # one.
     last = body.get("last_success")
     if not last:
         return False, "never read since start"
@@ -110,7 +123,9 @@ def _service_health(config_path: str, timeout: float = 10.0):
         return False, "unparseable last_success %r" % last
     if age > STALE_AFTER_S:
         return False, "last read %.0fs ago" % age
-    return True, "stale %.0fs, under threshold" % age
+    if not body.get("connected"):
+        return False, "not connected: %s" % (body.get("error") or "unknown")
+    return True, "connected, last read %.0fs ago" % age
 
 
 def _adapter_hub() -> str | None:
