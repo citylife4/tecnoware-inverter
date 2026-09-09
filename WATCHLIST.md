@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-09 (evening: ratio series, floor sampling)
+Last updated: 2026-09-09 (evening)
 
 ---
 
@@ -39,9 +39,26 @@ trace.
               09-06   27.1
               09-07   45.6
               09-08   33.2
-              mean 32.1 | median 33.2 | spread 2.3-52.2
-    (09-09 partial at 11:17: 3.7 Wh on 0.25 kWh — too little
-     generation to be meaningful; add it at end of day)
+              09-09  113.0   <- bright day, see below
+              mean 45.6 | median 39.4 | spread 2.3-113.0
+
+**The benefit depends on how bright the day is, and that is the most
+important thing in this section.** 09-09 generated 1.00 kWh (peak 190 W,
+against an all-time record of 193 W) and returned a ratio of 113.0 —
+indistinguishable from the 115.6 baseline. Not a fault: the controllers ran
+normally, 124 Wh out of the pack over 2 cycles, bulk charging until 18:47.
+
+    09-03  short window  0.95 kWh gen   59 Wh from pack  -> 109.9 Wh exported
+    09-09  long window   1.00 kWh gen  124 Wh from pack  -> 112.8 Wh exported
+
+65 Wh more absorption, essentially the same export. The pack caps at
+~124 Wh/day and that is marginal against 1.00 kWh.
+
+So the 76% reduction was measured on days of 0.42-0.91 kWh. **On bright days
+the longer window buys nothing measurable — and bright days are exactly when
+there is export to avoid.** Above roughly 0.9 kWh of generation the surplus
+escapes whatever the battery does. This is the dump-load argument with a
+threshold attached.
 
 **Report the spread, not the mean.** Three days with near-identical
 generation (09-03/06/07, all ~0.9 kWh) gave 110 / 24 / 41 Wh of export, so
@@ -124,8 +141,13 @@ first remedy is a service restart.
 
 ## 4. Standing, lower priority
 
-- **SD card 87% used**, 3.6 GB free. Not growing fast; ~750 MB of unused
-  Docker images reclaimable. If it fills, everything stops at once.
+- **SD card 88% used, 3.2 GB free — and now measurably filling.** Free space
+  went 4.2 GB (09-03) -> 3.2 GB (09-09), roughly 170 MB/day; about three
+  weeks at that rate. The earlier "not growing fast" no longer holds. Nothing
+  single file explains it (telemetry is only 17 MB; DVR footage lives on the
+  USB stick), so it is diffuse — worth finding before reclaiming. 709 MB of
+  unused Docker images would buy only a few days. If it fills, everything
+  stops at once.
 - **Solar Shelly at -87 dBm** — reports now, but dropped for two days and
   cost the 09-01/02 baseline. An AP nearer the panels is the fix.
 - **DVR USB stick** — recovers only manually; Docker resolves bind mounts at
