@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-09
+Last updated: 2026-09-09 (evening: ratio series, floor sampling)
 
 ---
 
@@ -40,6 +40,8 @@ trace.
               09-07   45.6
               09-08   33.2
               mean 32.1 | median 33.2 | spread 2.3-52.2
+    (09-09 partial at 11:17: 3.7 Wh on 0.25 kWh — too little
+     generation to be meaningful; add it at end of day)
 
 **Report the spread, not the mean.** Three days with near-identical
 generation (09-03/06/07, all ~0.9 kWh) gave 110 / 24 / 41 Wh of export, so
@@ -60,6 +62,22 @@ minimum sits at 24.0-24.1 V.
 
 Flag if deep cycles exceed ~1/day or depth passes ~20%.
 
+**The floor counter samples 6x less often than telemetry.** `battery_window`
+ticks every 60 s and reads the latest cached frame, while the poller writes
+one every 10 s, so the floor sees 1 sample in 6. Observed 09-09: telemetry
+caught 5 readings at or below the 24.0 V floor with the load quiet (<=10 W),
+which is the first time any day has produced qualifying samples at all — and
+`below_floor` still never left 0, because none of them landed on a tick.
+
+Benign so far and arguably intended: `floor_confirmations = 3` is meant to
+require a *sustained* low, not a transient, and the excursions are ~0.1 V
+under 45-68 W of compressor load. But it means the software floor is
+effectively a coarser instrument than it looks, and program 12 at
+~23.9-24.0 V is doing most of the real backstopping. Worth remembering
+before anyone concludes the floor "works" from the fact that it never fires.
+
+Historical max `below_floor` on any day: 1, against 3 needed.
+
 ## 3. Live concern: the service stalls
 
 The serial thread wedges; the stall detector (`STALL_EXIT_S = 300` in
@@ -68,6 +86,7 @@ The serial thread wedges; the stall detector (`STALL_EXIT_S = 300` in
     09-04 18:44   15 min
     09-06 04:28   16 min
     09-08 03:00   16 min
+    (none on 09-09 as of 11:17 — the ~5 min check is still pending)
 
 Roughly every other day, steady, **not accelerating**. Each cost ~15 min of
 monitoring under the old 900 s threshold; from 09-09 it should be ~5 min, so
