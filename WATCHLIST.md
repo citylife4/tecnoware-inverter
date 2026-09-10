@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-10 (solar meter down again)
+Last updated: 2026-09-10 (evening)
 
 ---
 
@@ -43,11 +43,22 @@ trace.
               09-10   ---     NOT COMPUTABLE, see below
               mean 45.6 | median 39.4 | spread 2.3-113.0
 
-**Do not enter 09-10 in the series.** The solar meter dropped off the network
-at ~09:10, so generation is truncated at that point while export keeps
-accruing all day. Any ratio computed from it divides a full day's export by a
-partial morning's generation and comes out inflated — garbage that would look
-like drift. This is the same loss that left the baseline at n=1.
+**09-10 stays out of the series** — the solar meter dropped off at ~09:10, so
+generation is truncated while export accrues all day, and any ratio from it
+divides a full day by a partial morning and comes out inflated.
+
+**But an outage is no longer a total loss.** `solar_rad` from the weather
+station is a usable proxy, using the regression fitted 2026-09-03
+(`ac_solar_w ~= 0.1925 * solar_rad - 6.4`, R^2 0.854). It is well calibrated
+where both exist — 09-06 est 0.88 vs measured 0.89, 09-07 est 0.92 vs 0.91 —
+and within ~15% on the rest. Good enough to answer "was it bright?", not good
+enough to enter the series as a measurement.
+
+**On that basis 09-10 confirms the bright-day finding, which was n=1 and is
+now n=2.** Today had the highest `solar_rad` mean of the last five days (219,
+a direct observation independent of the regression), an estimated 0.86 kWh,
+and exported 98.2 Wh — an implied ratio near 114, essentially identical to
+09-09's measured 113.0. Two bright days, two returns to baseline.
 
 **The benefit depends on how bright the day is, and that is the most
 important thing in this section.** 09-09 generated 1.00 kWh (peak 190 W,
