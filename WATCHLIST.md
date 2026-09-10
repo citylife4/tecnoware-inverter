@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-09 (evening)
+Last updated: 2026-09-10
 
 ---
 
@@ -141,13 +141,29 @@ first remedy is a service restart.
 
 ## 4. Standing, lower priority
 
-- **SD card 88% used, 3.2 GB free — and now measurably filling.** Free space
-  went 4.2 GB (09-03) -> 3.2 GB (09-09), roughly 170 MB/day; about three
-  weeks at that rate. The earlier "not growing fast" no longer holds. Nothing
-  single file explains it (telemetry is only 17 MB; DVR footage lives on the
-  USB stick), so it is diffuse — worth finding before reclaiming. 709 MB of
-  unused Docker images would buy only a few days. If it fills, everything
-  stops at once.
+- **SD card: cause found and cleaned 2026-09-10. 68% used, 8.7 GB free**
+  (was 88% / 3.2 GB).
+
+  **It was never this project.** `/home/greenv` was 11 GB of which `dev/` —
+  every project on the machine — was 103 MB. The growth was **VS Code
+  downloading a fresh ~660 MB remote server every day or two and keeping the
+  old ones**: five copies dating from 09-01 to 09-09, 3.2 GB. That is ~165
+  MB/day, which matches the ~170 MB/day measured almost exactly.
+
+  Reclaimed 5.5 GB: 4 old VS Code servers (2.6 G, keeping only the live one
+  from `lru.json`, verified with `lsof` to have no open files), the Chromium
+  cache (2.1 G, untouched since February, no browser running),
+  `CachedExtensionVSIXs` (451 M), and Docker — 23 images down to 4, plus
+  404 MB of build cache. All four containers stayed up throughout.
+
+  **It will come back at ~165 MB/day** unless something prunes
+  `~/.vscode-server/cli/servers/`. VS Code keeps an `lru.json` but evidently
+  does not act on it. `daily_report` warns from 85% used, so there is
+  detection; there is no automatic cleanup. Roughly 30 days of headroom now.
+
+  Still available if ever needed, not touched because they are application
+  data rather than caches: `.copilot` 1.3 G, `.codex` 420 M, `.local` 1.7 G
+  (of which `.local/share/claude` is 1.2 G).
 - **Solar Shelly at -87 dBm** — reports now, but dropped for two days and
   cost the 09-01/02 baseline. An AP nearer the panels is the fix.
 - **DVR USB stick** — recovers only manually; Docker resolves bind mounts at
