@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-10
+Last updated: 2026-09-10 (solar meter down again)
 
 ---
 
@@ -40,7 +40,14 @@ trace.
               09-07   45.6
               09-08   33.2
               09-09  113.0   <- bright day, see below
+              09-10   ---     NOT COMPUTABLE, see below
               mean 45.6 | median 39.4 | spread 2.3-113.0
+
+**Do not enter 09-10 in the series.** The solar meter dropped off the network
+at ~09:10, so generation is truncated at that point while export keeps
+accruing all day. Any ratio computed from it divides a full day's export by a
+partial morning's generation and comes out inflated — garbage that would look
+like drift. This is the same loss that left the baseline at n=1.
 
 **The benefit depends on how bright the day is, and that is the most
 important thing in this section.** 09-09 generated 1.00 kWh (peak 190 W,
@@ -172,8 +179,16 @@ first remedy is a service restart.
   which is now the only thing that needs to stay true. Remaining, deliberately
   untouched as application data rather than caches: `.codex` 420 M, `.local`
   1.7 G (of which `.local/share/claude` is 1.2 G), `.wine-dvr` 269 M.
-- **Solar Shelly at -87 dBm** — reports now, but dropped for two days and
-  cost the 09-01/02 baseline. An AP nearer the panels is the fix.
+- **Solar Shelly at -87 dBm — DOWN AGAIN since 2026-09-10 ~09:10.** ARP is
+  `(incomplete)` and the RPC endpoint does not answer, i.e. off the network
+  entirely, exactly as during 08-31 to 09-02. Second occurrence. An AP nearer
+  the panels is the fix; nothing software-side can help.
+
+  Consequence while it is down: the normalised-export ratio cannot be
+  computed at all, so the series simply pauses — do not invent entries.
+  Export control itself is unaffected: `grid_charge` falls back to
+  `generating = balance < 0`, verified working today (`solar=None`,
+  signal -126.9 W, state `charging`).
 - **DVR USB stick** — recovers only manually; Docker resolves bind mounts at
   container start, so a remount needs a Shinobi restart. Detection is in the
   daily report.
@@ -191,3 +206,10 @@ first remedy is a service restart.
   reconverge on the next tick. Only flag a sustained rise.
 - **A handful of corrupt telemetry lines a day** (5-13). Skipped by
   `read_telemetry.load()`.
+- **A lone high-load sample on battery**, e.g. 1129 W with the pack sagging to
+  23.3 V (09-10 03:09:55, one sample in 2250). That is the fridge compressor
+  starting, not a deep discharge and not corruption: 1129 W at ~25 V is ~45 A,
+  and 45 A across the pack's measured 0.045 ohm is ~2 V of sag, which lands
+  exactly where it landed. The floor's load gate correctly ignores these.
+  Judge depth from *quiet* samples only — on 09-10, of 48 readings at or below
+  24.0 V, zero were under 10 W.
