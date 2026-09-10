@@ -141,7 +141,7 @@ first remedy is a service restart.
 
 ## 4. Standing, lower priority
 
-- **SD card: cause found and cleaned 2026-09-10. 68% used, 8.7 GB free**
+- **SD card: resolved at the source 2026-09-10. 56% used, 12 GB free**
   (was 88% / 3.2 GB).
 
   **It was never this project.** `/home/greenv` was 11 GB of which `dev/` —
@@ -156,14 +156,22 @@ first remedy is a service restart.
   `CachedExtensionVSIXs` (451 M), and Docker — 23 images down to 4, plus
   404 MB of build cache. All four containers stayed up throughout.
 
-  **It will come back at ~165 MB/day** unless something prunes
-  `~/.vscode-server/cli/servers/`. VS Code keeps an `lru.json` but evidently
-  does not act on it. `daily_report` warns from 85% used, so there is
-  detection; there is no automatic cleanup. Roughly 30 days of headroom now.
+  **The growth is stopped at the source, not merely cleaned up.** VS Code was
+  removed entirely the same day (`.vscode-server`, `.vscode-remote-containers`,
+  `.config/Code`) — the server is downloaded on demand when a client connects
+  over SSH, so with nothing connecting there is nothing to accumulate. If
+  anyone ever opens this host in VS Code again it re-downloads ~660 MB and the
+  ~165 MB/day resumes.
 
-  Still available if ever needed, not touched because they are application
-  data rather than caches: `.copilot` 1.3 G, `.codex` 420 M, `.local` 1.7 G
-  (of which `.local/share/claude` is 1.2 G).
+  `.copilot` went too (1.3 G), and had the same shape: nine versions in `pkg`.
+  Note it backed a real CLI at `~/.local/bin/copilot` (173 MB binary, still
+  present, inert without its runtime — it will re-download if invoked). Its two
+  config files were preserved in `~/.copilot-config-backup/`.
+
+  `/home/greenv` went 11 G -> 2.7 G. `daily_report` still warns from 85% used,
+  which is now the only thing that needs to stay true. Remaining, deliberately
+  untouched as application data rather than caches: `.codex` 420 M, `.local`
+  1.7 G (of which `.local/share/claude` is 1.2 G), `.wine-dvr` 269 M.
 - **Solar Shelly at -87 dBm** — reports now, but dropped for two days and
   cost the 09-01/02 baseline. An AP nearer the panels is the fix.
 - **DVR USB stick** — recovers only manually; Docker resolves bind mounts at
