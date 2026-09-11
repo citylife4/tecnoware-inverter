@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-10 (evening)
+Last updated: 2026-09-11
 
 ---
 
@@ -41,6 +41,7 @@ trace.
               09-08   33.2
               09-09  113.0   <- bright day, see below
               09-10   ---     NOT COMPUTABLE, see below
+              09-11   ---     also out: meter missing 00:00-11:17
               mean 45.6 | median 39.4 | spread 2.3-113.0
 
 **09-10 stays out of the series** — the solar meter dropped off at ~09:10, so
@@ -118,15 +119,19 @@ Historical max `below_floor` on any day: 1, against 3 needed.
 The serial thread wedges; the stall detector (`STALL_EXIT_S = 300` in
 `webapp/service.py`) exits and systemd restarts it.
 
-    09-04 18:44   15 min
-    09-06 04:28   16 min
-    09-08 03:00   16 min
-    (none on 09-09 as of 11:17 — the ~5 min check is still pending)
+    09-04 18:44   15.3 min   (limit 900 s)
+    09-06 04:28   15.8 min   (limit 900 s)
+    09-08 03:00   16.1 min   (limit 900 s)
+    09-11 02:02    5.4 min   (limit 300 s)  <- the change, verified
 
-Roughly every other day, steady, **not accelerating**. Each cost ~15 min of
-monitoring under the old 900 s threshold; from 09-09 it should be ~5 min, so
-watch that the next one is shorter — that is the check that the change
-actually worked.
+**The lower threshold is confirmed working.** The 09-11 stall logged
+`no successful read in 310s (limit 300s) -- exiting so systemd restarts us`
+at 02:07:13, and systemd had it back by 02:07:24. Recovery went from ~16 min
+to 5.4. Nothing else changed in its behaviour.
+
+Rate is every 2-3 days and steady — 09-04, 06, 08, 11. Not accelerating.
+
+Cost is now ~5 min of monitoring per event, down from ~16.
 
 **There is no leading indicator** — checked 09-08. Sample interval in the
 hour before each stall is identical to quiet reference windows (median 11 s,
@@ -190,10 +195,13 @@ first remedy is a service restart.
   which is now the only thing that needs to stay true. Remaining, deliberately
   untouched as application data rather than caches: `.codex` 420 M, `.local`
   1.7 G (of which `.local/share/claude` is 1.2 G), `.wine-dvr` 269 M.
-- **Solar Shelly at -87 dBm — DOWN AGAIN since 2026-09-10 ~09:10.** ARP is
-  `(incomplete)` and the RPC endpoint does not answer, i.e. off the network
-  entirely, exactly as during 08-31 to 09-02. Second occurrence. An AP nearer
-  the panels is the fix; nothing software-side can help.
+- **Solar Shelly — recovered on its own 2026-09-11 ~11:17, after ~26 h down**
+  (dropped 09-10 09:10). Second outage. Back at RSSI -83, marginally better
+  than the -87 seen before, and uptime is 18.1 days, so it has still never
+  rebooted: purely a wifi-range problem. An AP nearer the panels is the fix;
+  nothing software-side can help.
+
+  Two days of the ratio series were lost to it (09-10, 09-11).
 
   Consequence while it is down: the normalised-export ratio cannot be
   computed at all, so the series simply pauses — do not invent entries.
