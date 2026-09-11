@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-11
+Last updated: 2026-09-11 (evening)
 
 ---
 
@@ -123,13 +123,25 @@ The serial thread wedges; the stall detector (`STALL_EXIT_S = 300` in
     09-06 04:28   15.8 min   (limit 900 s)
     09-08 03:00   16.1 min   (limit 900 s)
     09-11 02:02    5.4 min   (limit 300 s)  <- the change, verified
+    09-11 12:02    5.6 min   (limit 300 s)
 
 **The lower threshold is confirmed working.** The 09-11 stall logged
 `no successful read in 310s (limit 300s) -- exiting so systemd restarts us`
 at 02:07:13, and systemd had it back by 02:07:24. Recovery went from ~16 min
 to 5.4. Nothing else changed in its behaviour.
 
-Rate is every 2-3 days and steady — 09-04, 06, 08, 11. Not accelerating.
+**Rate may have changed — do not repeat "steady, not accelerating".** That was
+said on the morning of 09-11 and a second stall followed twelve hours later.
+Five events in eight days, but two of them inside the last 24 h.
+
+The two on 09-11 are 02:02:03 and 12:02:04 — 10 h and 1 s apart, and both at
+:02 past the hour. Nothing scheduled on this host runs at either time
+(checked: the timers are at 00:00, 00:33, 02:41, 06:30, 09:01, 09:09, 15:18,
+18:05, 21:22, 03:10, 01:17). With n=2 that is most likely coincidence and no
+theory should be built on it — recorded only so the next stall can confirm or
+kill it. Check the minute-past-the-hour of future events.
+
+Impact is low now: ~5.5 min each, so five events cost under 30 min in total.
 
 Cost is now ~5 min of monitoring per event, down from ~16.
 
