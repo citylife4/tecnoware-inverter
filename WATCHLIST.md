@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-12
+Last updated: 2026-09-12 (evening)
 
 ---
 
@@ -42,6 +42,7 @@ trace.
               09-09  113.0   <- bright day, see below
               09-10   ---     NOT COMPUTABLE (138 of 144 buckets null)
               09-11  105.0   <- bright day, 0.99 kWh
+              09-12   ---     NOT COMPUTABLE (90 of 134 buckets null)
               mean 45.6 | median 39.4 | spread 2.3-113.0
 
 **09-10 stays out of the series** — the solar meter dropped off at ~09:10, so
@@ -231,13 +232,26 @@ first remedy is a service restart.
   which is now the only thing that needs to stay true. Remaining, deliberately
   untouched as application data rather than caches: `.codex` 420 M, `.local`
   1.7 G (of which `.local/share/claude` is 1.2 G), `.wine-dvr` 269 M.
-- **Solar Shelly — recovered on its own 2026-09-11 ~11:17, after ~26 h down**
-  (dropped 09-10 09:10). Second outage. Back at RSSI -83, marginally better
-  than the -87 seen before, and uptime is 18.1 days, so it has still never
-  rebooted: purely a wifi-range problem. An AP nearer the panels is the fix;
-  nothing software-side can help.
+- **Solar Shelly — now failing most days, and it is costing the metric.**
+  Down again since 09-12 05:30 and unreachable tonight. Bucket coverage:
 
-  Two days of the ratio series were lost to it (09-10, 09-11).
+        09-08    0 null / 144   clean
+        09-09   13 null / 144   21:50-23:50, first sign
+        09-10  138 null / 144   whole day lost
+        09-11    8 null / 144   00:00-02:10, back
+        09-12   90 null / 134   05:30 onward, still down
+
+  It has never rebooted (uptime 18+ days) and sits at -83 to -87 dBm, so this
+  is purely wifi range. **An AP nearer the panels is the only fix; nothing
+  software-side can help.**
+
+  **Two of the last four days are unusable for the normalised ratio** (09-10,
+  09-12), so the series is 7 usable of 9 attempted and the loss rate is
+  rising. The `solar_rad` proxy still answers "was it bright?", so a lost day
+  is not wholly blind, but it cannot enter the series as a measurement.
+
+  Export control is unaffected — `grid_charge` falls back to
+  `generating = balance < 0`, verified again tonight.
 
   Consequence while it is down: the normalised-export ratio cannot be
   computed at all, so the series simply pauses — do not invent entries.
