@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-11 (evening)
+Last updated: 2026-09-12
 
 ---
 
@@ -40,8 +40,8 @@ trace.
               09-07   45.6
               09-08   33.2
               09-09  113.0   <- bright day, see below
-              09-10   ---     NOT COMPUTABLE, see below
-              09-11   ---     also out: meter missing 00:00-11:17
+              09-10   ---     NOT COMPUTABLE (138 of 144 buckets null)
+              09-11  105.0   <- bright day, 0.99 kWh
               mean 45.6 | median 39.4 | spread 2.3-113.0
 
 **09-10 stays out of the series** — the solar meter dropped off at ~09:10, so
@@ -55,11 +55,20 @@ where both exist — 09-06 est 0.88 vs measured 0.89, 09-07 est 0.92 vs 0.91 —
 and within ~15% on the rest. Good enough to answer "was it bright?", not good
 enough to enter the series as a measurement.
 
-**On that basis 09-10 confirms the bright-day finding, which was n=1 and is
-now n=2.** Today had the highest `solar_rad` mean of the last five days (219,
-a direct observation independent of the regression), an estimated 0.86 kWh,
-and exported 98.2 Wh — an implied ratio near 114, essentially identical to
-09-09's measured 113.0. Two bright days, two returns to baseline.
+**The bright-day finding now rests on three days, two of them measured:**
+
+    09-09  1.00 kWh gen -> ratio 113.0  (measured)
+    09-11  0.99 kWh gen -> ratio 105.0  (measured)
+    09-10  0.86 kWh est -> implied ~114 (solar_rad proxy only)
+
+Against a baseline of 115.6. Three bright days, three returns to baseline.
+
+**Correction: 09-11 was wrongly written off.** It was recorded as unusable
+because a probe at 11:17 returned `ac_solar_w=None`. The meter had in fact
+been back since ~02:10 and only 8 of 144 buckets are null. A single failed
+poll was mistaken for a continuing outage — the same single-sample trap as
+the compressor-inrush readings. **Check the bucket coverage before excluding
+a day, not a live probe.**
 
 **The benefit depends on how bright the day is, and that is the most
 important thing in this section.** 09-09 generated 1.00 kWh (peak 190 W,
@@ -93,8 +102,23 @@ retracted "three discharges a day" claim on 09-05 — the nightly window ends
 discharge.
 
 Current pattern: **1-2 cycles/day**, one deep ~100 Wh overnight plus
-sometimes a shallow 15-20 Wh late afternoon. About 17% daily depth. Nightly
-minimum sits at 24.0-24.1 V.
+sometimes a shallow 15-20 Wh late afternoon. Nightly minimum 24.0-24.1 V.
+
+**Window depth swings ~40% depending on whether the charger was still
+floating the pack when it opened, and that is not a fault.** Measured:
+
+    09-08/09/10  window opened at 27.0 V (float)  -> 110-115 Wh, ran to ~08:00
+    09-12        window opened at 25.6 V (rested) ->     67 Wh, cut out 05:44
+
+25.6 V at rest is a *full* pack (the lead-acid table puts 25.4 V at 100%), so
+this is not capacity loss. The 27.0 V nights were float voltage with the
+charger still pulsing. Program 12 triggers on *terminal* voltage, so starting
+1.4 V higher buys roughly 2.3 hours before the hardware cuts in.
+
+The trigger is `grid_charge` going idle: it wrote `PCP03` at 17:24 on 09-11
+(the first time in the series), so charging stopped at 17:30 instead of the
+usual 19:05, and the pack had settled by 01:00. Expect a short window after
+any evening where the charger idles.
 
 Flag if deep cycles exceed ~1/day or depth passes ~20%.
 
