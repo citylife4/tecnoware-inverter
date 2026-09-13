@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-12 (evening)
+Last updated: 2026-09-13
 
 ---
 
@@ -42,7 +42,8 @@ trace.
               09-09  113.0   <- bright day, see below
               09-10   ---     NOT COMPUTABLE (138 of 144 buckets null)
               09-11  105.0   <- bright day, 0.99 kWh
-              09-12   ---     NOT COMPUTABLE (90 of 134 buckets null)
+              09-12   ---     NOT COMPUTABLE (100 of 144 buckets null)
+              09-13   ---     NOT COMPUTABLE (meter still down)
               mean 45.6 | median 39.4 | spread 2.3-113.0
 
 **09-10 stays out of the series** — the solar meter dropped off at ~09:10, so
@@ -116,10 +117,21 @@ this is not capacity loss. The 27.0 V nights were float voltage with the
 charger still pulsing. Program 12 triggers on *terminal* voltage, so starting
 1.4 V higher buys roughly 2.3 hours before the hardware cuts in.
 
-The trigger is `grid_charge` going idle: it wrote `PCP03` at 17:24 on 09-11
-(the first time in the series), so charging stopped at 17:30 instead of the
-usual 19:05, and the pack had settled by 01:00. Expect a short window after
-any evening where the charger idles.
+The trigger is `grid_charge` going idle: it wrote `PCP03` at 17:24 on 09-11,
+so charging stopped at 17:30 instead of the usual 19:05 and the pack had
+settled by 01:00.
+
+**Confirmed by prediction on 09-13.** The charger ran to 19:05:46 on 09-12,
+the pack was still at 27.0 V float when the window opened, and it ran the
+full 01:00-08:00 for 103 Wh — back to the long pattern, exactly as the
+mechanism said it would. Two nights, two outcomes, both predicted by when
+charging stopped the evening before:
+
+    charger stopped 17:30 -> opened 25.6 V rested -> 67 Wh, cut 05:44
+    charger stopped 19:05 -> opened 27.0 V float  -> 103 Wh, ran to 08:00
+
+So a short window is not a fault and not pack health — check when charging
+last stopped before looking anywhere else.
 
 Flag if deep cycles exceed ~1/day or depth passes ~20%.
 
