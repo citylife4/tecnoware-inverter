@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-13
+Last updated: 2026-09-13 (evening)
 
 ---
 
@@ -43,7 +43,7 @@ trace.
               09-10   ---     NOT COMPUTABLE (138 of 144 buckets null)
               09-11  105.0   <- bright day, 0.99 kWh
               09-12   ---     NOT COMPUTABLE (100 of 144 buckets null)
-              09-13   ---     NOT COMPUTABLE (meter still down)
+              09-13   ---     NOT COMPUTABLE (87 of 134 buckets null)
               mean 45.6 | median 39.4 | spread 2.3-113.0
 
 **09-10 stays out of the series** — the solar meter dropped off at ~09:10, so
@@ -282,9 +282,23 @@ first remedy is a service restart.
   12 changing over at its ~24.0 V threshold near the window end, i.e. the
   window being correctly sized. Only flag it at a very different time or
   voltage.
-- **A few POP/PCP write failures a day** (0-2). Garbled replies and timeouts
-  are routine on this link; the controllers forget the cached priority and
-  reconverge on the next tick. Only flag a sustained rise.
+- **A few POP/PCP write failures a day. COUNT EPISODES, NOT TICKS.** Garbled
+  replies and timeouts are routine; the controllers forget the cached
+  priority and reconverge on the next tick.
+
+  A failing link takes out consecutive ticks, so the raw count exaggerates.
+  09-13 logged 4 failures and looked like a sharp rise from 1 and 2 the days
+  before — but three of them were one episode, `POP00` timing out at
+  19:00:31, 19:01:43 and 19:02:55, successive ticks of the same 3-minute
+  spell. Episodes per day are flat: 1, 1, 1, 2 across 09-05, 11, 12, 13.
+  Group failures less than 5 minutes apart before judging a trend.
+
+  **They are NOT the stalls, and must not be conflated.** During that episode
+  telemetry never stopped: 35 samples in the window, longest gap 27 s. Reads
+  were fine while sets timed out. That fits gotcha #7 — set commands need a
+  10 s window where a query needs far less, so on a marginal link writes fail
+  first while reads sail through. A stall is the link going away entirely;
+  this is the link being slow.
 - **A handful of corrupt telemetry lines a day** (5-13). Skipped by
   `read_telemetry.load()`.
 - **A lone high-load sample on battery**, e.g. 1129 W with the pack sagging to
