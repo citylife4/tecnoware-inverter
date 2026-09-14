@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-14
+Last updated: 2026-09-14 (evening)
 
 ---
 
@@ -43,7 +43,8 @@ trace.
               09-10   ---     NOT COMPUTABLE (138 of 144 buckets null)
               09-11  105.0   <- bright day, 0.99 kWh
               09-12   ---     NOT COMPUTABLE (100 of 144 buckets null)
-              09-13   ---     NOT COMPUTABLE (87 of 134 buckets null)
+              09-13   ---     NOT COMPUTABLE (86 of 144 buckets null)
+              09-14    1.9   <- lowest ever, 4 cycles absorbed almost everything
               mean 45.6 | median 39.4 | spread 2.3-113.0
 
 **09-10 stays out of the series** — the solar meter dropped off at ~09:10, so
@@ -150,6 +151,37 @@ effectively a coarser instrument than it looks, and program 12 at
 before anyone concludes the floor "works" from the fact that it never fires.
 
 Historical max `below_floor` on any day: 1, against 3 needed.
+
+## 2b. NEW 2026-09-14: a ~1.2 kW load now runs 17:00-19:00, unprotected
+
+The pump block covers 19:00-21:15 and the evening pump still runs there
+(hours 19-20, ~30 samples/day, unchanged). But a **second** large load has
+appeared in the 17:00-19:00 slot — first traces 09-13, then on 09-14:
+
+    typical day   ~30 samples >800 W, almost all in hour 20
+    09-14        242 samples: 82 in hour 17, 96 in hour 18, 43 in hour 20
+
+The daytime window runs 08:00-19:00, so it overlaps this completely and has
+no block against it.
+
+**What happened on 09-14.** At 17:15:57 the daytime window opened (`daytime`,
+signal above threshold) into a ~1.2 kW load already running. The pack cannot
+hold that, so program 12 threw the loads back to line, the controller still
+believed POP02, and the inverter oscillated: **14 B<->L transitions in 21
+minutes**, each a physical transfer relay throw under 1.2 kW. The pack sagged
+to 20.9 V at a 2889 W motor start (that is sag, not depth — 113 A across
+0.045 ohm is ~5 V, and every quiet sample stayed at 25.5 V).
+
+**The software eventually did the right thing but took ~5 minutes.**
+`hardware_override` fired at 17:20:58, latched, and the anti-flap dwell then
+correctly refused three further attempts. The delay is structural: the
+reconciler detects a mismatch by comparing belief against the device's mode,
+and **an oscillating device reads as agreeing about half the time**, so the
+mismatch is not seen consistently.
+
+**Not changed, needs a decision:** either extend the blocked window to cover
+17:00-19:00, or end the daytime window at 17:00. Worth first identifying what
+the load is — it is new, and the evening pump run is separate and unchanged.
 
 ## 3. Live concern: the service stalls
 
