@@ -1687,7 +1687,10 @@ class TestBatteryWindow(unittest.TestCase):
 
     def test_floor_sends_back_to_grid(self):
         service, bw = self.make(battery_voltage=27.0)
-        self.enable(bw, floor_confirmations=1)
+        # floor pinned rather than inherited: this tests the mechanism, not
+        # whatever DEFAULT_CONFIG currently holds.
+        self.enable(bw, floor_confirmations=1, floor_voltage=25.5,
+                    resume_voltage=26.8)
         bw.tick(now=self.NIGHT)
         service._battery_voltage = 25.4        # crosses the floor
         r = bw.tick(now=self.NIGHT)
@@ -1700,7 +1703,8 @@ class TestBatteryWindow(unittest.TestCase):
         recharges. Releasing on voltage alone would give several cycles a
         night, which is the wear this controller exists to prevent."""
         service, bw = self.make(battery_voltage=27.0)
-        self.enable(bw, now=self.NIGHT, floor_confirmations=1)
+        self.enable(bw, now=self.NIGHT, floor_confirmations=1,
+                    floor_voltage=25.5, resume_voltage=26.8)
         self.assertTrue(bw.is_active())
         service._battery_voltage = 25.4               # hits the floor
         r = bw.tick(now=self.NIGHT)
@@ -1710,9 +1714,54 @@ class TestBatteryWindow(unittest.TestCase):
         self.assertEqual(r["target"], GRID_POP)       # ...still latched
         self.assertEqual(r["reason"], "recovering")
 
-    def test_latch_rearms_after_the_window_closes(self):
+    def test_resume_voltage_is_reachable_with_the_charger_off(self):
+        """2026-09-15: the latch deadlocked and cost a whole night.
+
+        resume_voltage shipped at 26.8 V, which is what the pack reads *while
+        charging*. A full pack at rest reads ~25.6 V on this bank, so the
+        latch could only ever release while the charger ran -- and it does not
+        run at night (grid_charge is disabled_no_solar and writes nothing, so
+        whatever PCP was last set just stands). An evening hardware_override
+        therefore cost the entire following night: 0 Wh instead of ~110.
+
+        The invariant: a latch set in the evening must clear on a rested full
+        pack, with no charger involved.
+        """
+        RESTED_FULL = 25.6      # measured on this bank, 2026-09-12
         service, bw = self.make(battery_voltage=27.0)
         self.enable(bw, now=self.NIGHT, floor_confirmations=1)
+
+        bw._recovering = True                       # as hardware_override leaves it
+        service._battery_voltage = RESTED_FULL      # full, but charger off
+        bw.tick(now=self.DAY)                       # outside the nightly window
+        self.assertFalse(bw.get_state()["recovering"],
+                         "a rested full pack must clear the latch without the "
+                         "charger; 26.8 V was unreachable and deadlocked it")
+        self.assertEqual(bw.tick(now=self.NIGHT)["target"], BATTERY_POP)
+
+    def test_default_resume_voltage_is_a_resting_threshold(self):
+        """Guards the class of bug rather than the instance. Both thresholds
+        are compared against a pack that may be off charge, so neither may be
+        set to a float voltage."""
+        from webapp.battery_window import DEFAULT_CONFIG
+        RESTED_FULL = 25.6
+        self.assertLessEqual(
+            DEFAULT_CONFIG["resume_voltage"], RESTED_FULL,
+            "resume_voltage above the rested-full voltage can only be reached "
+            "while charging, so the latch would never clear at night")
+        self.assertLess(DEFAULT_CONFIG["floor_voltage"],
+                        DEFAULT_CONFIG["resume_voltage"])
+
+    def test_defaults_pass_their_own_validation(self):
+        """DEFAULT_CONFIG once failed validate_config() outright, because
+        lowering resume_voltage below the then-default floor_voltage broke
+        `resume_voltage must be above floor_voltage`."""
+        validate_window_config({})
+
+    def test_latch_rearms_after_the_window_closes(self):
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=self.NIGHT, floor_confirmations=1,
+                    floor_voltage=25.5, resume_voltage=26.8)
         service._battery_voltage = 25.4
         bw.tick(now=self.NIGHT)
         service._battery_voltage = 27.0
@@ -1753,7 +1802,7 @@ class TestBatteryWindow(unittest.TestCase):
         latch the window on a transient."""
         service, bw = self.make(battery_voltage=27.0)
         self.enable(bw, now=self.NIGHT, floor_confirmations=2,
-                    floor_voltage=25.6)
+                    floor_voltage=25.6, resume_voltage=26.8)
         service._battery_voltage = 25.4      # under the floor...
         service._output_load_w = 46          # ...but the compressor is running
         for _ in range(4):
@@ -1816,7 +1865,8 @@ class TestBatteryWindow(unittest.TestCase):
         link is documented to return corrupt QPIGS frames -- either would
         otherwise latch the window on a value that was never real."""
         service, bw = self.make(battery_voltage=27.0)
-        self.enable(bw, now=self.NIGHT, floor_confirmations=3)
+        self.enable(bw, now=self.NIGHT, floor_confirmations=3,
+                    floor_voltage=25.5, resume_voltage=26.8)
         self.assertTrue(bw.is_active())
         service._battery_voltage = 24.9            # dip 1
         self.assertEqual(bw.tick(now=self.NIGHT)["target"], BATTERY_POP)
@@ -1892,7 +1942,8 @@ class TestBatteryWindow(unittest.TestCase):
         anti-flap timer -- the pack has no reason to honour a cooldown."""
         service, bw = self.make()
         self.enable(bw, now=self.NIGHT, min_switch_interval=99999,
-                    floor_confirmations=1)
+                    floor_confirmations=1, floor_voltage=25.5,
+                    resume_voltage=26.8)
         self.assertTrue(bw.is_active())
         service._battery_voltage = 25.0            # floor -- urgent
         r = bw.tick(now=self.NIGHT)
@@ -2228,7 +2279,8 @@ class TestBatteryWindow(unittest.TestCase):
         a service restart mid-window doesn't forget that tonight's discharge
         already happened and re-open the pack to a second cycle."""
         service, bw = self.make(battery_voltage=27.0)
-        self.enable(bw, now=self.NIGHT, floor_confirmations=1)
+        self.enable(bw, now=self.NIGHT, floor_confirmations=1,
+                    floor_voltage=25.5, resume_voltage=26.8)
         service._battery_voltage = 25.4      # crosses the floor, latches
         bw.tick(now=self.NIGHT)
         self.assertTrue(bw.get_state()["recovering"])

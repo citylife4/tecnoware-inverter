@@ -139,12 +139,39 @@ DEFAULT_CONFIG = {
     # After the pump, before the morning. See HARD_FORBIDDEN.
     "from": "21:15",
     "to": "08:00",
-    # ~25% depth of discharge on this pack, measured against a ~66 W load.
-    # Tune from battery_test.csv rather than by feel.
-    "floor_voltage": 25.5,
+    # Same rule as resume_voltage below: a RESTING voltage, never a float
+    # one. This default was 25.5 V, which CLAUDE.md records as the original
+    # mistake -- 25.5 V is roughly "still full" on this bank, so the floor
+    # fired almost immediately. The deployed config has been 24.0 V since,
+    # and that is what has actually been verified in service; the default
+    # was simply never brought into line because a stored config always
+    # overrode it.
+    #
+    # It has to move now regardless: with resume_voltage corrected to 25.3 V,
+    # a 25.5 V floor made DEFAULT_CONFIG fail its own validation
+    # (resume_voltage must exceed floor_voltage).
+    "floor_voltage": 24.0,
     # Must recover to here before battery mode is allowed again, so the
     # controller doesn't sit at the floor toggling the transfer relay.
-    "resume_voltage": 26.8,
+    #
+    # This MUST be a resting voltage, not a float one. It shipped at 26.8 V,
+    # which is what the pack reads *while the charger is running* -- a full
+    # pack at rest reads ~25.6 V on this bank. The latch therefore could only
+    # ever release while charging, and the charger does not run at night
+    # (grid_charge is disabled_no_solar and writes nothing, so whatever PCP
+    # was last set just stands).
+    #
+    # Live consequence on 2026-09-15: hardware_override at 17:42 the previous
+    # evening armed the latch, PCP03 ("never charge" on this unit) was left
+    # standing, nothing charged overnight, the pack sat at 25.2-25.5 V, and
+    # the entire nightly window was skipped -- 0 Wh instead of ~110. It
+    # released only at 08:17 once daylight charging reached 26.9 V.
+    #
+    # Exactly the mistake already made once with floor_voltage (see CLAUDE.md:
+    # "25.5 V is a *float* voltage, not a *resting* one"). Release is gated on
+    # `not in_night`, so a lower value cannot re-arm mid-window and "one
+    # discharge per night" is unaffected.
+    "resume_voltage": 25.3,
     # How many consecutive readings must be at or below floor_voltage
     # before the latch closes. One is not enough for two independent
     # reasons: this serial link is documented to return corrupt QPIGS

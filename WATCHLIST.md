@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-15
+Last updated: 2026-09-15 (fix applied)
 
 ---
 
@@ -207,12 +207,21 @@ This is the same error as the original `floor_voltage = 25.5`, documented in
 CLAUDE.md: a float voltage used where a resting one is needed. It went
 unnoticed because the latch had never before been set with the charger idle.
 
-**Proposed fix, not applied — needs a decision:** `resume_voltage` to about
-**25.3 V**. High enough to mean "recovered", low enough to be reachable at
-rest, and still above `floor_voltage` (24.0). Release is already gated on
-`not in_night`, so it cannot re-arm mid-window and "one discharge per night"
-survives. Under 25.3 the 09-14 latch would have cleared around 21:00 and the
-window would have run.
+**FIXED 2026-09-15.** `resume_voltage` 26.8 -> **25.3 V**, live and in
+`DEFAULT_CONFIG`. High enough to mean "recovered", low enough to be reachable
+at rest, still above the floor. Release is gated on `not in_night`, so it
+cannot re-arm mid-window and "one discharge per night" survives.
+
+`DEFAULT_CONFIG["floor_voltage"]` had to move too, 25.5 -> 24.0: 25.5 was the
+original float-voltage mistake CLAUDE.md records, never brought into line
+because a stored config always overrode it, and with resume at 25.3 it made
+the defaults **fail their own validation**.
+
+Three regression tests, all verified to fail against 26.8: the latch must
+clear on a rested full pack with no charger; `resume_voltage` must not exceed
+the rested-full 25.6 V; and `DEFAULT_CONFIG` must pass `validate_config`.
+
+Watch tonight's window — it should run 01:00-08:00 normally.
 
 ## 3. Live concern: the service stalls
 
