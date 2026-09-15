@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-14 (evening)
+Last updated: 2026-09-15
 
 ---
 
@@ -182,6 +182,37 @@ mismatch is not seen consistently.
 **Not changed, needs a decision:** either extend the blocked window to cover
 17:00-19:00, or end the daytime window at 17:00. Worth first identifying what
 the load is — it is new, and the evening pump run is separate and unchanged.
+
+## 2c. BUG 2026-09-15: `resume_voltage` is a float voltage, so the latch can deadlock
+
+**The whole nightly window was skipped on 09-15** — 0 Wh instead of ~110.
+
+The chain: the 1.2 kW load chatter (2b) fired `hardware_override` at 17:42 on
+09-14, setting the latch. `grid_charge` then wrote `PCP03` at 18:00 as its
+last act of the day, and overnight it is `disabled_no_solar` and writes
+nothing — so PCP03 stood all night and **nothing charged** (0 charging
+samples before 08:00, against 255 the night before). The pack sat at
+25.2-25.5 V. At 01:00 the window found the latch still set and refused. It
+released only at 08:17, once daylight charging pushed the pack to 26.9 V.
+
+**The bug is the threshold.** Release is
+`self._recovering and not in_night and v >= resume_voltage`
+(`webapp/battery_window.py:734`) with `resume_voltage = 26.8`. But 26.8 V is
+a *charging* voltage — a **full pack at rest reads ~25.6 V**, established
+09-12. So the latch can only ever release while the charger is running, and
+the charger never runs at night. **Any evening `hardware_override` costs the
+entire following night's window.**
+
+This is the same error as the original `floor_voltage = 25.5`, documented in
+CLAUDE.md: a float voltage used where a resting one is needed. It went
+unnoticed because the latch had never before been set with the charger idle.
+
+**Proposed fix, not applied — needs a decision:** `resume_voltage` to about
+**25.3 V**. High enough to mean "recovered", low enough to be reachable at
+rest, and still above `floor_voltage` (24.0). Release is already gated on
+`not in_night`, so it cannot re-arm mid-window and "one discharge per night"
+survives. Under 25.3 the 09-14 latch would have cleared around 21:00 and the
+window would have run.
 
 ## 3. Live concern: the service stalls
 
