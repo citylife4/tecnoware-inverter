@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-15 (fix applied)
+Last updated: 2026-09-15 (evening)
 
 ---
 
@@ -44,7 +44,8 @@ trace.
               09-11  105.0   <- bright day, 0.99 kWh
               09-12   ---     NOT COMPUTABLE (100 of 144 buckets null)
               09-13   ---     NOT COMPUTABLE (86 of 144 buckets null)
-              09-14    1.9   <- lowest ever, 4 cycles absorbed almost everything
+              09-14    1.9   <- 4 cycles absorbed almost everything
+              09-15    1.2   <- lowest, but NOT the battery: see 2b
               mean 45.6 | median 39.4 | spread 2.3-113.0
 
 **09-10 stays out of the series** — the solar meter dropped off at ~09:10, so
@@ -179,9 +180,26 @@ reconciler detects a mismatch by comparing belief against the device's mode,
 and **an oscillating device reads as agreeing about half the time**, so the
 mismatch is not seen consistently.
 
-**Not changed, needs a decision:** either extend the blocked window to cover
-17:00-19:00, or end the daytime window at 17:00. Worth first identifying what
-the load is — it is new, and the evening pump run is separate and unchanged.
+**The load is growing, so any fixed block will chase it.** By hour:
+
+    09-13   15,16,17 traces only
+    09-14   17 (82), 18 (96)        + normal 20 (43)
+    09-15   16 (62), 17 (99), 18 (23), 19 (84)  + 20 (39), peak 4156 W
+
+Yesterday's suggestion of blocking 17:00-19:00 is already out of date — it now
+runs 16:00-20:00. **Identify the load before choosing a block**, or end the
+daytime window early enough to sit clear of all of it.
+
+**It is also, incidentally, absorbing the surplus.** 16:00-20:00 on 09-15:
+**zero exporting samples in 472**, mean +623 W importing. Today's record-low
+ratio of 1.2 is mostly this load, not the battery — the pack only moved 35 Wh
+because the nightly window was skipped. Worth keeping in mind before reading
+those ratios as the battery working well; and if this load is permanent, it
+does the dump load's job for free.
+
+**Relay wear continues:** 28 throws on 09-15 against 4-6 on a normal day,
+including clusters of 5 in 3 minutes (11:18-11:21) and 4 in 1 minute
+(17:05-17:06). Less pathological than 09-14's 14-in-21-minutes, but daily.
 
 ## 2c. BUG 2026-09-15: `resume_voltage` is a float voltage, so the latch can deadlock
 
@@ -221,7 +239,9 @@ Three regression tests, all verified to fail against 26.8: the latch must
 clear on a rested full pack with no charger; `resume_voltage` must not exceed
 the rested-full 25.6 V; and `DEFAULT_CONFIG` must pass `validate_config`.
 
-Watch tonight's window — it should run 01:00-08:00 normally.
+**Untested as of 09-15 evening.** The fix landed ~11:20 on 09-15, after that
+night's window had already been missed, so 09-15/16 is the first real test.
+It should run 01:00-08:00 normally.
 
 ## 3. Live concern: the service stalls
 
