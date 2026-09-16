@@ -190,5 +190,23 @@ class TestBatterySafety(unittest.TestCase):
         self.assertFalse(self.bw.get_state()["pop_drift_stuck"])
 
 
+    def test_release_pending_is_observable(self):
+        """The obligation to hand the loads back must be visible, not just
+        persisted. It was absent from get_state() until 2026-09-16, so an API
+        consumer could not tell "no obligation" from "not implemented" -- and
+        a `.get()` default of None reads as an implemented null. If it stays
+        True while the window is shut, a hand-back is failing and nothing
+        else surfaces that."""
+        state = self.bw.get_state()
+        self.assertIn("release_pending", state)
+        self.assertIsInstance(state["release_pending"], bool)
+        self.assertFalse(state["release_pending"])
+
+        # And it tracks the real obligation, not a constant.
+        self.enter()
+        self.assertTrue(self.bw.get_state()["release_pending"],
+                        "entering battery mode creates the obligation")
+
+
 if __name__ == "__main__":
     unittest.main()

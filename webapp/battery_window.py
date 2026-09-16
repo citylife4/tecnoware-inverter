@@ -499,6 +499,16 @@ class BatteryWindow:
                 "last_run": self._last_run,
                 "loop_error": self._loop_error,
                 "pop_drift_stuck": self._pop_drift_alert,
+                # An outstanding obligation to put the loads back on utility:
+                # set before the POP02 write, cleared only by an ACKed POP00.
+                # Surfaced because it is the one piece of safety state a
+                # consumer could not otherwise distinguish from "no
+                # obligation" -- it was absent from this dict until
+                # 2026-09-16, so an API reader got nothing rather than False,
+                # and `.get()` supplying None reads as an implemented null.
+                # If this stays True while the window is shut, a hand-back is
+                # failing and nobody is being told.
+                "release_pending": self._release_pending,
             }
 
     def set_config(self, updates: dict, now=None) -> dict:
