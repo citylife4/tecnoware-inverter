@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-16 (regression watch)
+Last updated: 2026-09-16 (day 1 of the watch)
 
 ---
 
@@ -37,6 +37,26 @@ hand-back.
 
 After a week of clean days the job should be stopped — the two systemd
 reports (09:00, 21:22) are the durable layer and need no session.
+
+**Day 1 (09-16), post-deploy behaviour clean.** The fixes went live 17:29 and
+18:01, so the split matters:
+
+    relay throws   39 before the deploy, 3 after
+                   (18:10 x2 = the intentional restart pair, 19:00 = window close)
+    release_pending  True with the window open, False once shut — first time
+                     that invariant has been observable, and it held
+    pack             25.0 V / 50% -> 28.2 V / 100%, so the dead-band fix is
+                     recharging where four days of drain preceded it
+    stalls 0 | loop_error null | pop_drift_stuck false | 337 tests green
+
+**Not yet testable:** the `hardware_override` debounce. All four overrides
+today (01:01, 16:14, 16:38, 17:02) predate the 18:01 deploy, which is why
+`hardware_override_pending` is 0 — not evidence the debounce fails. Tonight's
+01:00 window is the first post-fix nightly run.
+
+**The 1.2 kW load is getting worse and still has no block.** 29 of the 39
+pre-fix throws fell in hour 17 alone, the daytime window fighting it. It now
+runs hours 16, 17, 19 and 20.
 
 ---
 
