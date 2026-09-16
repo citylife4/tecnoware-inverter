@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-15 (evening)
+Last updated: 2026-09-16
 
 ---
 
@@ -242,6 +242,50 @@ the rested-full 25.6 V; and `DEFAULT_CONFIG` must pass `validate_config`.
 **Untested as of 09-15 evening.** The fix landed ~11:20 on 09-15, after that
 night's window had already been missed, so 09-15/16 is the first real test.
 It should run 01:00-08:00 normally.
+
+## 2d. FIXED 2026-09-16: the dead-band held "disabled_no_solar" and drained the pack
+
+Every night ends in `disabled_no_solar`. The dead-band branch held the
+previous state, and that is not a state to hold — it is the controller being
+switched off. One dead-band reading at dawn closed the trap door for the day.
+
+Observed: **14 consecutive ticks of `disabled_no_solar` with solar at 33 W**,
+far above SOLAR_ON_W, long after the debounce had flipped. Four-day cost:
+
+    09-13  V 27.0 -> 26.1   cap 100% -> 80%
+    09-14  V 26.2 -> 25.2   cap  80% -> 80%
+    09-15  V 25.2 -> 25.0   cap  80% -> 50%
+    09-16  V 25.0 -> 24.4   cap  50% -> 50%   ZERO charging samples
+
+`apply_low_battery_floor` was computing `PCP01` with "OVERRIDE: battery
+24.40V at or below 25.50V floor" **every tick and having it discarded** —
+`_tick` branches on `disabled_no_solar` before it can apply anything. The one
+interlock meant to prevent this was running and being thrown away.
+
+Fixed: the dead-band holds only `charging` or `idle`, else falls back to
+`idle`. Deployed; the pack went to charging at 10 A within a minute.
+
+**Why 09-16's nightly window never opened** (separate from the latch bug,
+which was genuinely fixed — the latch read `rec=False` at 01:00): the pack
+was at 25.0 V and **the inverter itself refused battery mode**. It stayed in
+`L` for the whole window, never once reading `B`. Program 13's re-discharge
+threshold (~27 V / FUL) is the likely cause. A low pack therefore disables
+the window in hardware, whatever the software decides.
+
+## 2e. OPEN: `min_battery_voltage` has the same float-vs-resting flaw
+
+Not changed — needs a decision. `min_battery_voltage = 25.5` is compared
+against terminal voltage, which jumps to 27.0 V the moment charging starts
+even at a real ~50% SoC. So it works as an *entry* threshold and fails as an
+*exit* one: observed 09-16, PCP03 queued (held only by the 300 s dwell) with
+the pack genuinely half empty.
+
+The expected result is a ~5-minute PCP01/PCP03 oscillation that does charge
+the pack, just with churn — the same shape as the 2026-08-26 cycles noted
+above SOLAR_FLOOR_W. It is the third instance of this class after
+`floor_voltage` and `resume_voltage`: **a threshold compared against a pack
+that may be on charge must be a resting voltage, or must release on something
+other than voltage** (tapering current, or a minimum charge duration).
 
 ## 3. Live concern: the service stalls
 
