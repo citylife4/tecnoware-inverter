@@ -10,7 +10,33 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-16 (external review fixes deployed)
+Last updated: 2026-09-16 (regression watch)
+
+---
+
+## Regression watch, 2026-09-16 to ~09-23
+
+Nine fixes were deployed on 09-16 and none had run a full production cycle.
+One scheduled check runs at 21:37 asking only: **did the deployed fixes
+behave, and did anything regress?** What it watches:
+
+- the nightly window actually runs 01:00-08:00 (it failed twice before)
+- `release_pending` is false whenever the window is shut — true while shut
+  means a hand-back is failing and nothing else says so
+- `hardware_override` needs 3 consecutive readings now; a single-reading one
+  is a regression
+- relay throws stay at 4-6/day (09-14 was 36); +2 per restart is intentional
+- stalls recover in ~5 min, not ~16
+- `loop_error` and `pop_drift_stuck` stay null/false
+- the pack recharges — it drained 100% -> 50% over four days before the
+  dead-band fix
+
+**Run the suite with `python3 run_tests.py`**, not `unittest test_webapp`:
+the latter silently skips 22 tests, including every one guarding the battery
+hand-back.
+
+After a week of clean days the job should be stopped — the two systemd
+reports (09:00, 21:22) are the durable layer and need no session.
 
 ---
 
