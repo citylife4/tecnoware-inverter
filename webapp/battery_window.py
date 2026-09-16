@@ -369,6 +369,13 @@ class BatteryWindow:
         self._below_floor = runtime["below_floor"]
         self._pop_drift = 0           # consecutive ticks of POP disagreement
         self._pop_drift_writes = 0    # corrective writes already attempted
+        # Set while the loads have to be handed back to utility before this
+        # controller stops deciding anything -- see _decide()'s disabled
+        # branch. Deliberately NOT persisted: it is re-derived on every tick
+        # from _last_applied_pop, which is itself seeded here from the
+        # service's on-disk last-known POP, so a restart into a disabled
+        # config re-arms the release by itself.
+        self._release_pending = False
         self._last_run = None
 
     # ---- persistence ----------------------------------------------------
@@ -633,6 +640,22 @@ class BatteryWindow:
         t = now.time()
 
         if not cfg["enabled"]:
+            # Relinquishing control is not the same as walking away. If this
+            # controller put the loads on the pack, they go back to utility
+            # BEFORE it stops deciding anything.
+            #
+            # Being switched off mid-discharge is not hypothetical: an API
+            # PUT does it, and so does a config that fails validation at boot
+            # and falls back to DEFAULT_CONFIG's enabled:False. Either one
+            # used to return None here, which writes nothing, leaving the
+            # inverter in SBU with the loads on the pack and -- because the
+            # PCP low-battery interlock is a no-op at POP=02 (gotcha #1) --
+            # nothing supervising it down to the hardware's own cutoff. That
+            # also contradicted this method's own docstring.
+            if self._last_applied_pop == BATTERY_POP or self._release_pending:
+                return GRID_POP, "disabled", (
+                    "janela desligada — a devolver as cargas à rede antes "
+                    "de deixar de decidir")
             return None, "disabled", "janela de bateria desligada"
 
         # Window membership is checked FIRST, before every other reason.
@@ -731,6 +754,19 @@ class BatteryWindow:
         # get_state() stays a pure read with no side effects.
         mismatch = self._reconcile_with_device()
 
+        # Latch the hand-back that _decide()'s disabled branch asks for, and
+        # keep it latched until a write is actually confirmed. A POP00 that
+        # is NAKed, times out or comes back garbled clears _last_applied_pop
+        # (see _forget_applied_pop), so without this the very next tick would
+        # read "nothing of mine to release" and abandon a pack that is still
+        # on the loads. Evaluated after the reconciler on purpose: if the
+        # device has already left battery mode by itself there is nothing to
+        # hand back, and this must not manufacture a relay throw.
+        if cfg["enabled"] or self._last_applied_pop == GRID_POP:
+            self._release_pending = False
+        elif self._last_applied_pop == BATTERY_POP:
+            self._release_pending = True
+
         v = self._battery_voltage()
         previous_runtime = (self._recovering, self._below_floor)
         if isinstance(v, (int, float)):
@@ -825,7 +861,11 @@ class BatteryWindow:
             # Re-asserting POP after it drifted out of sync is corrective,
             # not discretionary: every tick spent waiting is a tick the pack
             # is being cycled by the device instead of by us.
-            "pop_drift")
+            "pop_drift",
+            # Handing the loads back before switching off: the controller is
+            # about to stop watching the pack, so it must not leave a relay
+            # cooldown standing between the pack and utility.
+            "disabled")
 
         if target is None:
             result["note"] = "desligado"

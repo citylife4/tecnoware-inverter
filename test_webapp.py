@@ -1708,6 +1708,69 @@ class TestBatteryWindow(unittest.TestCase):
         bw.tick(now=self.NIGHT)
         self.assertEqual(service.sent, [])
 
+    def test_disabling_mid_discharge_hands_the_loads_back_first(self):
+        """Switching the automation off must not abandon the pack in SBU.
+
+        At POP=02 the PCP low-battery interlock is a no-op (gotcha #1), so
+        the only supervision the pack has is this controller -- and a
+        disabled controller decides nothing. It therefore has to return the
+        loads to utility before it stops."""
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=self.NIGHT)
+        self.assertTrue(bw.is_active())          # loads are on the pack
+        service.sent.clear()
+        bw.set_config({"enabled": False}, now=self.NIGHT)
+        self.assertEqual(service.sent, ["POP00"])
+        self.assertFalse(bw.is_active())
+
+    def test_the_hand_back_is_retried_until_it_is_confirmed(self):
+        """One dropped write must not end the attempt. On this link a set
+        command routinely comes back garbled or times out (gotcha #8), which
+        clears the cached belief -- so a hand-back that gave up the moment
+        `_last_applied_pop` stopped saying POP02 would walk away from exactly
+        the case it exists for."""
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=self.NIGHT)
+        self.assertTrue(bw.is_active())
+        service.sent.clear()
+        service._ack = False                     # the inverter does not ACK
+        bw.set_config({"enabled": False}, now=self.NIGHT)
+        bw.tick(now=self.NIGHT)
+        bw.tick(now=self.NIGHT)
+        self.assertEqual(service.sent, ["POP00", "POP00", "POP00"],
+                         "an unconfirmed hand-back must keep being retried")
+        service._ack = True                      # the link comes back
+        r = bw.tick(now=self.NIGHT)
+        self.assertTrue(r["applied"])
+        service.sent.clear()
+        bw.tick(now=self.NIGHT)
+        self.assertEqual(service.sent, [],
+                         "once confirmed it stops writing and stands down")
+
+    def test_a_config_rejected_at_boot_still_hands_the_loads_back(self):
+        """The other way this controller gets switched off mid-discharge: a
+        stored config that fails validation falls back to DEFAULT_CONFIG,
+        which is enabled:False. The pack is still on the loads, and the
+        service's persisted last-known POP is the evidence of it."""
+        service = FakeService(battery_voltage=27.0, pop=BATTERY_POP,
+                              device_mode="B")
+        bw = BatteryWindow(service, self.path)   # no config file -> defaults
+        self.assertFalse(bw.get_state()["config"]["enabled"])
+        bw.tick(now=self.NIGHT)
+        self.assertEqual(service.sent, ["POP00"])
+
+    def test_a_disabled_window_that_never_used_the_pack_stays_quiet(self):
+        """The hand-back is evidence-based, not unconditional: a disabled
+        automation has no business writing POP over whatever the front panel
+        or a person last chose."""
+        for pop in (GRID_POP, None):
+            with self.subTest(pop=pop):
+                service = FakeService(battery_voltage=27.0, pop=pop)
+                bw = BatteryWindow(service, self.path)
+                for _ in range(3):
+                    bw.tick(now=self.NIGHT)
+                self.assertEqual(service.sent, [])
+
     def test_inside_window_goes_to_battery(self):
         service, bw = self.make()
         self.enable(bw)
