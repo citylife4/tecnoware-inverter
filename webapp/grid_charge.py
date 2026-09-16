@@ -561,7 +561,25 @@ class GridChargeController:
             else:
                 # Inside the hysteresis dead-band: hold the previous state,
                 # or default to idle if this is the very first evaluation.
-                desired = self._desired or "idle"
+                #
+                # Only ever hold a real CONTROL state. `_desired` can also be
+                # "disabled_no_solar", which is not a state to hold -- it is
+                # the controller being switched off. Holding it here was a
+                # trap door: every night ends in disabled_no_solar, so if the
+                # first in-band signal after sunrise landed in the dead-band,
+                # the controller re-asserted "disabled" and stayed there all
+                # day, writing nothing.
+                #
+                # Live on 2026-09-16, and it had been draining the pack for
+                # four days: 100% -> 80% -> 50%, with zero charging samples on
+                # the 16th. `_tick` branches on disabled_no_solar before it
+                # can apply anything, so apply_low_battery_floor kept
+                # computing PCP01 with "OVERRIDE: battery 24.40V at or below
+                # 25.50V floor" and that target was silently discarded every
+                # tick. The one interlock meant to stop exactly this was
+                # running and being thrown away.
+                held = self._desired if self._desired in ("charging", "idle") else None
+                desired = held or "idle"
 
         raw_target = cfg["charge_pcp"] if desired == "charging" else cfg["idle_pcp"]
         target, override = apply_low_battery_floor(self.service, raw_target)

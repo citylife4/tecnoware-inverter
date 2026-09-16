@@ -1240,6 +1240,58 @@ class TestGridChargeController(unittest.TestCase):
         self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
         self.assertEqual(service.sent, ["PCP01"])
 
+    def test_deadband_never_holds_the_disabled_state(self):
+        """2026-09-16: this drained the pack for four days.
+
+        Every night ends in `disabled_no_solar`. If the first in-band signal
+        after sunrise landed in the dead-band, `desired = self._desired` put
+        that disabled state straight back, and _tick() branches on it before
+        it can apply anything -- so the controller wrote nothing all day.
+
+        apply_low_battery_floor kept computing PCP01 with "OVERRIDE: battery
+        24.40V at or below 25.50V floor" and the target was discarded every
+        tick. The pack went 100% -> 80% -> 50% with the one interlock meant to
+        prevent exactly that running and being thrown away.
+        """
+        service, stub, gc = self.make(net_balance=-200)
+        stub.ac_solar_w = 0.0                       # night
+        gc.set_config({"enabled": True, "min_switch_interval": 0,
+                       "export_threshold_w": 30, "import_threshold_w": 150})
+        for _ in range(GENERATING_CONFIRMATIONS):
+            gc.tick()
+        self.assertEqual(gc.get_state()["current"]["desired_state"],
+                         "disabled_no_solar")
+
+        # Sunrise, with the signal inside the 30-150 dead-band.
+        stub.ac_solar_w = 200.0
+        stub.net_balance = 60
+        for _ in range(GENERATING_CONFIRMATIONS + 1):
+            gc.tick()
+        self.assertNotEqual(
+            gc.get_state()["current"]["desired_state"], "disabled_no_solar",
+            "the dead-band held the disabled state and the controller never "
+            "woke up")
+
+    def test_low_battery_floor_is_applied_once_the_sun_is_up(self):
+        """The consequence that mattered: a flat pack must actually get
+        PCP01, not just have it computed and dropped."""
+        # min_battery_voltage pinned to the deployed 25.5; FakeService
+        # defaults it to 24.0, under which 24.4 V is not a low battery.
+        service, stub, gc = self.make(net_balance=-200, battery_voltage=24.4,
+                                      min_battery_voltage=25.5)
+        stub.ac_solar_w = 0.0
+        gc.set_config({"enabled": True, "min_switch_interval": 0,
+                       "export_threshold_w": 30, "import_threshold_w": 150})
+        for _ in range(GENERATING_CONFIRMATIONS):
+            gc.tick()
+        service.sent.clear()
+        stub.ac_solar_w = 200.0
+        stub.net_balance = 60                        # dead-band again
+        for _ in range(GENERATING_CONFIRMATIONS + 1):
+            gc.tick()
+        self.assertIn("PCP01", service.sent,
+                      "battery under min_battery_voltage must be charged")
+
     def test_export_stands_in_for_a_missing_solar_reading(self):
         """The solar Shelly went offline on 2026-08-31 and auto-energy began
         reporting ac_solar_w as null. Export is still proof of generation --
