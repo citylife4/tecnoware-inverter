@@ -146,6 +146,10 @@ class Scheduler:
                 "last_run": self._last_run,
             }
 
+    def is_enabled(self) -> bool:
+        with self._lock:
+            return self._state["enabled"]
+
     def set_state(self, enabled: bool, rules: list) -> dict:
         if not isinstance(enabled, bool):
             raise ValueError("enabled must be a boolean")

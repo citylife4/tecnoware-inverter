@@ -228,6 +228,7 @@ class InverterService:
         # despite POP genuinely having been set moments earlier -- see
         # CLAUDE.md gotcha #7.
         self._priorities_path = priorities_path
+        self._priority_persistence_error = None
         self._last_known = self._load_last_known()
 
         # Onde gravar a telemetria em disco. O histórico em memória
@@ -249,7 +250,17 @@ class InverterService:
 
     def _save_last_known(self) -> None:
         if self._priorities_path:
-            write_json_atomic(self._priorities_path, self._last_known)
+            try:
+                write_json_atomic(self._priorities_path, self._last_known)
+            except OSError as e:
+                # Hardware has already ACKed. Losing bookkeeping must not
+                # hide that outcome from the controller that issued it.
+                message = f"cannot persist inverter priorities: {e}"
+                if message != self._priority_persistence_error:
+                    print(f"[service] {message}", file=sys.stderr, flush=True)
+                self._priority_persistence_error = message
+            else:
+                self._priority_persistence_error = None
 
     def _load_audit(self) -> list:
         if not self._audit_path or not os.path.exists(self._audit_path):
@@ -470,6 +481,7 @@ class InverterService:
             "poll_interval": self.poll_interval,
             "allow_writes": self.allow_writes,
             "min_battery_voltage": self.min_battery_voltage,
+            "priority_persistence_error": self._priority_persistence_error,
             # {"POP": {"value": "02", "at": ...}, "PCP": {...}} -- what this
             # server last set and had acknowledged, persisted across
             # restarts. Included here (rather than left to /api/audit) so

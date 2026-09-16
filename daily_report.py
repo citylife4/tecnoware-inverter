@@ -30,6 +30,7 @@ import collections
 import csv
 import datetime as dt
 import io
+import math
 import os
 import sys
 
@@ -68,7 +69,8 @@ def _read_csv(path: str):
 
 def _num(value):
     try:
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
 
@@ -83,20 +85,35 @@ def export_wh(rows):
     pts = []
     for r in rows:
         ts, net = _to_local(r["ts"]), _num(r.get("net_balance_w"))
-        if ts and net is not None:
+        if str(r.get("known", "true")).lower() != "true":
+            net = None
+        if ts:
             pts.append((ts, net))
-    pts.sort()
+    pts.sort(key=lambda p: p[0])
     total = 0.0
     for i in range(1, len(pts)):
         gap = (pts[i][0] - pts[i - 1][0]).total_seconds()
-        if gap > 300:
+        a, b = pts[i - 1][1], pts[i][1]
+        if gap <= 0 or gap > 300 or a is None or b is None:
             continue
-        mean = (pts[i][1] + pts[i - 1][1]) / 2
-        if mean < 0:
-            total += -mean * gap / 3600
-    negative = [p for p in pts if p[1] < 0]
+        if a <= 0 and b <= 0:
+            total += -(a + b) / 2 * gap / 3600
+        elif a < 0 or b < 0:
+            # Split a linearly interpolated interval at its zero crossing.
+            # Import must not cancel the triangle of exported energy.
+            exported = -min(a, b)
+            total += exported * exported / (abs(a) + abs(b)) / 2 * gap / 3600
+    negative = [p for p in pts if p[1] is not None and p[1] < 0]
     worst = min((p[1] for p in negative), default=0.0)
-    return total, len(negative), len(pts), worst
+    return total, len(negative), sum(p[1] is not None for p in pts), worst
+
+
+def export_coverage_note(rows):
+    missing = sum(1 for r in rows
+                  if str(r.get("known", "true")).lower() != "true"
+                  or _num(r.get("net_balance_w")) is None)
+    return (f"Exportacao: dados parciais ({missing} leituras sem medicao valida)"
+            if missing else None)
 
 
 def battery_spans(rows):
@@ -104,36 +121,40 @@ def battery_spans(rows):
     span. Voltage and ac_output_active_power are the only trustworthy pair
     here -- battery_discharge_current reads 0.0 A while the pack is visibly
     supplying load (measured 2026-08-25, confirmed at scale 2026-09-02)."""
-    bat = []
+    points = []
     for r in rows:
-        if r.get("mode") != "B":
-            continue
         ts, v = _to_local(r["ts"]), _num(r.get("battery_voltage"))
         load = _num(r.get("ac_output_active_power"))
-        if ts and v is not None and 20 < v < 30:
-            bat.append((ts, v, load))
-    spans, current = [], None
-    for row in bat:
-        if current and (row[0] - current[-1][0]).total_seconds() > 300:
-            spans.append(current)
-            current = None
-        if current is None:
-            current = [row]
-        else:
-            current.append(row)
-    if current:
-        spans.append(current)
-
-    out = []
-    for span in spans:
-        hours = (span[-1][0] - span[0][0]).total_seconds() / 3600
-        loads = [load for _, _, load in span if load is not None]
-        mean = sum(loads) / len(loads) if loads else 0.0
-        out.append({
-            "start": span[0][0], "end": span[-1][0], "hours": hours,
-            "v_start": span[0][1], "v_min": min(v for _, v, _ in span),
-            "mean_w": mean, "wh": mean * hours,
-        })
+        valid = (r.get("mode") == "B" and v is not None and 20 < v < 30
+                 and load is not None and load >= 0)
+        if ts:
+            points.append((ts, v, load, valid))
+    points.sort(key=lambda p: p[0])
+    out, current, previous = [], None, None
+    for ts, v, load, valid in points:
+        gap = (ts - previous[0]).total_seconds() if previous else 0
+        if current is not None:
+            if valid and 0 < gap <= 300:
+                # Trapezoids only between two confirmed battery samples.
+                # A line-mode/invalid row terminates the span; never bridge
+                # that boundary by holding the last battery load.
+                watts = (previous[2] + load) / 2
+                current["wh"] += watts * gap / 3600
+                current["hours"] += gap / 3600
+                current["end"] = ts
+            if not valid or gap > 300:
+                out.append(current)
+                current = None
+        if valid:
+            if current is None:
+                current = {"start": ts, "end": ts, "hours": 0.0,
+                           "v_start": v, "v_min": v, "wh": 0.0}
+            current["v_min"] = min(current["v_min"], v)
+        previous = (ts, v, load, valid)
+    if current is not None:
+        out.append(current)
+    for span in out:
+        span["mean_w"] = span["wh"] / span["hours"] if span["hours"] else 0.0
     return out
 
 
@@ -275,8 +296,11 @@ def build_morning(date: str) -> str:
 
     gcp = os.path.join(TELEMETRY_DIR, f"gridcharge-{date}.csv")
     if os.path.exists(gcp):
-        wh, neg, total, worst = export_wh(_read_csv(gcp))
+        export_rows = _read_csv(gcp)
+        wh, neg, total, worst = export_wh(export_rows)
         lines.append(f"Exportado ate agora: {wh:.1f} Wh ({neg}/{total} amostras)")
+        if export_coverage_note(export_rows):
+            lines.append(export_coverage_note(export_rows))
 
     problems = problems_for(date)
     for a, b, secs in telemetry_gaps(rows):
@@ -296,10 +320,13 @@ def build(date: str) -> str:
     lines = [f"Resumo {date}"]
 
     if os.path.exists(gcp):
-        wh, neg, total, worst = export_wh(_read_csv(gcp))
+        export_rows = _read_csv(gcp)
+        wh, neg, total, worst = export_wh(export_rows)
         pct = (100 * neg / total) if total else 0
         lines.append(f"Exportado: {wh:.0f} Wh ({neg}/{total} amostras, {pct:.0f}%, "
                      f"pior {worst:.0f} W)")
+        if export_coverage_note(export_rows):
+            lines.append(export_coverage_note(export_rows))
     else:
         lines.append("Exportado: sem dados")
 

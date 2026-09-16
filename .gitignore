@@ -43,3 +43,5 @@ web_audit.json.tmp
 # estado do notificador (ultima condicao comunicada) -- execucao, nao fonte
 .notify_state.json
 .notify_state.json.tmp
+# Per-outage watchdog recovery budget (local runtime state).
+*.watchdog-state

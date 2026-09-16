@@ -28,6 +28,40 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
 
 let pollTimer = null;
 let latestStatus = null;
+let gridChargeState = null;
+let pollInFlight = null;
+const dirtyFields = new Map();
+const fieldBaseline = new Map();
+let editVersion = 0;
+
+function watchDraftFields(ids) {
+  ids.forEach((id) => {
+    const el = document.querySelector(`#${id}`);
+    if (!el) return;
+    const edited = () => dirtyFields.set(id, ++editVersion);
+    el.addEventListener("input", edited);
+    el.addEventListener("change", edited);
+  });
+}
+
+function acceptSavedDraft(snapshot) {
+  snapshot.forEach((version, id) => {
+    if (dirtyFields.get(id) === version) {
+      dirtyFields.delete(id);
+      fieldBaseline.delete(id);
+    }
+  });
+}
+
+function preserveDraft(id, el) {
+  if (dirtyFields.has(id)) return true;
+  const value = el.type === "checkbox" ? String(!!el.checked) : String(el.value);
+  return fieldBaseline.has(id) && value !== fieldBaseline.get(id);
+}
+
+function rememberField(id, el) {
+  fieldBaseline.set(id, el.type === "checkbox" ? String(!!el.checked) : String(el.value));
+}
 
 /* ---------- API helper ---------- */
 
@@ -229,7 +263,16 @@ function setConn(ok, text) {
   $("#conn-text").textContent = text;
 }
 
-async function tick() {
+function tick() {
+  if (pollInFlight) return pollInFlight;
+  pollInFlight = pollDashboard().catch(() => {
+    setConn(false, "sem ligação ao servidor — dados desatualizados");
+    showError("Não foi possível atualizar os dados. A tentar novamente…");
+  }).finally(() => { pollInFlight = null; });
+  return pollInFlight;
+}
+
+async function pollDashboard() {
   const data = await api("/api/status");
   if (!data.ok) { setConn(false, "erro do servidor"); showError(data.error || "falha ao obter estado"); return; }
 
@@ -247,8 +290,9 @@ async function tick() {
     showError(`Ligação ao inversor: ${data.error}`);
   } else {
     const age = data.last_success ? Math.round((Date.now() - new Date(data.last_success)) / 1000) : null;
-    setConn(true, age === null ? "ligado" : `atualizado há ${age}s`);
-    showError(null);
+    const fresh = age !== null && age <= Math.max((data.poll_interval || 10) * 3, 30);
+    setConn(fresh, age === null ? "a aguardar leitura" : `atualizado há ${age}s`);
+    showError(data.priority_persistence_error || (fresh ? null : "Leitura do inversor desatualizada."));
   }
 
   const hist = await api("/api/history?limit=240");
@@ -263,10 +307,7 @@ async function tick() {
   if (loadNote && data.status) loadNote.hidden = data.status.mode === "B";
 
   markCurrentPriorities(data.last_known_priorities);
-  loadAudit();
-  loadSchedule();
-  loadGridCharge();
-  loadBatteryWindow();
+  await Promise.all([loadAudit(), loadSchedule(), loadGridCharge(), loadBatteryWindow()]);
 }
 
 async function loadAudit() {
@@ -587,8 +628,9 @@ function renderGridCharge(state) {
 
   GC_FIELDS.forEach(([id, key, type]) => {
     const el = document.querySelector(`#${id}`);
-    if (!el || document.activeElement === el) return;
+    if (!el || preserveDraft(id, el) || document.activeElement === el) return;
     el.value = state[key];
+    rememberField(id, el);
   });
 
   const c = state.current || {};
@@ -656,15 +698,23 @@ function readGridChargeForm() {
 }
 
 async function saveGridCharge(overrides) {
-  const { values, invalid } = readGridChargeForm();
+  if (!gridChargeState) return { ok: false };
+  const toggleOnly = Object.prototype.hasOwnProperty.call(overrides, "enabled");
+  const stored = Object.fromEntries(GC_FIELDS.map(([, key]) => [key, gridChargeState[key]]));
+  stored.http_timeout = gridChargeState.http_timeout;
+  const { values, invalid } = toggleOnly
+    ? { values: stored, invalid: [] } : readGridChargeForm();
+  const draft = new Map([...dirtyFields].filter(([id]) => id.startsWith("gc-")));
   if (invalid.length) {
     logConsole(`definições não guardadas — campos por preencher: ${invalid.join(", ")}`, "err");
-    renderGridCharge(gridChargeState);   // repõe os valores guardados
     return { ok: false, code: "invalid_form" };
   }
   const body = { ...values, ...overrides };
   const d = await api("/api/grid-charge", { method: "PUT", body: JSON.stringify(body) });
-  if (d.ok) { gridChargeState = d; renderGridCharge(d); }
+  if (d.ok) {
+    if (!toggleOnly) acceptSavedDraft(draft);
+    gridChargeState = d; renderGridCharge(d);
+  }
   else {
     logConsole(`falha ao guardar o carregamento por excedente: ${d.error}`, "err");
     renderGridCharge(gridChargeState);
@@ -675,6 +725,7 @@ async function saveGridCharge(overrides) {
 function wireGridCharge() {
   const enabledBox = $("#gc-enabled");
   if (!enabledBox) return;   // grid_charge_available was false
+  watchDraftFields(GC_FIELDS.map(([id]) => id));
 
   enabledBox.addEventListener("change", () => {
     saveGridCharge({ enabled: enabledBox.checked });
@@ -736,12 +787,16 @@ function renderBatteryWindow(state) {
 
   BW_FIELDS.forEach(([id, key]) => {
     const el = document.querySelector(`#${id}`);
-    if (!el || document.activeElement === el) return;
+    if (!el || preserveDraft(id, el) || document.activeElement === el) return;
     el.value = cfg[key];
+    rememberField(id, el);
   });
 
   const dayBox = document.querySelector("#bw-daytime-enabled");
-  if (dayBox && document.activeElement !== dayBox) dayBox.checked = !!cfg.daytime_enabled;
+  if (dayBox && !preserveDraft("bw-daytime-enabled", dayBox) && document.activeElement !== dayBox) {
+    dayBox.checked = !!cfg.daytime_enabled;
+    rememberField("bw-daytime-enabled", dayBox);
+  }
 
   const absEl = document.querySelector("#bw-abs-floor");
   if (absEl && state.absolute_floor_v !== undefined) absEl.textContent = state.absolute_floor_v;
@@ -751,8 +806,9 @@ function renderBatteryWindow(state) {
   const pump = (state.pump_window || [])[0];
   ["bw-pump-from", "bw-pump-to"].forEach((id, i) => {
     const el = document.querySelector(`#${id}`);
-    if (!el || document.activeElement === el) return;
+    if (!el || preserveDraft(id, el) || document.activeElement === el) return;
     el.value = pump ? (i === 0 ? pump.from : pump.to) : "";
+    rememberField(id, el);
   });
 
   const hf = document.querySelector("#bw-hard-forbidden");
@@ -766,6 +822,8 @@ function renderBatteryWindow(state) {
       hfText = "\u26a0 Sem horário de bomba definido: nada impede a bateria de "
         + "alimentar as cargas a qualquer hora. Correto só se a bomba já não "
         + "estiver na saída protegida.";
+    } else if ((cfg.pump_window || []).length > 1) {
+      hfText = `${cfg.pump_window.length - 1} outro(s) horário(s) de bomba preservado(s).`;
     }
     hf.textContent = hfText;
     hf.hidden = !hfText;
@@ -852,10 +910,13 @@ function readBatteryWindowForm() {
 }
 
 async function saveBatteryWindow(overrides) {
-  const { values, invalid } = readBatteryWindowForm();
+  if (!batteryWindowState) return { ok: false };
+  const toggleOnly = Object.prototype.hasOwnProperty.call(overrides, "enabled");
+  const { values, invalid } = toggleOnly
+    ? { values: {}, invalid: [] } : readBatteryWindowForm();
+  const draft = new Map([...dirtyFields].filter(([id]) => id.startsWith("bw-")));
   if (invalid.length) {
     logConsole(`janela de bateria não guardada — campos por preencher: ${invalid.join(", ")}`, "err");
-    renderBatteryWindow(batteryWindowState);
     return { ok: false, code: "invalid_form" };
   }
   const from = (document.querySelector("#bw-pump-from") || {}).value || "";
@@ -865,16 +926,20 @@ async function saveBatteryWindow(overrides) {
   // engano, e gravar isso silenciosamente removia a protecao -- por isso
   // mantem-se o que estava.
   let pump_window;
-  if (from && to) pump_window = [{ from, to, why: existing.why || "bomba de água" }];
-  else if (!from && !to) pump_window = [];
+  const remaining = ((batteryWindowState.config || {}).pump_window || []).slice(1);
+  if (from && to) pump_window = [{ from, to, why: existing.why || "bomba de água" }, ...remaining];
+  else if (!from && !to) pump_window = remaining;
   else pump_window = (batteryWindowState.config || {}).pump_window || [];
 
   const dayEl = document.querySelector("#bw-daytime-enabled");
-  const body = { ...values, ...overrides, pump_window,
+  const body = toggleOnly ? overrides : { ...values, ...overrides, pump_window,
                  daytime_enabled: dayEl ? dayEl.checked : false,
                  forbidden: (batteryWindowState.config || {}).forbidden || [] };
   const d = await api("/api/battery-window", { method: "PUT", body: JSON.stringify(body) });
-  if (d.ok) { batteryWindowState = d; renderBatteryWindow(d); }
+  if (d.ok) {
+    if (!toggleOnly) acceptSavedDraft(draft);
+    batteryWindowState = d; renderBatteryWindow(d);
+  }
   else {
     logConsole(`falha ao guardar a janela de bateria: ${d.error}`, "err");
     renderBatteryWindow(batteryWindowState);
@@ -885,6 +950,8 @@ async function saveBatteryWindow(overrides) {
 function wireBatteryWindow() {
   const enabledBox = $("#bw-enabled");
   if (!enabledBox) return;   // battery_window_available era falso
+  watchDraftFields([...BW_FIELDS.map(([id]) => id),
+                    "bw-pump-from", "bw-pump-to", "bw-daytime-enabled"]);
 
   enabledBox.addEventListener("change", () => {
     saveBatteryWindow({ enabled: enabledBox.checked });

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import serial
 import serial.tools.list_ports
 
-from protocol import crc_bytes, strip_crc_if_valid
+from protocol import crc_bytes, strip_crc_if_valid, validate_command
 
 BAUDRATE = 2400
 BYTESIZE = serial.EIGHTBITS
@@ -100,8 +100,12 @@ class InverterConnection:
         """Send a command as SerialHandler.excuteCommand() does: write the
         command bytes, optionally the 2-byte CRC, then CR, then read until
         CR/timeout. See SET_TIMEOUT_S for why set commands need append_crc."""
+        try:
+            validate_command(command)
+        except ValueError as e:
+            raise InverterError(str(e)) from e
         self._clear_buffer()
-        payload = command.encode("ascii", errors="replace")
+        payload = command.encode("ascii")
         if append_crc:
             payload += crc_bytes(command)
         self.ser.write(payload + b"\x0d")

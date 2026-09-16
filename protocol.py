@@ -24,6 +24,13 @@ CRC_TABLE = [
 _ESCAPE_BYTES = (0x28, 0x0D, 0x0A)  # '(' , CR, LF
 
 
+def validate_command(command: str) -> None:
+    """Require one ASCII command, with no framing bytes or separators."""
+    if (not isinstance(command, str) or not command
+            or any(ord(ch) < 33 or ord(ch) > 126 for ch in command)):
+        raise ValueError("command must be a single printable ASCII token")
+
+
 def calc_crc(data: bytes) -> int:
     """Port of CRCUtil.caluCRC(byte[]) -- nibble-wise nibble table CRC."""
     crc = 0

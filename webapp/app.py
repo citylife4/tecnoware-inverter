@@ -20,6 +20,7 @@ from __future__ import annotations
 import functools
 import hmac
 import secrets
+import threading
 
 from flask import (Flask, jsonify, render_template, request, session,
                    redirect, url_for)
@@ -62,6 +63,16 @@ def create_app(service, scheduler=None, grid_charge=None,
     app.scheduler = scheduler
     app.grid_charge = grid_charge
     app.api_token = token
+    automation_config_lock = threading.RLock()
+
+    def serialize_automation_config(fn):
+        @functools.wraps(fn)
+        def wrapped(*args, **kwargs):
+            # The conflict check and mutation are one transaction across
+            # both controllers, including requests from different tabs.
+            with automation_config_lock:
+                return fn(*args, **kwargs)
+        return wrapped
 
     # ---- auth ----------------------------------------------------------
 
@@ -272,6 +283,7 @@ def create_app(service, scheduler=None, grid_charge=None,
 
     @app.route("/api/schedule", methods=["PUT"])
     @require_json_write
+    @serialize_automation_config
     def api_schedule_put():
         """Replace the whole rule set. Storing rules always succeeds even on
         a read-only server -- only *applying* them is gated, same as any
@@ -309,6 +321,7 @@ def create_app(service, scheduler=None, grid_charge=None,
 
     @app.route("/api/grid-charge", methods=["PUT"])
     @require_json_write
+    @serialize_automation_config
     def api_gridcharge_put():
         """Replace the whole config. Same read-only/store-vs-apply split as
         the schedule endpoint above."""

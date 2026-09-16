@@ -393,13 +393,12 @@ class BatteryWindow:
         self._above_resume = 0
         self._pop_drift = 0           # consecutive ticks of POP disagreement
         self._pop_drift_writes = 0    # corrective writes already attempted
-        # Set while the loads have to be handed back to utility before this
-        # controller stops deciding anything -- see _decide()'s disabled
-        # branch. Deliberately NOT persisted: it is re-derived on every tick
-        # from _last_applied_pop, which is itself seeded here from the
-        # service's on-disk last-known POP, so a restart into a disabled
-        # config re-arms the release by itself.
-        self._release_pending = False
+        # A requested POP02 remains our responsibility until POP00 is ACKed.
+        # QMOD=L and a lost reply cannot discharge that responsibility.
+        self._release_pending = (runtime.get("release_pending", False)
+                                 or self._last_applied_pop == BATTERY_POP)
+        if runtime.get("release_pending"):
+            self._last_applied_pop = None
         self._last_run = None
 
     # ---- persistence ----------------------------------------------------
@@ -440,6 +439,7 @@ class BatteryWindow:
             return {
                 "recovering": bool(value.get("recovering", False)),
                 "below_floor": max(0, int(value.get("below_floor", 0))),
+                "release_pending": bool(value.get("release_pending", False)),
             }
         except (ValueError, OSError, TypeError, AttributeError):
             # A corrupt safety latch fails towards utility. It can be cleared
@@ -447,14 +447,16 @@ class BatteryWindow:
             return {"recovering": True,
                     "below_floor": self._config["floor_confirmations"]}
 
-    def _save_runtime(self) -> None:
+    def _save_runtime(self, strict=False) -> None:
         try:
             write_json_atomic(self._runtime_path, {
                 "recovering": self._recovering,
                 "below_floor": self._below_floor,
+                "release_pending": self._release_pending,
             }, mode=FILE_MODE)
         except OSError:
-            pass
+            if strict:
+                raise
 
     # ---- API ------------------------------------------------------------
 
@@ -778,19 +780,6 @@ class BatteryWindow:
         # get_state() stays a pure read with no side effects.
         mismatch = self._reconcile_with_device()
 
-        # Latch the hand-back that _decide()'s disabled branch asks for, and
-        # keep it latched until a write is actually confirmed. A POP00 that
-        # is NAKed, times out or comes back garbled clears _last_applied_pop
-        # (see _forget_applied_pop), so without this the very next tick would
-        # read "nothing of mine to release" and abandon a pack that is still
-        # on the loads. Evaluated after the reconciler on purpose: if the
-        # device has already left battery mode by itself there is nothing to
-        # hand back, and this must not manufacture a relay throw.
-        if cfg["enabled"] or self._last_applied_pop == GRID_POP:
-            self._release_pending = False
-        elif self._last_applied_pop == BATTERY_POP:
-            self._release_pending = True
-
         v = self._battery_voltage()
         previous_runtime = (self._recovering, self._below_floor)
         if isinstance(v, (int, float)):
@@ -925,6 +914,14 @@ class BatteryWindow:
             result["note"] = f"a aguardar {remaining}s (anti-flap do relé)"
         else:
             try:
+                if target == BATTERY_POP:
+                    self._release_pending = True
+                    # Persist BEFORE sending: a lost reply or a restart must
+                    # not erase an obligation to return the loads to utility.
+                    try:
+                        self._save_runtime(strict=True)
+                    except OSError as e:
+                        raise InverterError(f"cannot persist battery hand-back: {e}")
                 resp = self.service.send_set(f"POP{target}", source="battery_window")
                 ok = resp.startswith("(ACK")
                 result["response"] = resp
@@ -933,6 +930,9 @@ class BatteryWindow:
                 if ok:
                     self._last_applied_pop = target
                     self._last_switch_mono = now_mono
+                    if target == GRID_POP:
+                        self._release_pending = False
+                        self._save_runtime()
                 else:
                     self._forget_applied_pop()
             except InverterError as e:

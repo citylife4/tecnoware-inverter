@@ -81,16 +81,22 @@ def set_pop(token: str, value: str, dry: bool) -> str:
 
 def revert(token: str, dry: bool, log) -> bool:
     """Put POP back to 00. Never raises -- this is the last thing that runs."""
+    def report(message):
+        try:
+            log("revert", message)
+        except Exception:
+            pass  # Logging must never cancel a safety retry.
+
     for attempt in range(1, REVERT_ATTEMPTS + 1):
         try:
             resp = set_pop(token, SAFE_POP, dry)
-            log("revert", "POP=%s tentativa %d -> %s" % (SAFE_POP, attempt, resp))
-            if "ACK" in resp or dry:
+            report("POP=%s tentativa %d -> %s" % (SAFE_POP, attempt, resp))
+            if resp.startswith("(ACK") or dry:
                 return True
         except Exception as e:                    # noqa: BLE001 -- must not escape
-            log("revert", "tentativa %d falhou: %s" % (attempt, e))
+            report("tentativa %d falhou: %s" % (attempt, e))
         time.sleep(5)
-    log("revert", "FALHOU apos %d tentativas -- INTERVENCAO MANUAL" % REVERT_ATTEMPTS)
+    report("FALHOU apos %d tentativas -- INTERVENCAO MANUAL" % REVERT_ATTEMPTS)
     return False
 
 
@@ -129,8 +135,11 @@ def main() -> int:
 
     def log(tag, msg):
         line = "%s [%s] %s" % (dt.datetime.now().isoformat(timespec="seconds"), tag, msg)
-        print(line, flush=True)
-        logf.write(line + "\n")
+        for write in (lambda: print(line, flush=True), lambda: logf.write(line + "\n")):
+            try:
+                write()
+            except OSError:
+                pass
 
     new = not os.path.exists(args.out)
     csvf = open(args.out, "a", newline="", buffering=1)
@@ -199,7 +208,7 @@ def main() -> int:
         log("end", "POP restaurado" if ok else "POP *** NAO *** restaurado")
         csvf.close()
         logf.close()
-    return 0
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

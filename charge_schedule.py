@@ -172,6 +172,9 @@ def main() -> int:
                       f"{status['charging_current']}A)")
                 return 0
 
+            # Invalidate before sending, including across process death or a
+            # reply lost after the hardware has applied the new priority.
+            write_json_atomic(state_path, {"pcp": None, "at": now.isoformat()})
             resp = conn.send_set_command(f"PCP{target}")
             ok = resp.startswith("(ACK")
             print(f"{now:%Y-%m-%d %H:%M}  PCP{target} -> {resp}  ({why})")

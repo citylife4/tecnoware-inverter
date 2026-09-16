@@ -16,6 +16,7 @@ from __future__ import annotations
 import math
 
 from commands import QUERY_COMMANDS, SET_COMMANDS
+from protocol import validate_command
 
 # Set commands that are recoverable and routinely useful: priorities,
 # buzzer, charge voltages. These go through on a plain authenticated
@@ -178,6 +179,11 @@ def check_policy(raw: str, confirm: bool, allow_writes: bool,
     battery_voltage=None when it could not be read, which is itself treated
     as "not safe to go solar-only".
     """
+    if raw.strip():
+        try:
+            validate_command(raw.strip(" "))
+        except ValueError as e:
+            raise CommandRejected(str(e), code="invalid_command") from e
     info = classify(raw)
 
     if not info["command"]:
@@ -197,6 +203,11 @@ def check_policy(raw: str, confirm: bool, allow_writes: bool,
             "this server is running read-only",
             hint="restart without --read-only to enable writes",
             code="read_only")
+
+    priorities = {"PCP": PCP_VALUES, "POP": OUTPUT_PRIORITY_VALUES}
+    if (info["prefix"] in priorities
+            and info["command"][3:] not in priorities[info["prefix"]]):
+        raise CommandRejected("invalid priority parameter", code="invalid_command")
 
     reason = needs_confirmation(info)
     if reason and not confirm:

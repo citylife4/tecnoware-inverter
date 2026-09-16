@@ -443,9 +443,14 @@ class GridChargeController:
             # A belief nothing has refreshed is not ownership. Without this,
             # a wedged poll thread would freeze `_desired` at "charging" and
             # lock the scheduler out indefinitely.
-            return (self._last_fetch_ok_mono is not None
-                    and time.monotonic() - self._last_fetch_ok_mono
-                    <= self._config["stale_after"])
+            fresh = (self._last_fetch_ok_mono is not None
+                     and time.monotonic() - self._last_fetch_ok_mono
+                     <= self._config["stale_after"])
+            if not fresh:
+                # The scheduler may now overwrite PCP before our next tick.
+                # Reacquisition must write even if the target did not change.
+                self._last_applied_pcp = None
+            return fresh
 
     def set_enabled(self, enabled: bool) -> dict:
         """Flip the enabled flag alone, keeping every other setting --

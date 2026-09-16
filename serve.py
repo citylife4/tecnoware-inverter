@@ -124,6 +124,13 @@ def save_config(path: str, cfg: dict) -> None:
     write_json_atomic(path, cfg)
 
 
+def validate_automation_ownership(scheduler, grid_charge) -> None:
+    cfg = grid_charge.get_state()
+    if scheduler.is_enabled() and cfg["enabled"] and cfg["mode"] == "exclusive":
+        raise ConfigError("schedule and exclusive grid charging are both enabled; "
+                          "disable one or select override mode before starting")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -166,7 +173,6 @@ def main() -> int:
         audit_path=cfg["audit_config"],
         telemetry_dir=cfg["telemetry_dir"],
     )
-    service.start()
 
     # O carregamento por excedente é criado primeiro para que o
     # agendamento lhe possa perguntar, a cada tick, se está a sobrepor-se
@@ -193,6 +199,12 @@ def main() -> int:
     scheduler = Scheduler(service, path=cfg["schedule_config"],
                           poll_interval=float(cfg["schedule_poll_interval"]),
                           override_check=grid_charge.is_overriding)
+    try:
+        validate_automation_ownership(scheduler, grid_charge)
+    except ConfigError as e:
+        print(f"[serve] config error: {e}", file=sys.stderr)
+        return 2
+    service.start()
     scheduler.start()
     grid_charge.start()
     battery_window.start()

@@ -40,6 +40,7 @@ import urllib.error
 import urllib.request
 
 from notify import Notifier, load_config
+from webapp.atomic_write import write_json_atomic
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -192,13 +193,30 @@ def restart_service(dry_run: bool) -> None:
         _log("  service restart failed: %s" % e)
 
 
-def check_once(config_path: str, dry_run: bool) -> int:
+def _recovery_attempts(path: str) -> int:
+    try:
+        with open(path) as fh:
+            attempts = json.load(fh)["attempts"]
+        if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
+            raise ValueError("invalid recovery budget")
+        return attempts
+    except FileNotFoundError:
+        return 0
+    except (OSError, ValueError, KeyError, TypeError):
+        # Corruption must not rearm an exhausted hardware recovery budget.
+        return MAX_ATTEMPTS
+
+
+def check_once(config_path: str, dry_run: bool, state_path=None) -> int:
+    state_path = state_path or config_path + ".watchdog-state"
     notifier = Notifier(load_config(config_path))
     healthy, detail = _service_health(config_path)
     if healthy is None:
         _log("skipping: %s" % detail)
         return 0
     if healthy:
+        if not dry_run and _recovery_attempts(state_path):
+            write_json_atomic(state_path, {"attempts": 0})
         _log("ok (%s)" % detail)
         # Only speaks up on the transition, so a healthy month is silent.
         notifier.on_change("link", "ok",
@@ -206,6 +224,14 @@ def check_once(config_path: str, dry_run: bool) -> int:
         notifier.heartbeat(
             "Inversor: tudo bem. Ligacao ativa, %s." % detail)
         return 0
+
+    attempts = _recovery_attempts(state_path)
+    if attempts >= MAX_ATTEMPTS:
+        _log("recovery budget exhausted; monitoring until recovery or operator reset")
+        notifier.on_change("link", "gave_up",
+                           "Inversor: recuperacao automatica esgotada. "
+                           "Precisa de intervencao manual.")
+        return 2
 
     _log("link or service looks dead: %s" % detail)
     notifier.on_change("link", "down",
@@ -216,39 +242,31 @@ def check_once(config_path: str, dry_run: bool) -> int:
     # serial thread needs the process replaced, not the bus cycled, and
     # restarting is much the cheaper of the two -- it does not disturb
     # anything else on the hub.
-    _log("recovery attempt 1/%d: restarting the service" % MAX_ATTEMPTS)
-    restart_service(dry_run)
     if dry_run:
+        _log("would attempt recovery; budget and hardware unchanged")
         return 1
-    time.sleep(25)
-    healthy, detail = _service_health(config_path)
-    if healthy:
-        _log("recovered by restart (%s)" % detail)
-        notifier.on_change("link", "ok",
-                           "Inversor: recuperado com um reinicio do servico.")
-        return 0
-    _log("  still down: %s" % detail)
 
-    hub = _adapter_hub()
-    if hub is None:
-        _log("  adapter not present in sysfs at all -- cable or adapter, "
-             "needs hands")
-        notifier.on_change("link", "absent",
-                           "Inversor: o adaptador USB desapareceu do sistema. "
-                           "Nao da para recuperar por software -- precisa de "
-                           "alguem no local (cabo ou adaptador).")
-        return 2
-
-    for attempt in range(2, MAX_ATTEMPTS + 1):
-        _log("recovery attempt %d/%d: resetting the bus" % (attempt, MAX_ATTEMPTS))
-        reset_bus(hub, dry_run)
-        restart_service(dry_run)
+    while attempts < MAX_ATTEMPTS:
+        hub = None if attempts == 0 else _adapter_hub()
+        if attempts and hub is None:
+            # No useful active remedy remains. Do not restart each poll.
+            write_json_atomic(state_path, {"attempts": MAX_ATTEMPTS})
+            break
+        attempts += 1
+        # Consume the budget durably BEFORE touching hardware. If saving
+        # fails, no reset is attempted; a restart cannot erase past attempts.
+        write_json_atomic(state_path, {"attempts": attempts})
+        _log("recovery attempt %d/%d" % (attempts, MAX_ATTEMPTS))
+        if hub is not None:
+            reset_bus(hub, False)
+        restart_service(False)
         time.sleep(25)
         healthy, detail = _service_health(config_path)
         if healthy:
+            write_json_atomic(state_path, {"attempts": 0})
             _log("recovered (%s)" % detail)
             notifier.on_change("link", "ok",
-                               "Inversor: recuperado apos reset do USB.")
+                               "Inversor: ligacao restabelecida apos recuperacao.")
             return 0
         _log("  still down: %s" % detail)
 
@@ -267,6 +285,9 @@ def main() -> int:
     ap.add_argument("--interval", type=float, default=300.0,
                     help="seconds between checks in --daemon mode")
     ap.add_argument("--daemon", action="store_true")
+    ap.add_argument("--state-file", help="recovery budget file (default: CONFIG.watchdog-state)")
+    ap.add_argument("--reset-recovery", action="store_true",
+                    help="rearm the recovery budget and exit; does not touch hardware")
     ap.add_argument("--dry-run", action="store_true",
                     help="do not touch the USB bus or restart anything. "
                          "NOTE: alerts are still sent -- this flag is about "
@@ -274,15 +295,20 @@ def main() -> int:
                          "quiet. Disable telegram in the config you point at "
                          "if you are only exercising the logic.")
     args = ap.parse_args()
+    state_path = args.state_file or args.config + ".watchdog-state"
+    if args.reset_recovery:
+        if not args.dry_run:
+            write_json_atomic(state_path, {"attempts": 0})
+        return 0
 
     if not args.daemon:
-        return check_once(args.config, args.dry_run)
+        return check_once(args.config, args.dry_run, state_path)
 
     _log("watchdog started (interval %.0fs, stale after %.0fs)"
          % (args.interval, STALE_AFTER_S))
     while True:
         try:
-            check_once(args.config, args.dry_run)
+            check_once(args.config, args.dry_run, state_path)
         except Exception as e:                 # noqa: BLE001
             # A crash here would leave the inverter unsupervised, which is
             # the exact thing this exists to prevent.
