@@ -2058,6 +2058,52 @@ class TestBatteryWindow(unittest.TestCase):
         self.assertIn("anti-flap", r["note"])
         self.assertEqual(service.sent, [])
 
+    def test_leaving_the_closed_window_ignores_the_dwell(self):
+        """Enter at 07:59, the window closes at 08:00 -- and with the default
+        600 s dwell the loads stayed on the pack for another ~9 minutes, past
+        the end of the very window that authorised the discharge."""
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=dt.datetime(2026, 8, 25, 7, 59),
+                    min_switch_interval=600)
+        self.assertTrue(bw.is_active())
+        r = bw.tick(now=dt.datetime(2026, 8, 25, 8, 0))
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertEqual(r["reason"], "outside")
+        self.assertTrue(r["applied"],
+                        "the window is over; a relay cooldown must not keep "
+                        "the loads on the pack past its end")
+        self.assertEqual(service.sent, ["POP00"])
+
+    def test_every_exit_to_utility_ignores_the_dwell(self):
+        """The rule is the direction, not a list of reasons.
+
+        While the bypass was an allow-list of reasons it was missing an entry
+        twice -- "yielding" (2026-08-25, the house exported for a full dwell)
+        and "outside" (above). Both times the controller reached the right
+        decision and was merely slow to act on it, which is exactly why they
+        got through review. This pins the direction instead."""
+        DWELL = 99999
+        cases = [
+            # (expected reason, window config, when to tick)
+            ("outside", {}, self.DAY),
+            ("forbidden", {"from": "00:00", "to": "23:59"}, self.PUMP),
+            ("unknown_voltage", {}, self.NIGHT),
+        ]
+        for reason, extra, when in cases:
+            with self.subTest(reason=reason):
+                service, bw = self.make(battery_voltage=27.0)
+                self.enable(bw, now=self.NIGHT, min_switch_interval=DWELL,
+                            **extra)
+                self.assertTrue(bw.is_active())
+                service.sent.clear()
+                if reason == "unknown_voltage":
+                    service._battery_voltage = None
+                r = bw.tick(now=when)
+                self.assertEqual(r["reason"], reason)
+                self.assertEqual(r["target"], GRID_POP)
+                self.assertTrue(r["applied"])
+                self.assertEqual(service.sent, ["POP00"])
+
     def test_safety_exit_ignores_dwell(self):
         """Going back to utility is a safety action and never waits out the
         anti-flap timer -- the pack has no reason to honour a cooldown."""

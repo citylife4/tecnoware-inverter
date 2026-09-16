@@ -888,32 +888,30 @@ class BatteryWindow:
         # anti-flap timer. Only ENTERING battery mode is debounced -- that is
         # the direction that costs a relay throw for no safety benefit.
         #
-        # "yielding" belongs on this list, and its absence was a live fault.
-        # Observed 2026-08-25 14:2x: the house was exporting (-19 W), the
-        # export controller had correctly decided to charge, and this
-        # controller had correctly decided to hand it POP=00 -- and then sat
-        # on that decision for the full 600 s dwell while the export
-        # continued. Injecting into the grid is not permitted at this
-        # installation, so absorbing it is a compliance action, not a
-        # preference, and the relay-wear argument does not outrank it.
-        urgent = target == GRID_POP and reason in (
-            "floor", "recovering", "unknown_voltage", "forbidden", "yielding",
-            # The device is already physically on the safe side (L) by the
-            # time this fires; the write only converges our own belief with
-            # it. No reason to make that wait out a relay-wear cooldown.
-            "hardware_override",
-            # Leaving battery because the export margin thinned is a
-            # compliance action: every tick spent waiting is a tick spent
-            # exporting. Same reasoning as "yielding".
-            "daytime_surplus", "daytime_unknown",
-            # Re-asserting POP after it drifted out of sync is corrective,
-            # not discretionary: every tick spent waiting is a tick the pack
-            # is being cycled by the device instead of by us.
-            "pop_drift",
-            # Handing the loads back before switching off: the controller is
-            # about to stop watching the pack, so it must not leave a relay
-            # cooldown standing between the pack and utility.
-            "disabled")
+        # This used to be that rule AND an allow-list of the reasons allowed
+        # to invoke it, and the list was wrong every time something new was
+        # added to the controller:
+        #
+        #   * "yielding" was missing. Observed live 2026-08-25 14:2x: the
+        #     house exported at -19 W, the export controller had correctly
+        #     decided to charge, this controller had correctly decided to
+        #     hand it POP=00 -- and then sat on that decision for the full
+        #     600 s dwell while the export continued.
+        #   * "outside" was missing. Enter battery at 07:59, the window
+        #     closes at 08:00, and the loads stay on the pack ~9 more minutes
+        #     with the default dwell -- past the end of the very window that
+        #     authorised the discharge.
+        #
+        # The failure mode of an allow-list here is silence: a missing entry
+        # produces a controller that still reaches the right decision and is
+        # merely slow to act on it, which is why both survived review. So the
+        # list is gone. Every path that returns GRID_POP is a safety or
+        # compliance action -- the floor, the pump, an unreadable voltage,
+        # export to absorb, a drifted POP, the hand-back when the window is
+        # switched off, or simply "the window is over" -- and none of them is
+        # worth a relay-wear cooldown. Flapping needs both directions to be
+        # fast, and the other one is still debounced.
+        urgent = target == GRID_POP
 
         if target is None:
             result["note"] = "desligado"
