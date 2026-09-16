@@ -234,8 +234,32 @@ class Scheduler:
                 result["note"] = "applied" if ok else f"device did not acknowledge: {resp}"
                 if ok:
                     self._last_applied_pcp = target
+                else:
+                    # A garbled reply or a timeout is NOT proof the write
+                    # failed -- on this link it usually means the inverter
+                    # obeyed and the reply came back mangled (gotcha #8).
+                    # Keeping the previous value asserts "we are still on the
+                    # old PCP", which the evidence does not support, and the
+                    # next tick then answers "already PCPxx; nothing to do"
+                    # about a state nothing has confirmed.
+                    #
+                    # The cost is a dropped SAFETY write: applied PCP01, then
+                    # a PCP03 whose reply is lost, then the pack falls below
+                    # min_battery_voltage -- apply_low_battery_floor computes
+                    # PCP01, the cache still says "01", and the write is
+                    # silently skipped while charging stays off. Same shape as
+                    # the 2026-09-16 dead-band trap door: an interlock that
+                    # ran and had its decision thrown away.
+                    #
+                    # battery_window (_forget_applied_pop) and grid_charge got
+                    # this on 2026-09-02 in b7793e0; this third controller was
+                    # missed. None means "unknown", which is the truth, and
+                    # the next tick converges with a real write -- re-sending a
+                    # PCP the inverter already holds costs nothing.
+                    self._last_applied_pcp = None
             except InverterError as e:
                 result["note"] = f"error: {e}"
+                self._last_applied_pcp = None
 
         self._last_run = result
         return result

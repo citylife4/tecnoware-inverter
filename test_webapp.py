@@ -3335,6 +3335,79 @@ class TestWatchdogHealthCheck(unittest.TestCase):
         self.assertIn("config unreadable", detail)
 
 
+class TestSchedulerForgetsAnUnacknowledgedWrite(unittest.TestCase):
+    """The third controller that b7793e0 (2026-09-02) missed.
+
+    battery_window and grid_charge both stopped treating a garbled or
+    timed-out set reply as proof the write failed; the scheduler kept doing
+    it. On this link a mangled reply usually means the inverter obeyed
+    (gotcha #8), so holding the previous value asserts a state nothing has
+    confirmed -- and the next tick then answers "already PCPxx; nothing to
+    do" to a low-battery safety write.
+    """
+
+    GARBLED = "\xe5\xf3\xf6   \xe6\xf4   \t \t"
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "web_schedule.json")
+
+    def test_an_unacknowledged_write_leaves_the_belief_unknown(self):
+        service = FakeService()
+        sched = Scheduler(service, self.path)
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "03", "why": "t"}])
+        self.assertEqual(sched._last_applied_pcp, "03")
+
+        service.send_set = lambda c, source="manual": self.GARBLED
+        sched.tick(force=True)
+        self.assertIsNone(sched._last_applied_pcp,
+                          "None is 'unknown'; the old value would be a guess")
+
+    def test_a_timed_out_write_also_leaves_it_unknown(self):
+        service = FakeService()
+        sched = Scheduler(service, self.path)
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "03", "why": "t"}])
+
+        def boom(command, source="manual"):
+            raise InverterError("no response to set command (timeout)")
+
+        service.send_set = boom
+        sched.tick(force=True)
+        self.assertIsNone(sched._last_applied_pcp)
+
+    def test_the_low_battery_write_is_not_dropped_after_a_lost_reply(self):
+        """The whole cost of the bug, end to end.
+
+        PCP01 applied and acknowledged; a later PCP03 takes effect but its
+        reply is lost; the pack then falls below min_battery_voltage. The
+        floor computes PCP01, the stale cache says "01" -- and the safety
+        write is silently skipped while charging stays off indefinitely.
+        """
+        service = FakeService(battery_voltage=27.0, min_battery_voltage=24.0)
+        sched = Scheduler(service, self.path)
+        frm, to = window_around_now()
+
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "01", "why": "noite"}])
+        self.assertEqual(service.sent, ["PCP01"])
+
+        # The PCP03 rule the inverter obeys and does not acknowledge.
+        real_send = service.send_set
+        service.send_set = lambda c, source="manual": (
+            service.sent.append(c) or self.GARBLED)
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "03", "why": "dia"}])
+        self.assertEqual(service.sent, ["PCP01", "PCP03"])
+
+        # Pack drains with the charger off; the floor must force PCP01 back.
+        service.send_set = real_send
+        service._battery_voltage = 23.0
+        result = sched.tick()
+        self.assertEqual(service.sent, ["PCP01", "PCP03", "PCP01"],
+                         "a low-battery write must never be skipped on an "
+                         "unconfirmed cache")
+        self.assertIn("OVERRIDE", result["why"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
