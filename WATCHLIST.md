@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-16
+Last updated: 2026-09-16 (external review fixes deployed)
 
 ---
 
@@ -286,6 +286,38 @@ above SOLAR_FLOOR_W. It is the third instance of this class after
 `floor_voltage` and `resume_voltage`: **a threshold compared against a pack
 that may be on charge must be a resting voltage, or must release on something
 other than voltage** (tapering current, or a minimum charge duration).
+
+## 2f. External review, 2026-09-16 — seven defects found and fixed, deployed
+
+A fresh reviewer working from `REVIEW_PROMPT.md` found six; a later pass
+found a hole in one of the fixes. All are now in and running. Highlights
+worth remembering rather than the full list (see git log from `34b8692`):
+
+- **Disabling the window abandoned the inverter in POP02.** The disabled
+  branch returned no target, so a window that had already put the loads on
+  the pack simply stopped deciding. The obligation to hand back is now
+  recorded *before* the POP02 write, persisted, and discharged only by an
+  ACKed POP00 — and the write is refused if it cannot be persisted.
+  **QMOD=L does not discharge it**: with POP=02 still set, program 12 puts
+  the loads on line at ~24 V and the device returns to battery when voltage
+  recovers.
+- **A hardware override was undone in the tick that detected it.** The
+  recovery check cleared the latch the reconciler had just set, and the
+  controller wrote POP02 back while reporting `hardware_override`. Release
+  now needs `RESUME_CONFIRMATIONS = 3` and a fresh override resets the
+  count — the load coming off is exactly what causes the rebound.
+- **The dwell allow-list is gone**: any exit to utility is urgent. It had
+  been wrong three times, and its failure mode is silence.
+- The scheduler now forgets an unacknowledged PCP like the other two
+  controllers (missed when that was fixed on 09-03), and `grid_charge`
+  freshness ages the **measurement**, not the HTTP call.
+
+**Open, not fixed:** `_loop()` still swallows every exception, which is the
+largest remaining "abandoned in POP02" path; `hardware_override` still
+latches a whole night on one QMOD reading where the drift branch beside it
+needs three; shutdown does not hand the loads back; `pop_drift_stuck` alerts
+nobody. Also: the last pass added **no tests**, so the persisted-obligation
+and refuse-to-write-if-unpersistable paths are unverified.
 
 ## 3. Live concern: the service stalls
 
