@@ -261,6 +261,10 @@ class GridChargeController:
 
     def get_state(self) -> dict:
         with self._lock:
+            # Age of the MEASUREMENT, not of our HTTP call -- it stops
+            # advancing when the upstream row does. See
+            # _mark_reading_fresh(); the dashboard renders it as
+            # "leitura de há Xs", which is now literally true.
             age = (None if self._last_fetch_ok_mono is None
                    else round(time.monotonic() - self._last_fetch_ok_mono, 1))
             return {
@@ -343,6 +347,11 @@ class GridChargeController:
         daytime discharge is safe: a positive signal means the house would
         still be importing without the inverter, so removing its load cannot
         push the meter into export.
+
+        "Recent enough" is the age of the measurement, not of the HTTP call
+        that carried it -- a frozen upstream serving the same row over and
+        over goes stale here rather than authorising a discharge forever.
+        See _mark_reading_fresh().
         """
         with self._lock:
             if self._last_signal is None or self._last_fetch_ok_mono is None:
@@ -503,6 +512,57 @@ class GridChargeController:
         # "unknown" must not authorise charging.
         return bool(self._generating)
 
+    def _mark_reading_fresh(self, now_mono, remote_ts) -> None:
+        """Advance the freshness mark only when the MEASUREMENT is new.
+
+        This used to be `self._last_fetch_ok_mono = now_mono` on every
+        successful parse, which measured the age of our HTTP call and not the
+        age of the number it returned. auto-energy's /api/live serves
+        `rows[-1]` -- the last row in its database -- and a row is only
+        inserted when the weather station POSTs to /weather (see
+        auto-energy/src/routes.py). If the station stops, or the collector
+        wedges, the endpoint keeps answering 200 with the same row forever:
+        `known` stays true, `last_signal()` reports fresh, and a stale
+        positive signal goes on authorising the daytime battery window while
+        real conditions move to export. Exporting is a legal problem at this
+        installation, so failing open on a frozen upstream is not merely
+        wasteful.
+
+        `stale_after` (120 s) is the knob; what changes is what it is
+        measured against. The test is whether the remote timestamp has MOVED,
+        not what it says:
+
+        - **Changed** -> a new measurement exists: mark fresh.
+        - **Unchanged** -> the same row as last time. Do not advance the
+          mark, so `stale_after` of no movement makes `known` false and the
+          controller idles. This is the whole point of the fix.
+        - **Missing / None** -> we cannot tell, so treat the fetch as fresh,
+          exactly as before. Failing closed on an absent field would be a
+          regression: the field is not part of any contract we control and an
+          upstream that never sends it would disable the controller outright.
+        - **Unparseable, skewed, or in a different timezone** -> immaterial,
+          because the value is never parsed and never compared against our
+          own clock. It is only compared with the previous value of itself.
+
+        That last property is why movement is the test rather than absolute
+        age. The timestamp is another host's naive local time
+        ("%Y-%m-%d %H:%M:%S", no offset), so an hour of timezone difference
+        would look exactly like an hour-old reading and would shut the
+        controller down permanently on a clock difference rather than on a
+        data problem. Movement needs no agreement between the two clocks.
+
+        Measured 2026-09-16 for the budget: rows advance every 31 s (median
+        of 199 intervals, max 35 s, and we poll every 30 s), so 120 s is
+        ~4x the row interval -- a comfortable margin against one late row.
+
+        Known gap, accepted: a collector that keeps advancing its timestamps
+        while serving consistently old measurements would still read as
+        fresh. Nothing in this stack does that, while the freeze above has a
+        concrete mechanism behind it.
+        """
+        if remote_ts is None or remote_ts != self._last_remote_ts:
+            self._last_fetch_ok_mono = now_mono
+
     def _evaluate(self):
         cfg = self._config
         net, inverter_w, solar_w, remote_ts = self._fetch_fn()
@@ -520,7 +580,7 @@ class GridChargeController:
             signal = net - inverter_w
 
         if signal is not None:
-            self._last_fetch_ok_mono = now_mono
+            self._mark_reading_fresh(now_mono, remote_ts)
             self._last_net_balance = net
             self._last_inverter_input = inverter_w
             self._last_signal = signal

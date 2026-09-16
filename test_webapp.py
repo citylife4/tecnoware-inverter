@@ -3409,5 +3409,111 @@ class TestSchedulerForgetsAnUnacknowledgedWrite(unittest.TestCase):
         self.assertIn("OVERRIDE", result["why"])
 
 
+class TestFreshnessFollowsTheMeasurement(unittest.TestCase):
+    """A successful HTTP call is not a recent measurement.
+
+    auto-energy's /api/live serves `rows[-1]`, and a row is only inserted
+    when the weather station POSTs to /weather. If the station stops or the
+    collector wedges, the endpoint keeps answering 200 with the same row
+    forever -- and the controller used to call that fresh indefinitely,
+    because it stamped `_last_fetch_ok_mono` on every successful parse.
+
+    The cost is not merely a wrong dashboard number: `last_signal()` is what
+    authorises the daytime battery window, so a frozen positive signal keeps
+    the loads on the pack while real conditions move to export, which is a
+    compliance problem at this installation.
+
+    121 s is used throughout as "stale_after (120 s) has passed"; the
+    freshness mark is rewound rather than the tests sleeping.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "web_gridcharge.json")
+
+    def make(self, net_balance=-200.0, timestamp="2026-09-16 09:51:28"):
+        service = FakeService()
+        stub = FetchStub(net_balance, timestamp=timestamp)
+        gc = GridChargeController(service, self.path, fetch_fn=stub)
+        gc.set_config({"enabled": True, "min_switch_interval": 0,
+                       "stale_after": 120.0, "export_threshold_w": -150.0,
+                       "import_threshold_w": 150.0})
+        return service, stub, gc
+
+    def test_a_frozen_upstream_row_goes_stale(self):
+        service, stub, gc = self.make()
+        self.assertEqual(service.sent, ["PCP01"])       # exporting, charging
+
+        # Two minutes on, the endpoint still answers -- with the same row.
+        gc._last_fetch_ok_mono -= 121
+        result = gc.tick()
+        self.assertFalse(result["known"],
+                         "the same row twice is one measurement, not two")
+        self.assertEqual(service.sent, ["PCP01", "PCP03"])
+
+    def test_a_new_row_clears_the_staleness(self):
+        service, stub, gc = self.make()
+        gc._last_fetch_ok_mono -= 121
+        stub.timestamp = "2026-09-16 09:51:59"          # the collector moved on
+        result = gc.tick()
+        self.assertTrue(result["known"])
+        self.assertEqual(service.sent, ["PCP01"])       # still charging
+
+    def test_the_timestamp_is_never_parsed(self):
+        """Movement is the test, not what the value says -- which is what
+        makes it immune to the remote clock, its timezone and its format.
+        The field is another host's naive local time with no offset, so an
+        absolute comparison against our clock would read an hour of timezone
+        difference as an hour-old reading and shut the controller down for
+        good."""
+        service, stub, gc = self.make(timestamp="row-42")
+        gc._last_fetch_ok_mono -= 121
+        stub.timestamp = "row-43"
+        self.assertTrue(gc.tick()["known"])
+
+    def test_a_future_dated_row_is_not_treated_as_a_problem(self):
+        """Clock skew between two hosts is not staleness, and must not stop
+        the controller."""
+        service, stub, gc = self.make()
+        gc._last_fetch_ok_mono -= 121
+        stub.timestamp = "2099-01-01 00:00:00"
+        self.assertTrue(gc.tick()["known"])
+
+    def test_a_missing_timestamp_stays_open(self):
+        """Deliberate, and the opposite way to the rest of this class: an
+        absent field is not evidence of anything, and failing closed on it
+        would disable the controller against any upstream that does not send
+        one. Verified against a fail-closed implementation rather than
+        against the old code, since the old code passes it too."""
+        service, stub, gc = self.make(timestamp=None)
+        self.assertIsNotNone(gc._last_fetch_ok_mono,
+                             "a reading with no timestamp is still a reading")
+        gc._last_fetch_ok_mono -= 121
+        self.assertTrue(gc.tick()["known"])
+        self.assertEqual(service.sent, ["PCP01"])
+
+    def test_last_signal_goes_stale_with_the_row(self):
+        """The path that matters: BatteryWindow asks this before opening a
+        daytime discharge, and a frozen positive signal would keep saying
+        yes."""
+        _, stub, gc = self.make(net_balance=200.0)
+        signal, fresh = gc.last_signal()
+        self.assertEqual(signal, 200.0)
+        self.assertTrue(fresh)
+
+        gc._last_fetch_ok_mono -= 121
+        gc.tick()                                        # same row again
+        _, fresh = gc.last_signal()
+        self.assertFalse(fresh,
+                         "a frozen row must not authorise a discharge")
+
+    def test_is_absorbing_export_goes_stale_with_the_row(self):
+        _, stub, gc = self.make()
+        self.assertTrue(gc.is_absorbing_export())
+        gc._last_fetch_ok_mono -= 121
+        gc.tick()
+        self.assertFalse(gc.is_absorbing_export())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
