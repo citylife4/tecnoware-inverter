@@ -16,7 +16,7 @@ Last updated: 2026-09-16
 
 ## Settled configuration — not under test
 
-`battery_window` **01:00-08:00** nightly, floor 24.0 V, resume 26.8 V, 3
+`battery_window` **01:00-08:00** nightly, floor 24.0 V, resume 25.3 V, 3
 confirmations. Daytime window 08:00-19:00, enter 80 W, exit 50 W, dwell
 1200 s. Pump block 19:00-21:15. `grid_charge` **exclusive**, thresholds
 30/150 W.
