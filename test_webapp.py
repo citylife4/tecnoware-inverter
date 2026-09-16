@@ -1173,19 +1173,29 @@ class TestGridChargeController(unittest.TestCase):
         self.assertEqual(gc.get_state()["export_threshold_w"], -77)
         self.assertEqual(service.sent, ["PCP01"])
 
-    def test_is_overriding_needs_a_live_surplus_not_a_held_state(self):
+    def test_absorbing_export_needs_a_live_surplus_not_a_held_state(self):
         """The dead-band holds the previous state by design. At night the
         signal settles inside it, so a day ending in "charging" would keep
-        overriding until morning and the battery window would yield all
-        night without ever using the pack."""
+        the battery window yielding until morning, and the pack would never
+        be used.
+
+        Written 2026-08-25 against is_overriding(), which was then what the
+        battery window consulted. 7ed7814 split the predicate on 09-01 and
+        moved the window to is_absorbing_export() without moving this with
+        it -- so it went on pinning a battery-window requirement to the
+        scheduler's question. The requirement is real and belongs here; what
+        the scheduler needs is the opposite, since a held "charging" means
+        grid_charge is still holding PCP01 on the device. See
+        TestOverrideHandoffInTheDeadBand.
+        """
         service, stub, gc = self.make(net_balance=-200)      # exporting
         gc.set_config({"enabled": True, "mode": "override",
                        "min_switch_interval": 0})
-        self.assertTrue(gc.is_overriding())
+        self.assertTrue(gc.is_absorbing_export())
         stub.net_balance = 150      # dead-band: desired state is held...
         gc.tick()
         self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
-        self.assertFalse(gc.is_overriding())   # ...but nothing to absorb
+        self.assertFalse(gc.is_absorbing_export())   # ...but nothing to absorb
 
     def test_no_sun_disables_the_controller_entirely(self):
         """After dark the signal settles inside the dead-band on this house
@@ -3512,6 +3522,106 @@ class TestFreshnessFollowsTheMeasurement(unittest.TestCase):
         self.assertTrue(gc.is_absorbing_export())
         gc._last_fetch_ok_mono -= 121
         gc.tick()
+        self.assertFalse(gc.is_absorbing_export())
+
+
+class TestOverrideHandoffInTheDeadBand(unittest.TestCase):
+    """Ownership must follow what this controller is actually asserting.
+
+    In mode="override" the yield is decided by `desired`, but the scheduler
+    was told to stand down by `is_overriding()`, which asked the stricter
+    instantaneous question ("is the signal below the export threshold right
+    now?"). Inside the hysteresis dead-band the two disagree: grid_charge
+    holds "charging" and writes nothing, while the scheduler is told nobody
+    is overriding and writes PCP03 over it.
+
+    Clearing the cached PCP on a yield does not help, because this is not a
+    yield -- grid_charge never notices it lost ownership. So when export
+    returns, its cache still says "01", it answers "already PCP01; nothing
+    to do", and the charger stays off through the export it exists to
+    absorb.
+
+    Reproduced with the reported sequence: signal -10 -> +100 -> -10 W with
+    thresholds 30/150. Only reachable in "override"; this installation runs
+    "exclusive".
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.gc_path = os.path.join(self.dir, "web_gridcharge.json")
+        self.sched_path = os.path.join(self.dir, "web_schedule.json")
+
+    def make(self, net_balance):
+        service = FakeService()
+        stub = FetchStub(net_balance)
+        gc = GridChargeController(service, self.gc_path, fetch_fn=stub)
+        gc.set_config({"mode": "override", "enabled": True,
+                       "export_threshold_w": 30.0, "import_threshold_w": 150.0,
+                       "min_switch_interval": 0})
+        sched = Scheduler(service, self.sched_path,
+                          override_check=gc.is_overriding)
+        frm, to = window_around_now()
+        sched.set_state(True, [{"from": frm, "to": to, "pcp": "03",
+                                "why": "dia"}])
+        return service, stub, gc, sched
+
+    def test_the_charger_survives_a_trip_through_the_dead_band(self):
+        service, stub, gc, sched = self.make(-10.0)
+        self.assertEqual(service.sent, ["PCP01"])   # absorbing the export
+
+        stub.net_balance = 100.0                    # inside 30..150
+        gc.tick()
+        sched.tick()
+        self.assertEqual(gc._desired, "charging",
+                         "the dead-band holds the previous state by design")
+        self.assertEqual(service.sent, ["PCP01"],
+                         "the scheduler must not write over a charger that "
+                         "is still holding PCP01")
+
+        stub.net_balance = -10.0                    # exporting again
+        gc.tick()
+        self.assertEqual(service.sent[-1], "PCP01",
+                         "export must be absorbed, whatever happened in the "
+                         "dead-band")
+
+    def test_ownership_matches_the_yield(self):
+        """The invariant behind the fix: in override mode, is_overriding()
+        is true exactly when _tick would NOT hand the decision back to the
+        scheduler."""
+        service, stub, gc, sched = self.make(-10.0)
+        for balance in (-10.0, 100.0, 400.0, 100.0, -10.0, 400.0):
+            stub.net_balance = balance
+            note = gc.tick()["note"]
+            yielded = "agendamento" in note
+            self.assertEqual(gc.is_overriding(), not yielded,
+                             f"signal {balance} W: note {note!r}")
+
+    def test_a_stale_reading_still_hands_ownership_back(self):
+        """A belief nothing has refreshed is not ownership. No tick here on
+        purpose: this is the wedged-poll-thread case, where `_desired` stays
+        frozen at "charging" and would otherwise lock the scheduler out for
+        as long as the thread stays stuck."""
+        service, stub, gc, sched = self.make(-10.0)
+        self.assertTrue(gc.is_overriding())
+        gc._last_fetch_ok_mono -= 121
+        self.assertFalse(gc.is_overriding())
+
+    def test_an_evaluation_that_goes_stale_hands_ownership_back_too(self):
+        service, stub, gc, sched = self.make(-10.0)
+        gc._last_fetch_ok_mono -= 121
+        gc.tick()                                # same row: stays stale
+        self.assertEqual(gc._desired, "idle")
+        self.assertFalse(gc.is_overriding())
+
+    def test_the_battery_window_still_gets_the_stricter_answer(self):
+        """is_absorbing_export() must NOT follow the held state: it is what
+        the battery window yields to, and the dead-band swallows the whole
+        night (the signal settles at +80-100 W here after dark), so a held
+        intention would cede every night without ever using the pack."""
+        service, stub, gc, sched = self.make(-10.0)
+        stub.net_balance = 100.0
+        gc.tick()
+        self.assertEqual(gc._desired, "charging")
         self.assertFalse(gc.is_absorbing_export())
 
 

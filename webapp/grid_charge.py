@@ -410,11 +410,42 @@ class GridChargeController:
         Não confundir com `is_absorbing_export()`: a janela de bateria move
         o POP, não o PCP, coexiste com este controlador em qualquer dos
         modos, e por isso pergunta a outra coisa.
+
+        The invariant: this is true exactly when `_tick` would NOT hand the
+        decision back to the scheduler, i.e. when `_desired == "charging"`.
+        It used to delegate to is_absorbing_export(), whose test is the
+        instantaneous `signal <= export_threshold_w` -- and inside the
+        hysteresis dead-band the two disagree. grid_charge holds "charging"
+        there and writes nothing (the target is unchanged), while the
+        scheduler is told nobody is overriding and writes PCP03 over a
+        charger that is still meant to be running.
+
+        Clearing the cached PCP on a yield -- which both controllers already
+        do -- cannot cover this, because this is not a yield: grid_charge
+        never notices it lost ownership. Its cache goes on saying "01", so
+        when export returns it answers "already PCP01; nothing to do" and
+        the charger stays off through exactly the export it exists to
+        absorb. Reproduced with -10 -> +100 -> -10 W against thresholds
+        30/150.
+
+        is_absorbing_export() deliberately keeps the stricter test: the
+        battery window yields to it, the dead-band swallows the whole night
+        (the signal settles at +80-100 W here after dark), and a held
+        intention would cede every night without the pack ever being used.
+        The two questions really are different -- "am I holding PCP?" is not
+        "is there surplus in front of me right now?".
         """
         with self._lock:
-            if self._config["mode"] != "override":
+            if self._config["mode"] != "override" or not self._config["enabled"]:
                 return False
-        return self.is_absorbing_export()
+            if self._desired != "charging":
+                return False
+            # A belief nothing has refreshed is not ownership. Without this,
+            # a wedged poll thread would freeze `_desired` at "charging" and
+            # lock the scheduler out indefinitely.
+            return (self._last_fetch_ok_mono is not None
+                    and time.monotonic() - self._last_fetch_ok_mono
+                    <= self._config["stale_after"])
 
     def set_enabled(self, enabled: bool) -> dict:
         """Flip the enabled flag alone, keeping every other setting --
