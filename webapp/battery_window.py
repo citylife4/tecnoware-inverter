@@ -132,6 +132,25 @@ POP_DRIFT_CONFIRMATIONS = 3
 # absence could be weeks.
 POP_DRIFT_MAX_WRITES = 5
 
+# Consecutive readings at or above resume_voltage before the discharge latch
+# releases. The floor has needed confirmations since the beginning; the
+# release was left on a single reading, and it is the same trap seen from the
+# other side.
+#
+# A pack whose load has just been taken away reads high for minutes -- that
+# is surface charge, not capacity, and CLAUDE.md already records the lesson
+# in the opposite direction ("never calibrate a resting threshold from a
+# number taken while the charger was on"; the float surface charge took
+# 3.6 minutes to collapse on 2026-08-25). The load coming off is exactly what
+# happens the instant the device transfers itself to utility, so the single
+# reading the latch used to release on was the *least* representative sample
+# of the night.
+#
+# Three ticks is ~3 minutes at the default poll_interval. That does not
+# guarantee a settled pack, and it is not meant to: it is enough to rule out
+# deciding on the rebound itself.
+RESUME_CONFIRMATIONS = 3
+
 FILE_MODE = 0o600
 
 DEFAULT_CONFIG = {
@@ -367,6 +386,11 @@ class BatteryWindow:
         runtime = self._load_runtime()
         self._recovering = runtime["recovering"]
         self._below_floor = runtime["below_floor"]
+        # Consecutive readings at or above resume_voltage. Not persisted, on
+        # purpose: losing it across a restart only delays the next discharge
+        # by a few ticks, which is the safe direction -- unlike below_floor,
+        # where forgetting costs an extra cycle of the pack.
+        self._above_resume = 0
         self._pop_drift = 0           # consecutive ticks of POP disagreement
         self._pop_drift_writes = 0    # corrective writes already attempted
         # Set while the loads have to be handed back to utility before this
@@ -791,18 +815,42 @@ class BatteryWindow:
                 self._below_floor += 1
             elif not in_window or (quiet and v > cfg["floor_voltage"]):
                 self._below_floor = 0
-            if (not self._recovering
+            if mismatch == "hardware_override":
+                # The tick that has just caught the device leaving battery
+                # mode on its own is the worst possible moment to conclude
+                # the pack has recovered: the load came off microseconds ago
+                # and the terminal voltage has rebounded with it.
+                #
+                # Live on 2026-09-14, and it cost 14 POP transitions in a
+                # day. _reconcile_with_device() set the latch, the release
+                # below cleared it in the SAME tick (in the daytime window
+                # `not in_night` holds, and an unloaded pack clears
+                # resume_voltage instantly), and _decide() then shoved the
+                # loads straight back onto the pack -- while reporting
+                # `hardware_override`, the reason that means "the device
+                # overrode us, stand down". The counter is reset rather than
+                # merely not incremented, so re-entry needs evidence gathered
+                # after the override, not around it.
+                self._above_resume = 0
+            elif (not self._recovering
                     and self._below_floor >= cfg["floor_confirmations"]):
                 self._recovering = True
+                self._above_resume = 0
             elif (self._recovering and not in_night
                     and v >= cfg["resume_voltage"]):
-                # Nightly window closed and the pack is back up: re-arm.
-                # Keyed to the nightly window only, so "one discharge per
-                # night" survives while the daytime mode is still free to
-                # cycle as conditions allow -- cycling is that mode's whole
-                # point, and it is bounded by the signal condition anyway.
-                self._recovering = False
-                self._below_floor = 0
+                # Nightly window closed and the pack is back up: re-arm, once
+                # RESUME_CONFIRMATIONS consecutive readings agree. Keyed to
+                # the nightly window only, so "one discharge per night"
+                # survives while the daytime mode is still free to cycle as
+                # conditions allow -- cycling is that mode's whole point, and
+                # it is bounded by the signal condition anyway.
+                self._above_resume += 1
+                if self._above_resume >= RESUME_CONFIRMATIONS:
+                    self._recovering = False
+                    self._below_floor = 0
+                    self._above_resume = 0
+            else:
+                self._above_resume = 0
         if previous_runtime != (self._recovering, self._below_floor):
             self._save_runtime()
 

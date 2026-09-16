@@ -25,8 +25,8 @@ from webapp.app import create_app
 from webapp.energy_view import BATTERY, GRID, describe_energy
 from webapp.battery_window import (
     ABSOLUTE_FLOOR_V, BATTERY_POP, DEFAULT_PUMP_WINDOW, GRID_POP,
-    POP_DRIFT_CONFIRMATIONS, POP_DRIFT_MAX_WRITES, BatteryWindow,
-    validate_config as validate_window_config)
+    POP_DRIFT_CONFIRMATIONS, POP_DRIFT_MAX_WRITES, RESUME_CONFIRMATIONS,
+    BatteryWindow, validate_config as validate_window_config)
 
 
 def bw_runtime_path(config_path: str) -> str:
@@ -1848,7 +1848,12 @@ class TestBatteryWindow(unittest.TestCase):
 
         bw._recovering = True                       # as hardware_override leaves it
         service._battery_voltage = RESTED_FULL      # full, but charger off
-        bw.tick(now=self.DAY)                       # outside the nightly window
+        # Outside the nightly window, held steadily at the rested-full
+        # voltage: the release needs RESUME_CONFIRMATIONS agreeing readings,
+        # so what is being asserted is that the threshold is *reachable* off
+        # charge, not how many ticks it takes to be believed.
+        for _ in range(RESUME_CONFIRMATIONS):
+            bw.tick(now=self.DAY)
         self.assertFalse(bw.get_state()["recovering"],
                          "a rested full pack must clear the latch without the "
                          "charger; 26.8 V was unreachable and deadlocked it")
@@ -1880,7 +1885,8 @@ class TestBatteryWindow(unittest.TestCase):
         service._battery_voltage = 25.4
         bw.tick(now=self.NIGHT)
         service._battery_voltage = 27.0
-        bw.tick(now=self.DAY)                         # window closed, recovered
+        for _ in range(RESUME_CONFIRMATIONS):         # window closed, recovered
+            bw.tick(now=self.DAY)
         r = bw.tick(now=self.NIGHT)                   # next night
         self.assertEqual(r["target"], BATTERY_POP)
 
@@ -2147,6 +2153,66 @@ class TestBatteryWindow(unittest.TestCase):
         service._battery_voltage = 27.0     # even if the pack looks fine...
         r = bw.tick(now=self.NIGHT)
         self.assertEqual(r["target"], GRID_POP)   # ...no second discharge tonight
+
+    def test_a_fresh_override_is_not_undone_by_the_same_tick(self):
+        """The 2026-09-14 relay chatter: 14 POP transitions in one day.
+
+        The inverter transfers itself to utility under load; the pack, now
+        carrying nothing, rebounds past resume_voltage within seconds. The
+        recovery check ran in the very tick that detected the override, and
+        in the daytime window `not in_night` holds -- so the latch cleared on
+        that one rebound reading and the controller put the loads straight
+        back on the pack, while reporting `hardware_override`, the reason
+        that means "the device overrode us, stand down"."""
+        service, bw = self.make(battery_voltage=25.0, device_mode="B",
+                                signal=(300.0, True), output_load_w=1200)
+        self.enable_daytime(bw, now=self.DAYTIME)
+        self.assertTrue(bw.is_active())
+        service.sent.clear()
+        service._device_mode = "L"          # the inverter transfers itself
+        service._battery_voltage = 25.5     # unloaded pack rebounds at once
+        service._output_load_w = 1
+        r = bw.tick(now=self.DAYTIME)
+        self.assertEqual(r["reason"], "hardware_override")
+        self.assertTrue(bw.get_state()["recovering"],
+                        "the override must survive the tick that found it")
+        self.assertEqual(r["target"], GRID_POP)
+        self.assertNotIn("POP02", service.sent)
+
+    def test_re_entry_needs_sustained_evidence_not_one_rebound(self):
+        """A pack that has just lost its load reads high for minutes --
+        surface charge, not capacity (CLAUDE.md, 2026-08-25: 3.6 minutes for
+        the float charge to collapse). Releasing the latch on a single
+        reading is the same single-sample trap the floor has been debounced
+        against since the beginning, seen from the other side."""
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=self.NIGHT, floor_confirmations=1,
+                    floor_voltage=25.5, resume_voltage=26.8)
+        service._battery_voltage = 25.4
+        bw.tick(now=self.NIGHT)                       # floor -> latched
+        self.assertTrue(bw.get_state()["recovering"])
+        service._battery_voltage = 27.0               # and rebounds at once
+        bw.tick(now=self.DAY)                         # window closed
+        self.assertTrue(bw.get_state()["recovering"],
+                        "one reading above resume_voltage is not evidence")
+        for _ in range(RESUME_CONFIRMATIONS - 1):
+            bw.tick(now=self.DAY)
+        self.assertFalse(bw.get_state()["recovering"])
+
+    def test_a_dip_below_resume_restarts_the_count(self):
+        """Consecutive, like the floor count -- otherwise the readings that
+        were never the pack's real state still add up to a release."""
+        service, bw = self.make(battery_voltage=27.0)
+        self.enable(bw, now=self.NIGHT, floor_confirmations=1,
+                    floor_voltage=25.5, resume_voltage=26.8)
+        service._battery_voltage = 25.4
+        bw.tick(now=self.NIGHT)                       # latched
+        for _ in range(RESUME_CONFIRMATIONS * 2):
+            service._battery_voltage = 27.0           # up...
+            bw.tick(now=self.DAY)
+            service._battery_voltage = 26.0           # ...and back under
+            bw.tick(now=self.DAY)
+        self.assertTrue(bw.get_state()["recovering"])
 
     def test_hardware_override_write_ignores_dwell(self):
         service, bw = self.make(battery_voltage=27.0, device_mode="B")
