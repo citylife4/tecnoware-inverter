@@ -312,12 +312,32 @@ worth remembering rather than the full list (see git log from `34b8692`):
   controllers (missed when that was fixed on 09-03), and `grid_charge`
   freshness ages the **measurement**, not the HTTP call.
 
-**Open, not fixed:** `_loop()` still swallows every exception, which is the
-largest remaining "abandoned in POP02" path; `hardware_override` still
-latches a whole night on one QMOD reading where the drift branch beside it
-needs three; shutdown does not hand the loads back; `pop_drift_stuck` alerts
-nobody. Also: the last pass added **no tests**, so the persisted-obligation
-and refuse-to-write-if-unpersistable paths are unverified.
+**Follow-up (2026-09-16, local changes):** unexpected loop errors now appear
+in the journal and API, latch recovery, and attempt POP00. An unacknowledged
+release is retried before another decision. Shutdown attempts the same
+hand-back and prevents subsequent ticks from re-entering battery mode;
+if the controller lock cannot be acquired, it logs the failure and retains
+the persisted obligation. Abrupt process death or a wedged serial transport
+still cannot guarantee a successful hand-back.
+
+`test_battery_safety.py` covers persistence before entry, refusal on disk
+failure, restart after a lost reply, QMOD=L during disable, loop errors,
+and shutdown. Regression checks also run these tests against the earlier
+implementations to establish that the old failure paths are detected.
+
+**Also addressed locally:** a line transfer above the configured floor now
+needs three consecutive controller observations before `hardware_override`
+latches the night shut. Battery/unknown mode resets the count. Low or unknown
+voltage, and non-line fault modes, still trigger immediate utility-first;
+the window, pump and disable interlocks remain immediate.
+
+`pop_drift_stuck` now exposes a persisted alert flag. The watchdog queries
+the battery-window API while the serial link is healthy and uses the existing
+Telegram notifier for deduplicated fault/recovery messages and failed-send
+retries. Unknown mode/API failure cannot clear the alert. Recovery requires
+the controller to believe POP00 and observe line mode. Delivery depends on
+the watchdog interval and a configured, working notifier; no live message
+has been sent to validate delivery. See `HANDOFF_CLAUDE.md` for the full handoff.
 
 ## 3. Live concern: the service stalls
 

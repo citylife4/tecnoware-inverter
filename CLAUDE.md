@@ -198,8 +198,11 @@ port 8000; `grid_charge` polls `http://127.0.0.1:8000/api/live`.
    before using the CLI on that host.
 2. **Write policy lives in `webapp/safety.py`**, not in the routes — the
    `PCP03` low-battery interlock and "dangerous commands need
-   `confirm: true`" are both there, unit-tested in `test_webapp.py`
-   (no hardware needed). `mock_inverter.py` fakes the unit on a
+   `confirm: true`" are both there, unit-tested (no hardware needed).
+   **Run `python3 run_tests.py`, not `unittest test_webapp`** — the suite is
+   no longer one file, and the old command silently skips
+   `test_battery_safety.py` and `test_review_regressions.py`, which guard the
+   battery hand-back. `mock_inverter.py` fakes the unit on a
    pty for development away from the hardware.
 3. **All on-disk config goes through `webapp/atomic_write.py`** (temp file
    + fsync + rename + fsync dir). `web.json` was once found zero-length

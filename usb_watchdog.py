@@ -129,6 +129,34 @@ def _service_health(config_path: str, timeout: float = 10.0):
     return True, "connected, last read %.0fs ago" % age
 
 
+def _battery_window_alert(config_path, notifier, timeout=5.0):
+    """Observe controller faults separately from link recovery.
+
+    A POP mismatch cannot be repaired by restarting USB. Unknown responses
+    must not announce recovery or erase the notifier's last fault state.
+    """
+    try:
+        with open(config_path) as fh:
+            cfg = json.load(fh)
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d/api/battery-window" % int(cfg.get("http_port", 8080)),
+            headers={"Authorization": "Bearer " + cfg["token"]})
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            state = json.loads(response.read().decode())
+        if state.get("ok") is not True or not isinstance(state.get("pop_drift_stuck"), bool):
+            return
+        if state["pop_drift_stuck"]:
+            notifier.on_change("battery_pop_drift", "stuck",
+                               "Inversor: ignorou as tentativas de voltar à rede. "
+                               "Continua em bateria com rede presente; precisa de intervenção manual.")
+        elif state.get("device_mode") == "L":
+            notifier.on_change("battery_pop_drift", "ok",
+                               "Inversor: alimentação pela rede confirmada; "
+                               "sem divergência de POP pendente.")
+    except Exception as e:  # noqa: BLE001
+        _log("battery-window alert check unavailable: %s" % e)
+
+
 def _adapter_hub() -> str | None:
     """The parent hub of the Prolific adapter, e.g. "1-1" for "1-1.4".
 
@@ -215,6 +243,7 @@ def check_once(config_path: str, dry_run: bool, state_path=None) -> int:
         _log("skipping: %s" % detail)
         return 0
     if healthy:
+        _battery_window_alert(config_path, notifier)
         if not dry_run and _recovery_attempts(state_path):
             write_json_atomic(state_path, {"attempts": 0})
         _log("ok (%s)" % detail)

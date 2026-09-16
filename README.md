@@ -652,7 +652,7 @@ python3 serve.py --port /dev/pts/7 --http-port 8080
 Tests need no hardware at all:
 
 ```bash
-python3 -m unittest test_webapp -v
+python3 run_tests.py          # every test file, warnings as errors
 ```
 
 ## Safety

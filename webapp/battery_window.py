@@ -47,6 +47,7 @@ import csv
 import json
 import math
 import os
+import sys
 import threading
 from datetime import datetime, timezone
 
@@ -124,6 +125,7 @@ GRID_PRESENT_MIN_V = 180.0
 # ticks is ~3 minutes -- against the 8 hours this went uncorrected on
 # 2026-08-30, that is still effectively immediate.
 POP_DRIFT_CONFIRMATIONS = 3
+HARDWARE_OVERRIDE_CONFIRMATIONS = 3
 
 # How many corrective POP writes to attempt before giving up and just
 # reporting. If the device has ignored this many, it is not going to comply
@@ -393,6 +395,8 @@ class BatteryWindow:
         self._above_resume = 0
         self._pop_drift = 0           # consecutive ticks of POP disagreement
         self._pop_drift_writes = 0    # corrective writes already attempted
+        self._hardware_override_readings = 0
+        self._pop_drift_alert = runtime.get("pop_drift_stuck", False)
         # A requested POP02 remains our responsibility until POP00 is ACKed.
         # QMOD=L and a lost reply cannot discharge that responsibility.
         self._release_pending = (runtime.get("release_pending", False)
@@ -400,6 +404,7 @@ class BatteryWindow:
         if runtime.get("release_pending"):
             self._last_applied_pop = None
         self._last_run = None
+        self._loop_error = None
 
     # ---- persistence ----------------------------------------------------
 
@@ -440,6 +445,7 @@ class BatteryWindow:
                 "recovering": bool(value.get("recovering", False)),
                 "below_floor": max(0, int(value.get("below_floor", 0))),
                 "release_pending": bool(value.get("release_pending", False)),
+                "pop_drift_stuck": bool(value.get("pop_drift_stuck", False)),
             }
         except (ValueError, OSError, TypeError, AttributeError):
             # A corrupt safety latch fails towards utility. It can be cleared
@@ -453,6 +459,7 @@ class BatteryWindow:
                 "recovering": self._recovering,
                 "below_floor": self._below_floor,
                 "release_pending": self._release_pending,
+                "pop_drift_stuck": self._pop_drift_alert,
             }, mode=FILE_MODE)
         except OSError:
             if strict:
@@ -490,6 +497,8 @@ class BatteryWindow:
                 "hard_forbidden": [dict(w) for w in self._config["pump_window"]],
                 "absolute_floor_v": ABSOLUTE_FLOOR_V,
                 "last_run": self._last_run,
+                "loop_error": self._loop_error,
+                "pop_drift_stuck": self._pop_drift_alert,
             }
 
     def set_config(self, updates: dict, now=None) -> dict:
@@ -584,9 +593,19 @@ class BatteryWindow:
         """
         mode = self.service.mode()
         if mode is None:
+            self._hardware_override_readings = 0
             return None
 
         if self._last_applied_pop == BATTERY_POP and mode != "B":
+            v = self._battery_voltage()
+            if mode == "L" and v is not None and v > self._config["floor_voltage"]:
+                # A healthy-voltage line transfer may be a transient. Require
+                # consecutive observations before spending the whole night.
+                # Low/unknown voltage and fault modes still exit immediately.
+                self._hardware_override_readings += 1
+                if self._hardware_override_readings < HARDWARE_OVERRIDE_CONFIRMATIONS:
+                    return "hardware_override_pending"
+            self._hardware_override_readings = 0
             # We believe we're discharging the pack; the device disagrees.
             # Treat tonight's discharge as already over -- that matches
             # physical reality -- and forget the stale assumption so the
@@ -597,6 +616,7 @@ class BatteryWindow:
             self._save_runtime()
             return "hardware_override"
 
+        self._hardware_override_readings = 0
         if self._last_applied_pop == GRID_POP and mode == "B":
             # We believe loads are on the grid; the device is on battery
             # anyway. Two very different causes, and the AC input voltage
@@ -623,6 +643,9 @@ class BatteryWindow:
                 if self._pop_drift_writes >= POP_DRIFT_MAX_WRITES:
                     # Tried and the device kept ignoring it. Stop writing and
                     # say so, rather than keep throwing the relay unattended.
+                    if not self._pop_drift_alert:
+                        self._pop_drift_alert = True
+                        self._save_runtime()
                     return "pop_drift_stuck"
                 # Counter resets here so the next attempt is another
                 # POP_DRIFT_CONFIRMATIONS away, not on the very next tick.
@@ -641,6 +664,9 @@ class BatteryWindow:
 
         self._pop_drift = 0
         self._pop_drift_writes = 0
+        if self._pop_drift_alert and self._last_applied_pop == GRID_POP and mode == "L":
+            self._pop_drift_alert = False
+            self._save_runtime()
         return None
 
     def _surplus_signal(self):
@@ -773,6 +799,15 @@ class BatteryWindow:
 
     def _tick(self, force: bool = False, now=None) -> dict:
         import time as _time
+        if self._stop.is_set():
+            return {"at": _utcnow(), "target": None, "reason": "stopped",
+                    "applied": False, "note": "controlador parado"}
+        if self._loop_error and self._release_pending:
+            # Retry the safe hand-back before running the failing decision
+            # path again. No telemetry is needed to request utility-first.
+            self._hand_back("battery_window_error")
+            if self._release_pending:
+                return self._last_run
         cfg = self._config
         # Count and latch BEFORE deciding, so a tick acts on the reading it
         # just took rather than the previous one -- otherwise the floor
@@ -847,6 +882,8 @@ class BatteryWindow:
         if mismatch:
             reason = mismatch
             details = {
+                "hardware_override_pending":
+                    "transferência para a rede com tensão normal; a confirmar",
                 "hardware_override":
                     "o inversor saiu do modo bateria por conta própria",
                 "pop_drift":
@@ -906,7 +943,8 @@ class BatteryWindow:
             result["note"] = "desligado"
         elif not self.service.allow_writes:
             result["note"] = "servidor em leitura apenas; não aplicado"
-        elif target == self._last_applied_pop and not force:
+        elif target == self._last_applied_pop and (
+                not force or mismatch == "hardware_override_pending"):
             result["note"] = f"já em POP{target}; nada a fazer"
             result["applied"] = True
         elif not force and not urgent and not dwell_ok:
@@ -941,6 +979,7 @@ class BatteryWindow:
 
         self._last_run = result
         self._append_trace(result)
+        self._loop_error = None
         return result
 
     TRACE_COLUMNS = ("ts", "target", "reason", "battery_voltage",
@@ -978,14 +1017,58 @@ class BatteryWindow:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
+        # A service shutdown is also a controller hand-off.  If this process
+        # owns battery output, make one best-effort POP00 write so a restart
+        # cannot leave the inverter in SBU with nobody responsible for it.
+        if not self._lock.acquire(timeout=5):
+            print("[battery-window] shutdown hand-back blocked by active tick; "
+                  "persisted obligation retained", file=sys.stderr, flush=True)
+            return
+        try:
+            self._hand_back("battery_window_shutdown")
+        finally:
+            self._lock.release()
+
+    def _hand_back(self, source):
+        """Called with the controller lock held; only an ACK releases ownership."""
+        if not self.service.allow_writes or not self._release_pending:
+            return
+        self._forget_applied_pop()
+        try:
+            resp = self.service.send_set("POP00", source=source)
+            if not resp.startswith("(ACK"):
+                raise InverterError(f"hand-back not acknowledged: {resp}")
+            self._last_applied_pop = GRID_POP
+            self._release_pending = False
+            self._save_runtime()
+        except Exception as e:  # noqa: BLE001
+            print(f"[battery-window] {source}: {e}", file=sys.stderr, flush=True)
 
     def _loop(self):
         try:
             self.tick()
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            self._report_loop_error(e)
         while not self._stop.wait(self._config["poll_interval"]):
             try:
                 self.tick()
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                self._report_loop_error(e)
+
+    def _report_loop_error(self, error: Exception) -> None:
+        """Make poll failures visible while keeping the safety loop alive."""
+        message = f"battery-window tick failed: {error}"
+        print(f"[battery-window] {message}", file=sys.stderr, flush=True)
+        with self._lock:
+            self._loop_error = message
+            # An interrupted safety decision must end this discharge. The
+            # regular recovery rules govern when another one may begin.
+            self._recovering = True
+            self._above_resume = 0
+            self._save_runtime()
+            self._last_run = {
+                "at": _utcnow(), "target": None, "reason": "error",
+                "detail": message, "applied": False,
+                "note": "erro no controlo; a tentar repor alimentação pela rede",
+            }
+            self._hand_back("battery_window_error")

@@ -2,7 +2,7 @@
 """
 Tests for the web/API layer. No hardware needed -- the service is faked.
 
-    python3 -m unittest test_webapp -v
+    python3 run_tests.py      # this file is no longer the whole suite
 
 Runs on Python 3.9 (the inverter Pi) and newer.
 """
@@ -2193,6 +2193,8 @@ class TestBatteryWindow(unittest.TestCase):
         self.assertTrue(bw.is_active())
         service.sent.clear()
         service._device_mode = "L"          # hardware switched on its own
+        for _ in range(2):
+            bw.tick(now=self.NIGHT)
         r = bw.tick(now=self.NIGHT)
         self.assertEqual(r["reason"], "hardware_override")
         self.assertEqual(r["device_mismatch"], "hardware_override")
@@ -2206,7 +2208,8 @@ class TestBatteryWindow(unittest.TestCase):
         service, bw = self.make(battery_voltage=27.0, device_mode="B")
         self.enable(bw, now=self.NIGHT)
         service._device_mode = "L"
-        bw.tick(now=self.NIGHT)
+        for _ in range(3):
+            bw.tick(now=self.NIGHT)
         service._battery_voltage = 27.0     # even if the pack looks fine...
         r = bw.tick(now=self.NIGHT)
         self.assertEqual(r["target"], GRID_POP)   # ...no second discharge tonight
@@ -2229,6 +2232,8 @@ class TestBatteryWindow(unittest.TestCase):
         service._device_mode = "L"          # the inverter transfers itself
         service._battery_voltage = 25.5     # unloaded pack rebounds at once
         service._output_load_w = 1
+        for _ in range(2):
+            bw.tick(now=self.DAYTIME)
         r = bw.tick(now=self.DAYTIME)
         self.assertEqual(r["reason"], "hardware_override")
         self.assertTrue(bw.get_state()["recovering"],
@@ -2275,6 +2280,8 @@ class TestBatteryWindow(unittest.TestCase):
         service, bw = self.make(battery_voltage=27.0, device_mode="B")
         self.enable(bw, now=self.NIGHT, min_switch_interval=99999)
         service._device_mode = "L"
+        for _ in range(2):
+            bw.tick(now=self.NIGHT)
         r = bw.tick(now=self.NIGHT)
         self.assertEqual(service.sent, ["POP00"])
         self.assertTrue(r["applied"])
