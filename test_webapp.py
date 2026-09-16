@@ -15,6 +15,7 @@ import json
 import os
 import stat
 import tempfile
+import time
 import unittest
 import datetime as dt
 from datetime import datetime, timedelta
@@ -2765,22 +2766,70 @@ class TestStallDetector(unittest.TestCase):
         from webapp.service import InverterService
         return InverterService(port="/dev/null")
 
-    def test_does_not_fire_before_any_success(self):
-        """An adapter missing at boot must not become a restart loop -- that
-        case belongs to usb_watchdog.py, which has attempt limits."""
-        import time as _t
-        from webapp import service as svc_mod
-        svc = self.make()
-        self.assertFalse(svc._last_success_mono)
+    def run_one_pass(self, svc):
+        """Run exactly one iteration of _stall_loop's body, promptly, and
+        return the exit codes it asked for.
+
+        The loop is `while not self._stop.wait(60.0)`, so a real Event costs
+        60 s per pass -- and setting it first, which is what this test used
+        to do, skips the body entirely and makes every assertion below
+        vacuous. This stop object returns False once (one pass) and True
+        afterwards (loop ends), so the body runs and the test is instant.
+        """
+        class _RunsOnce:
+            def __init__(self):
+                self.waits = 0
+
+            def wait(self, timeout=None):
+                self.waits += 1
+                return self.waits > 1
+
+            def is_set(self):
+                return self.waits > 1
+
+            def set(self):
+                self.waits = 2
+
+        stop = _RunsOnce()
+        svc._stop = stop
         exited = []
         real = os._exit
         try:
             os._exit = lambda code: exited.append(code)   # noqa: E731
-            svc._stop.set()          # one pass, then out
             svc._stall_loop()
         finally:
             os._exit = real
-        self.assertEqual(exited, [])
+        self.assertEqual(stop.waits, 2,
+                         "the loop body must actually have run -- a test that "
+                         "never enters it proves nothing")
+        return exited
+
+    def test_does_not_fire_before_any_success(self):
+        """An adapter missing at boot must not become a restart loop -- that
+        case belongs to usb_watchdog.py, which has attempt limits.
+
+        `_last_success_mono` starts at 0.0, and 0.0 is also "a very long
+        time ago" to the subtraction below it, so without the guard this is
+        an immediate os._exit on every restart with no adapter plugged in.
+        """
+        svc = self.make()
+        self.assertFalse(svc._last_success_mono)
+        self.assertEqual(self.run_one_pass(svc), [])
+
+    def test_fires_once_a_success_is_old_enough(self):
+        """The other half, and what gives the test above its teeth: the same
+        single pass DOES exit when there has been a success and it is older
+        than STALL_EXIT_S. 2026-09-11 02:07:13 in production, back up 11 s
+        later."""
+        from webapp.service import STALL_EXIT_S
+        svc = self.make()
+        svc._last_success_mono = time.monotonic() - (STALL_EXIT_S + 60)
+        self.assertEqual(self.run_one_pass(svc), [1])
+
+    def test_does_not_fire_while_reads_are_landing(self):
+        svc = self.make()
+        svc._last_success_mono = time.monotonic()
+        self.assertEqual(self.run_one_pass(svc), [])
 
     def test_threshold_only_catches_a_link_that_is_genuinely_gone(self):
         """The link drops frames constantly and the poller backs off to 40 s
