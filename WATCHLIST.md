@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-16 (day 1 of the watch)
+Last updated: 2026-09-17 (day 2 of the watch)
 
 ---
 
@@ -54,9 +54,32 @@ today (01:01, 16:14, 16:38, 17:02) predate the 18:01 deploy, which is why
 `hardware_override_pending` is 0 — not evidence the debounce fails. Tonight's
 01:00 window is the first post-fix nightly run.
 
-**The 1.2 kW load is getting worse and still has no block.** 29 of the 39
-pre-fix throws fell in hour 17 alone, the daytime window fighting it. It now
-runs hours 16, 17, 19 and 20.
+**Day 2 (09-17), first full post-fix day. Clean, and two fixes verified.**
+
+- **The nightly window ran** 01:00-07:39, 82 Wh, quiet-sample minimum 24.1 V.
+  First post-fix nightly run; it had failed twice before. It ended on a
+  `hardware_override` at 23.8 V, which is correct — low voltage bypasses the
+  debounce and hands back on the first reading.
+- **The debounce works exactly as designed.** 14 pending states, 7 fired,
+  and the pattern is unambiguous: two pending then fire on the third
+  (15:45, 15:46 -> 15:47; 17:04, 17:05 -> 17:06; 17:27, 17:28 -> 17:29).
+  **But be honest about what it bought today: nothing.** All seven clusters
+  were sustained, so every one would have fired under the old code too. It
+  added ~2 minutes of latency and changed no outcome. Its value is against
+  transients, and today had none.
+- relay throws 23 (down from 42), no stalls, `loop_error` null,
+  `pop_drift_stuck` false, `release_pending` false with the window shut,
+  337 tests green.
+- Pack is charging normally: 1776 charging samples, last 17:00. The evening
+  25.6 -> 25.3 V drift is settling off float, not the drain pattern, which
+  had *zero* charging samples.
+
+**The 1.2 kW load is now the dominant problem and still has no block.** It ran
+hours 9, 10, 11, 15, 16, 17, 19 and 20 today — 72 samples in hour 17 alone.
+All seven overrides were it knocking the daytime window back, roughly every
+23 minutes through the afternoon. The window keeps trying to open into a load
+it cannot carry. The debounce makes that survivable; it does not make it
+right.
 
 ---
 
