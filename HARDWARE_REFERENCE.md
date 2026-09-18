@@ -55,8 +55,8 @@ the automations.
 | 22 | Beep when primary source interrupted | `AOn` / `AOF` | `AOn` | not checked |
 | 23 | Overload bypass | `byd` disable / `byE` enable | `byd` | not checked |
 | 25 | Record fault code | `FEn` / `FdS` | `FEn` | — |
-| **26** | **Bulk / absorption charging voltage (C.V.)** | 25.0–31.5 V, 0.1 V steps | 28.2 V | **28.2 V** (= default) |
-| **27** | **Float charging voltage** | 25.0–31.5 V, 0.1 V steps | 27.0 V | **27.0 V** (= default) |
+| **26** | **Bulk / absorption charging voltage (C.V.)** | 25.0–31.5 V, 0.1 V steps | 28.2 V | **29.0 V** (set 2026-09-18, verified) |
+| **27** | **Float charging voltage** | 25.0–31.5 V, 0.1 V steps | 27.0 V | **27.4 V** (set 2026-09-18, verified) |
 | **29** | **Low DC cut-off voltage** | 21.0–24.0 V, 0.1 V steps | 21.0 V | **not checked** |
 | 30 | Battery equalization | `EEn` / `EdS` | `EdS` disable | not checked |
 | 31 | Equalization voltage | 25.0–31.5 V | 29.2 V | n/a while 30 disabled |
@@ -161,15 +161,23 @@ storage. Capacity is temperature-dependent — 100 % at 25 °C, 98 % at 20 °C,
 
 ## Where configured and specified disagree
 
-Three gaps, found by putting the two documents side by side. **None of them
-has been changed** — see NOTES.md for the reasoning and any decision.
+Three gaps, found by putting the two documents side by side. The first is
+**fixed and verified**; the other two are deliberate. See NOTES.md for the
+reasoning behind each.
 
-**1. The pack is chronically undercharged.** Bulk is at the inverter's
-default 28.2 V; the datasheet wants **28.80–29.40 V**. Float is 27.0 V
-against a specified **27.20–27.80 V**. Both sit just below spec, and the
-evidence matches: this pack rests at 25.3–25.6 V every evening, which the
+**1. The pack was chronically undercharged — FIXED 2026-09-18.** Bulk sat at
+the inverter's default 28.2 V against a specified **28.80–29.40 V**, and
+float at 27.0 V against **27.20–27.80 V**. The evidence had been in the
+telemetry for weeks: the pack rested at 25.3–25.6 V every evening, which the
 datasheet's own curve puts at **75–86 % SoC, not full**. An AGM that never
-saturates sulfates over time.
+saturates sulfates.
+
+Changed at the panel to **bulk 29.0 V, float 27.4 V** and **verified** — the
+first setting change on this installation ever confirmed rather than assumed.
+The confirmation path is worth remembering: change it, **reboot the unit**
+(settings do not apply until it does), then query `/api/ratings?refresh=1` —
+the `refresh` matters, because the service caches ratings from its own
+startup and will otherwise show the old value.
 
 Corrects a claim repeated several times in this project's history, including
 in the `resume_voltage` reasoning: **"a full pack at rest reads ~25.6 V" is

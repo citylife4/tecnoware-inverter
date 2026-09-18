@@ -1037,7 +1037,19 @@ supplied; both are transcribed in [HARDWARE_REFERENCE.md](HARDWARE_REFERENCE.md)
 with the sources kept in `docs/hardware/`. Three things fall out, and two of
 them correct claims made repeatedly in this file.
 
-**The pack is chronically undercharged, and that was hiding in plain sight.**
+**FIXED AND VERIFIED 2026-09-18 — bulk 28.2 -> 29.0 V, float 27.0 -> 27.4 V**,
+changed at the panel and confirmed by a fresh `QPIRI` after the reboot
+(14.5/13.7 against the previous 14.1/13.5). This is the **first setting
+change on this installation ever confirmed rather than assumed**; `PBCV24.0`
+and the charge-current change both sat as "ACKed but unverified" for weeks.
+
+The confirmation path, worth remembering: change it at the panel, **reboot
+the unit** (settings do not apply until it restarts, per the manual), then
+query `/api/ratings?refresh=1`. The `refresh` is essential — `service.ratings()`
+caches from the service's own startup, and without it you read a stale value
+and conclude the change failed. I nearly reported exactly that.
+
+**The pack was chronically undercharged, and that was hiding in plain sight.**
 Bulk (program 26) sits at the inverter's default **28.2 V**; the SOLARX
 datasheet specifies **28.80-29.40 V** absorption. Float is 27.0 V against a
 specified 27.20-27.80 V. The evidence agreed all along and nobody read it:

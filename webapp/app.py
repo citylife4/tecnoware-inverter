@@ -199,8 +199,23 @@ def create_app(service, scheduler=None, grid_charge=None,
 
     @app.route("/api/ratings")
     def api_ratings():
-        """QPIRI. Static rated values -- NEVER reflects a setting change
-        (CLAUDE.md gotcha #1), so don't use it to confirm a write."""
+        """QPIRI. A BOOT-TIME SNAPSHOT of the unit's settings.
+
+        This used to say it "NEVER reflects a setting change", which is wrong
+        in a way that matters. The manual explains why: settings "must be
+        rebooted to be valid", so the unit does not apply one until it
+        restarts -- and QPIRI then reports the new value. Verified 2026-09-18,
+        the first setting change ever confirmed on this installation: after
+        changing programs 26 and 27 at the panel and rebooting, a fresh query
+        returned 14.5/13.7 against the previous 14.1/13.5.
+
+        The catch that nearly hid it: `service.ratings()` CACHES. Without
+        `?refresh=1` this returns whatever was read when the service last
+        started, which is stale across an inverter reboot. Confirming a
+        change needs both the reboot and the refresh.
+
+        Still useless for confirming a change made over SERIAL with no
+        reboot, which is the case gotcha #2 is really about."""
         refresh = request.args.get("refresh") in ("1", "true", "yes")
         try:
             return jsonify({
