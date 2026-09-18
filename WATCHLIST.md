@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-18
+Last updated: 2026-09-18 (evening, day 3 of the regression watch)
 
 ---
 
@@ -74,13 +74,68 @@ today (01:01, 16:14, 16:38, 17:02) predate the 18:01 deploy, which is why
   25.6 -> 25.3 V drift is settling off float, not the drain pattern, which
   had *zero* charging samples.
 
+**Day 3 (09-18). Clean on every deployed fix, but the nightly window did not
+run — for the hardware reason in 2d, not a regression.**
+
+- **No nightly window.** The pack was at **25.1 V rested** at 01:00 and the
+  inverter refused battery mode, exactly as on 09-16. The software did each
+  step right: the latch was **clear** (`rec=False` at 01:00:35, so the 2c fix
+  held), the window opened and wrote POP02, the reconciler saw the line
+  transfer, debounced it across 01:01 and 01:02, and latched on the third at
+  01:03:37. One override, no thrash, and `release_pending` cleared.
+- **The debounce is behaving exactly as specified.** Three overrides today
+  (01:03 at 25.0 V, 14:32 at 26.1 V, 14:55 at 25.9 V), each preceded by
+  **exactly 2 pending ticks** — every one fired on the third reading, none on
+  a single one, no bursts. As on 09-17 all three were sustained, so it again
+  changed no outcome; its value remains untested against a true transient.
+- relay throws **24** (23 on 09-17), **no service restarts**, and the spread
+  is benign: max **6 in any 21-minute span** against 09-14's 14. Hours 8, 10-13,
+  16, 17, 19 — the daytime window being knocked back, as on 09-17.
+- `release_pending` **false** with the window shut, `loop_error` null,
+  `pop_drift_stuck` false, `config_error` null, `below_floor` 0.
+- **0 telemetry gaps over 240 s** — no stalls.
+- Pack healthy: 2309 charging samples, charging until 21:53, holding the new
+  27.4 V float at 22:08. Not the drain pattern.
+- 337 tests green.
+
+**The rule for whether the nightly window runs, now on three nights.** It is
+decided the evening before, by when charging stopped:
+
+    charger ran to 23:59 on 09-16  ->  27.0 V (float)  at 01:00 09-17  ->  RAN, 400 min
+    charger ran to 17:00 on 09-17  ->  25.1 V (rested) at 01:00 09-18  ->  REFUSED
+    charger ran to 21:53 on 09-18  ->  27.4 V (float)  at 22:08        ->  predicts RAN
+
+A pack that has settled to its resting voltage cannot satisfy program 13's
+~27 V return-to-battery threshold, so **the window runs only if the charger
+was still on it when the window opened**. This is the same mechanism §2
+records for *short* windows, in its extreme form: not a short window, but
+none at all. Check when charging last stopped before looking anywhere else.
+
 **Front-panel programs confirmed 2026-09-18** (read off the unit, since
 `QPIRI` misreports all three): **11 = 10 A, 12 = 24 V, 13 = 27 V**. Program 12
 confirms `PBCV24.0` took. Program 13 at 27 V is why the inverter refused
 battery mode at 25.0 V on 09-16 — and it should stay there: the 3 V gap to
 program 12 is what damps the 1.2 kW chatter, and a rested-full pack is only
-25.6 V so lowering it towards reachable would cut the gap to ~1.5 V against a
+~25.9 V so lowering it towards reachable would cut the gap to ~1.5 V against a
 ~2 V sag. Full reasoning in NOTES.md.
+
+**Programs 26/27 changed and verified 2026-09-18** — the first setting change
+on this installation ever *confirmed* rather than assumed. Bulk **28.2 ->
+29.0 V**, float **27.0 -> 27.4 V**, both factory defaults below the SOLARX
+datasheet's specified 28.80-29.40 / 27.20-27.80. Confirmation path: change it,
+**reboot the unit**, then `GET /api/ratings?refresh=1` — without `refresh` the
+service serves ratings cached at its own startup and shows the old value.
+
+Two consequences to watch:
+
+- **Float used to sit exactly on program 13.** 27.0 V float against a 27.0 V
+  return-to-battery threshold was zero margin; it is now 0.4 V above, which
+  should make the "still on float at 01:00" case above more reliable. Whether
+  it also lets a *nearly* rested pack qualify is unknown — do not assume it.
+- The pack should start resting **higher** in the evenings as it finally
+  saturates, moving towards ~25.9 V. **Rested evening voltage is the measure
+  of whether the undercharging is fixed**, not the charging voltage. Several
+  charge cycles before this means anything.
 
 Consequence worth carrying: `floor_voltage` (24.0) and program 12 (24 V) are
 now known to be *identical*. The software floor cannot act first, and its load
@@ -129,7 +184,18 @@ trace.
               09-13   ---     NOT COMPUTABLE (86 of 144 buckets null)
               09-14    1.9   <- 4 cycles absorbed almost everything
               09-15    1.2   <- lowest, but NOT the battery: see 2b
-              mean 45.6 | median 39.4 | spread 2.3-113.0
+              09-16   14.1
+              09-17    1.7
+              09-18   11.9   <- all three clean coverage, 0 null/144
+              mean 45.6 | median 39.4 | spread 1.2-113.0
+
+**Five consecutive days at 1.2-14.1 against a 115.6 baseline.** That is well
+outside the earlier 2.3-113.0 spread and no longer looks like day-to-day
+variance — but 2b's warning stands and is the first thing to rule out: the
+1.2 kW load is soaking the surplus for free, so this is not yet evidence the
+battery is doing it. The two are separable by hour (that load runs 16:00-20:00;
+export accrues 11:00-16:00) and that separation is worth making properly before
+anything is concluded from this run of low numbers.
 
 **09-10 stays out of the series** — the solar meter dropped off at ~09:10, so
 generation is truncated while export accrues all day, and any ratio from it
@@ -354,6 +420,15 @@ was at 25.0 V and **the inverter itself refused battery mode**. It stayed in
 `L` for the whole window, never once reading `B`. Program 13's re-discharge
 threshold (~27 V / FUL) is the likely cause. A low pack therefore disables
 the window in hardware, whatever the software decides.
+
+**Confirmed on 09-18, and program 13 is no longer "likely" but measured** —
+the unit was read off the panel at 27 V the same day. The window was refused
+again at 25.1 V, and this time the whole sequence is on record in the trace
+(01:00:35 `window` -> 01:01/01:02 `hardware_override_pending` -> 01:03:37
+`hardware_override`). So this is a standing hardware constraint, not a bug and
+not something the nine fixes address: **below ~27 V the window cannot run, and
+the software's only correct response is the one it now gives.** See the day 3
+entry above for the evening-charge rule that predicts it.
 
 ## 2e. OPEN: `min_battery_voltage` has the same float-vs-resting flaw
 
