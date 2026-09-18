@@ -71,6 +71,14 @@ BATTERY_POP = "02"    # SBU -- loads on battery
 # actually runs somewhere outside it. Guarding against a careless edit is
 # not worth guaranteeing the guard goes stale.
 #
+# CORRECTED 2026-09-18: the timer is not the whole story. The pump is ALSO
+# started by hand whenever someone is gardening, at no predictable hour --
+# confirmed on site. So no time window can make battery mode safe against
+# it. Measured over four consecutive days, pump-sized loads hit the pack in
+# battery mode at hours 6, 13 and 17, peaking at 2889 W and pulling the pack
+# to 20.9 V (~113 A through 0.045 ohm). This block covers the predictable
+# evening run and nothing else; it is not protection.
+#
 # So it is configurable now (`pump_window`), and this is what a config that
 # has never said otherwise inherits. Measured 2026-08-30: loads of
 # 1128-1435 W concentrated 19:30-20:40, which is what these bounds cover

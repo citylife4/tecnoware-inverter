@@ -284,6 +284,15 @@ battery mode `BatteryWindow` is the *only* thing protecting the pack.
 All fail towards utility, and all exist because the Pi is on the same
 output as the loads:
 
+   **CORRECTED 2026-09-18, and it undermines the whole idea of a time
+   block:** the pump is not only on a timer. It is *also started by hand,
+   at unpredictable times, whenever someone is gardening* — confirmed by the
+   user on site. A time window cannot protect against that. Measured: pump-
+   sized loads hit the pack while in battery mode on four consecutive days
+   at hours 6, 13 and 17, peaking at 2889 W and sagging the pack to 20.9 V.
+   Treat `pump_window` as covering the predictable evening run only, never
+   as protection.
+
 1. **The pump window (`pump_window`, default 19:00-21:15)** — configurable,
    and deliberately so as of 2026-08-30. It used to be hard-coded and
    unreachable from the API, on the reasoning that a config edit should not
