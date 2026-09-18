@@ -1030,6 +1030,50 @@ Raising `floor_voltage` to ~24.5 V would let the software act first, with its
 every time. Not changed; it is a real design question and needs a decision.
 
 
+### The manual and the datasheet, side by side — 2026-09-18
+
+The printed manual was photographed on site and the Xunzel datasheet
+supplied; both are transcribed in [HARDWARE_REFERENCE.md](HARDWARE_REFERENCE.md)
+with the sources kept in `docs/hardware/`. Three things fall out, and two of
+them correct claims made repeatedly in this file.
+
+**The pack is chronically undercharged, and that was hiding in plain sight.**
+Bulk (program 26) sits at the inverter's default **28.2 V**; the SOLARX
+datasheet specifies **28.80-29.40 V** absorption. Float is 27.0 V against a
+specified 27.20-27.80 V. The evidence agreed all along and nobody read it:
+this pack rests at 25.3-25.6 V every evening, and the datasheet's own
+resting-voltage curve puts that at **75-86% SoC, not full**. Full at rest is
+~25.9 V. An AGM that never saturates sulfates.
+
+**CORRECTION: "a full pack at rest reads ~25.6 V" is wrong**, and it was
+stated repeatedly — in the `resume_voltage` reasoning, in the short-window
+mechanism, in several commit messages. 25.6 V is ~86%. The conclusions drawn
+from it mostly survive (25.3 V is still a sane `resume_voltage`, and the
+short-window mechanism still holds) but the premise was overstated by about
+14 points of charge.
+
+**CORRECTION: 10 A is not "the lowest useful option", it is over spec.** This
+file previously framed program 11's 10 A as a pragmatic compromise because
+C/5 (~6 A) was not selectable. The datasheet's **recommended maximum charge
+current is 7.80 A**, so 10 A is ~130% of it, and observed charging at 10-11 A
+is ~140%. The framing was wrong: the problem is not granularity, it is that
+the selected value exceeds the manufacturer's limit. The only lower option is
+2 A (~15 h for a full recharge, which breaks the daily cycle the battery
+window depends on), and program 02 bottoms out at 10 A, so there is genuinely
+nothing between. Left at 10 A as a known overshoot rather than an oversight.
+
+**Program 29 (low DC cut-off, default 21.0 V) has never been checked.** It is
+an absolute floor that the manual says applies "no matter what percentage of
+load is connected". Below both `floor_voltage` and program 12, so nothing
+should reach it, but it is the last line before damage. Read it next time
+anyone is at the panel.
+
+**One long-standing mystery closed.** The manual states: *"All settings must
+be modified in battery mode and must be rebooted to be valid."* That is the
+direct explanation of gotcha #2 — `QPIRI` reports settings as of the last
+boot because the unit does not apply them until it restarts.
+
+
 ---
 
 ### Open, roughly by importance

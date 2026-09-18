@@ -4,6 +4,10 @@ Read this first in a new session. This file is **orientation and gotchas**,
 deliberately kept short because it loads into context every time.
 
 - [README.md](README.md) — the protocol writeup: commands, CRC, capability matrix.
+- [HARDWARE_REFERENCE.md](HARDWARE_REFERENCE.md) — the inverter's full
+  program table and the battery datasheet, transcribed 2026-09-18 from the
+  printed manual and the Xunzel spec (sources in `docs/hardware/`). Look
+  there before guessing a setting number or a charge voltage.
 - [NOTES.md](NOTES.md) — **field notes**: everything measured on this
   installation, which telemetry fields lie, the incident log, the deployed
   configuration and why, plans and open questions. Look there when you need a
@@ -159,7 +163,11 @@ already burned a full day.
    total, ~360 Wh usable. The configured 21.0V cutoff suits lead-acid and
    would over-discharge LiFePO4, so re-check these if the pack is ever
    swapped.
-10. **Charging current is set from the front panel, program 11.**
+10. **Charging current is set from the front panel, program 11.** It is
+    **10 A against a datasheet recommended maximum of 7.80 A** — see
+    HARDWARE_REFERENCE.md. The only lower option is 2 A, which would take
+    ~15 h to recharge and break the daily cycle, so this is a known,
+    deliberate overshoot rather than an oversight.
     Resolved 2026-08-24: it was at **20 A** into a 30 Ah bank (~C/1.5, and
     the observed 18-20 A was the *limit*, not the battery's acceptance —
     it was taking everything offered). Reduced to **10 A** (~C/3), the
