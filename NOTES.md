@@ -986,6 +986,50 @@ this cannot be confirmed. Worth checking the next time the watchdog fires,
 and worth considering whether the hub-level reset should be narrowed.
 
 
+### Front-panel programs, read off the unit — 2026-09-18
+
+Read directly from the panel by the user, standing at the inverter. These had
+all been *inferred from behaviour* because `QPIRI` misreports every one of
+them (`06P`, `60`, `52.0`). Now they are facts:
+
+    program 11  (charge current)      10 A
+    program 12  (back to utility)     24 V
+    program 13  (back to battery)     27 V
+
+**Program 12 = 24 V confirms `PBCV24.0` took effect.** The manual gives 23.0 V
+as the default and 24.0 is exactly what was written over serial on
+2026-08-25. The three-night bracket of 23.9-24.0 V derived from changeover
+behaviour on 09-04/05/06 was right. That closes the last doubt on it.
+
+**Program 13 = 27 V, not `FUL`** — and it explains the 09-16 night exactly.
+The pack was at 25.0 V and the inverter simply refused battery mode, sitting
+in `L` for the whole window. 25.0 < 27, so it was never going to comply,
+whatever the software asked for.
+
+**Do not lower program 13.** It looks like the same float-vs-resting error as
+`floor_voltage` and `resume_voltage` — 27 V is a charging voltage, a full
+pack at rest reads ~25.6 V, so the unit will only re-enter battery mode while
+the charger is running or just after. But here that is doing useful work:
+
+- The gap to program 12 is 3 V. Lowering program 13 towards the rested-full
+  25.6 V would cut it to ~1.5 V, and the pack sags ~2 V under the 1.2 kW
+  load — so the unit would cut out at 24 V, recover, be allowed straight back
+  in, and sag again. That is precisely the 14-transitions-in-21-minutes
+  chatter of 09-14, and 27 V is what damps it.
+- The 09-16 failure was not program 13 being wrong. It was the dead-band trap
+  door draining the pack to 50% with nothing charging it, which is fixed. A
+  pack that charges daily passes 27 V daily.
+
+**What this does sharpen: `floor_voltage` (24.0) and program 12 (24 V) are now
+known to be identical, not merely close.** The software floor can never act
+first. Combined with the load gate — `below_floor` only counts under 10 W, so
+a discharge under the 1.2 kW load is never counted at all — the software floor
+is close to decorative in practice, and the hardware is doing the protecting.
+Raising `floor_voltage` to ~24.5 V would let the software act first, with its
+3-confirmation debounce and its latch, instead of taking a `hardware_override`
+every time. Not changed; it is a real design question and needs a decision.
+
+
 ---
 
 ### Open, roughly by importance

@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-17 (day 2 of the watch)
+Last updated: 2026-09-18
 
 ---
 
@@ -73,6 +73,20 @@ today (01:01, 16:14, 16:38, 17:02) predate the 18:01 deploy, which is why
 - Pack is charging normally: 1776 charging samples, last 17:00. The evening
   25.6 -> 25.3 V drift is settling off float, not the drain pattern, which
   had *zero* charging samples.
+
+**Front-panel programs confirmed 2026-09-18** (read off the unit, since
+`QPIRI` misreports all three): **11 = 10 A, 12 = 24 V, 13 = 27 V**. Program 12
+confirms `PBCV24.0` took. Program 13 at 27 V is why the inverter refused
+battery mode at 25.0 V on 09-16 — and it should stay there: the 3 V gap to
+program 12 is what damps the 1.2 kW chatter, and a rested-full pack is only
+25.6 V so lowering it towards reachable would cut the gap to ~1.5 V against a
+~2 V sag. Full reasoning in NOTES.md.
+
+Consequence worth carrying: `floor_voltage` (24.0) and program 12 (24 V) are
+now known to be *identical*. The software floor cannot act first, and its load
+gate stops it counting under the 1.2 kW load at all. Raising it to ~24.5 V
+would let the software act first with its debounce and latch instead of
+taking a `hardware_override` every time. **Not changed — needs a decision.**
 
 **The 1.2 kW load is now the dominant problem and still has no block.** It ran
 hours 9, 10, 11, 15, 16, 17, 19 and 20 today — 72 samples in hour 17 alone.
