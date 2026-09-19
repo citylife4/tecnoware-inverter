@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-18 (evening, day 3 of the regression watch)
+Last updated: 2026-09-19 (evening, day 4 of the regression watch)
 
 ---
 
@@ -98,12 +98,58 @@ run — for the hardware reason in 2d, not a regression.**
   27.4 V float at 22:08. Not the drain pattern.
 - 337 tests green.
 
-**The rule for whether the nightly window runs, now on three nights.** It is
+**Day 4 (09-19). Every software check clean; relay throws hit a record 96.**
+
+- **The window ran 01:00-07:20**, 380 min, quiet-sample min 24.0 V —
+  confirming the prediction below. The rule is now 4 for 4.
+- `release_pending` false with the window shut, `loop_error` null,
+  `pop_drift_stuck` false, `config_error` null, 0 stalls, 337 tests green.
+- One `hardware_override` (18:24:50, after exactly 2 pending). No
+  single-reading fires.
+- Pack healthy: 2127 charging samples, charging to 20:37, float 27.4 V.
+
+**Relay throws 96 — the worst day recorded, against 4-6 normal and 09-14's
+36.** By hour: 16 (16), 17 (24), 18 (37). Max 36 in a 21-minute span, where
+09-14's cluster was 14.
+
+**It is the load, not the controller.** The 1.2 kW load ran **336 on/off
+cycles** today against 82 on 09-18 and a previous maximum of 237, and it has
+spread from 16:00-20:00 to **10:00-20:00**. Controller behaviour was correct
+throughout: it entered battery mode only 5 times in 16:00-19:00, and the
+1200 s anti-flap dwell held a re-entry for a full 20 minutes (17:51-18:09,
+`applied=False`, "a aguardar ... anti-flap do relé"). Each entry into an
+already-cycling load then costs many *inverter-level* throws, which no
+controller tick at 60 s can damp.
+
+Normalised, today is elevated but not an outlier on its own: throws per
+load-cycle-while-POP02 ran 1.28, against 0.90 on 09-14 and 0.89 on 09-18, in a
+noisy 0.25-1.28 range. **The load count is what moved, not the ratio.**
+
+**The debounce is systematically defeated by an oscillating device, and this
+is the first hard measurement of it.** It needs 3 *consecutive* line readings;
+the device reads `B` about half the time while oscillating, so the counter
+resets. Visible at 18:16/18:17 pending, 18:18 back to `B` (reset), 18:22/18:23
+pending, 18:24 fire. First entry into the load was 16:13 and the single latch
+came at 18:24 — **2h11m**, against ~5 minutes for the same situation pre-fix
+on 09-14 (window opened 17:15:57, override 17:20:58).
+
+This is the cost side of the 09-16 fix, and 2b predicted the mechanism before
+the fix existed. The debounce remains right for transients; it is the wrong
+instrument against a duty-cycling load. **Not changed — needs a decision**,
+alongside the block/move question in 2b, which this makes more urgent.
+
+**Live Telegram delivery is no longer untested.** The day-4 alert was sent and
+acknowledged (`enviado`) at ~22:15 on 09-19 — the first real message, where
+everything before had only verified the API contract. Remove this from the
+open list.
+
+**The rule for whether the nightly window runs, now 4 for 4.** It is
 decided the evening before, by when charging stopped:
 
     charger ran to 23:59 on 09-16  ->  27.0 V (float)  at 01:00 09-17  ->  RAN, 400 min
     charger ran to 17:00 on 09-17  ->  25.1 V (rested) at 01:00 09-18  ->  REFUSED
-    charger ran to 21:53 on 09-18  ->  27.4 V (float)  at 22:08        ->  predicts RAN
+    charger ran to 21:53 on 09-18  ->  27.4 V (float)  at 01:00 09-19  ->  RAN, 380 min
+    charger ran to 20:37 on 09-19  ->  27.4 V (float)  at 22:10        ->  predicts RAN
 
 A pack that has settled to its resting voltage cannot satisfy program 13's
 ~27 V return-to-battery threshold, so **the window runs only if the charger
@@ -334,6 +380,15 @@ mismatch is not seen consistently.
     09-13   15,16,17 traces only
     09-14   17 (82), 18 (96)        + normal 20 (43)
     09-15   16 (62), 17 (99), 18 (23), 19 (84)  + 20 (39), peak 4156 W
+    09-16   16 (76), 17 (37)                    + 19 (70), 20 (31)
+    09-17    9 (38), 10,11, 15 (27), 16 (58), 17 (72)  + 20 (30)
+    09-18   14 (43), 16 (23)                    + 20 (27)   <- quiet day, 100 total
+    09-19   10,11 (83), 13 (60), 14, 16 (66), 17 (91), 18 (48)  + 20 (27)
+
+**09-19 is the one to note: 414 samples and 336 on/off cycles, both records,
+and it now starts at 10:00.** A block that covered 16:00-20:00 would have
+missed more than half of it. This is the third consecutive revision of these
+hours, which is the argument against choosing a block at all.
 
 Yesterday's suggestion of blocking 17:00-19:00 is already out of date — it now
 runs 16:00-20:00. **Identify the load before choosing a block**, or end the
