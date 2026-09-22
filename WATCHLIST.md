@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-19 (evening, day 4 of the regression watch)
+Last updated: 2026-09-22 (evening, days 5-7 of the regression watch)
 
 ---
 
@@ -82,7 +82,8 @@ run — for the hardware reason in 2d, not a regression.**
   step right: the latch was **clear** (`rec=False` at 01:00:35, so the 2c fix
   held), the window opened and wrote POP02, the reconciler saw the line
   transfer, debounced it across 01:01 and 01:02, and latched on the third at
-  01:03:37. One override, no thrash, and `release_pending` cleared.
+  01:03:37. One override, no thrash, and `release_pending` cleared. (The
+  program-13 explanation here was later refined; see days 5-7.)
 - **The debounce is behaving exactly as specified.** Three overrides today
   (01:03 at 25.0 V, 14:32 at 26.1 V, 14:55 at 25.9 V), each preceded by
   **exactly 2 pending ticks** — every one fired on the third reading, none on
@@ -143,19 +144,59 @@ acknowledged (`enviado`) at ~22:15 on 09-19 — the first real message, where
 everything before had only verified the API contract. Remove this from the
 open list.
 
-**The rule for whether the nightly window runs, now 4 for 4.** It is
-decided the evening before, by when charging stopped:
+**Days 5-7 (09-20, 09-21, 09-22). Every software check clean on all three.**
+These were checked together on 09-22: the 21:37 session job had lapsed, so
+days 5 and 6 were never checked on the day.
 
-    charger ran to 23:59 on 09-16  ->  27.0 V (float)  at 01:00 09-17  ->  RAN, 400 min
-    charger ran to 17:00 on 09-17  ->  25.1 V (rested) at 01:00 09-18  ->  REFUSED
-    charger ran to 21:53 on 09-18  ->  27.4 V (float)  at 01:00 09-19  ->  RAN, 380 min
-    charger ran to 20:37 on 09-19  ->  27.4 V (float)  at 22:10        ->  predicts RAN
+    09-20  window 01:00-07:41  130 Wh  opened 27.7 V  throws 16  1 override
+    09-21  window 01:00-04:08   90 Wh  opened 25.2 V  throws 18  2 overrides
+    09-22  window 01:00-07:36  145 Wh  opened 27.3 V  throws 16  1 override
 
-A pack that has settled to its resting voltage cannot satisfy program 13's
-~27 V return-to-battery threshold, so **the window runs only if the charger
-was still on it when the window opened**. This is the same mechanism §2
-records for *short* windows, in its extreme form: not a short window, but
-none at all. Check when charging last stopped before looking anywhere else.
+- `release_pending` false with the window shut, `loop_error` null,
+  `pop_drift_stuck` false, `config_error` null, **no service restart since
+  09-16 18:09** (so no stalls, 0 telemetry gaps over 240 s), no tracebacks in
+  the journal, 337 tests green.
+- Every override came after exactly 2 pending ticks. None fired on a single one.
+- **Relay throws 16 / 18 / 16**, down from 96. Not because of the controller:
+  **the 1.2 kW load has largely gone** (see 2b).
+- Export 0 / 0 / 0 Wh (09-19: 2 Wh).
+- Write failures are isolated episodes, each recovered on the next tick:
+  2, 1, 5. 09-22's 5 is above the usual 1-2. Watch it, don't act on it yet.
+  One was the 09-22 07:36 override's `POP00` timing out; the next tick
+  applied it 72 s later.
+
+**The debounce has now saved a real transient, the first time it has.** On
+09-21 at 14:47:58 the telemetry showed a single `L` sample at 1190 W, back to
+`B` 10 s later. One tick landed on it, reading `hardware_override_pending`,
+and the next reset the count. The old code would have latched on that one
+reading and shut the daytime window for the rest of the afternoon.
+
+**The rule for whether the nightly window runs has been replaced.** The old
+rule ("runs only if the charger was still on it at 01:00") was broken on 09-21:
+the window opened at a **rested 25.2 V**, charging having stopped at 18:04,
+and the inverter went to `B` within a minute and ran for 3 h. The new rule fits
+all six nights on record, but it is **n=1 on the case that separates the two
+rules**:
+
+    night of   opened at      last exit from B the previous day      result
+    09-16      25.0 rested    hardware transfer (override 18:47)     REFUSED
+    09-18      25.1 rested    hardware transfer (override 18:38)     REFUSED
+    09-21      25.2 rested    software POP00 at 19:00 window close   RAN
+    09-17/19/20/22  27+ float software POP00 at 19:00 window close   RAN
+
+So **program 13 seems to act as a lockout that the inverter's own low-battery
+transfer arms**, not as a general entry threshold. After a program-12 transfer
+(or a load sag that trips it) the unit will not go back to battery below 27 V.
+After a commanded `POP00` it accepts battery mode at any voltage above program
+12. The two refusals happened to fall on nights when both conditions held (a
+rested pack *and* a day ending in a hardware transfer), which is how the old
+rule fit four nights.
+
+To confirm: a night that opens rested after a day ending in a hardware
+transfer should be refused. A night that opens rested after a clean 19:00
+close should run, but shorter (09-21: cut at 04:08 by program 12, 90 Wh).
+**Check how the previous day's last battery span ended before looking anywhere
+else.**
 
 **Front-panel programs confirmed 2026-09-18** (read off the unit, since
 `QPIRI` misreports all three): **11 = 10 A, 12 = 24 V, 13 = 27 V**. Program 12
@@ -233,7 +274,11 @@ trace.
               09-16   14.1
               09-17    1.7
               09-18   11.9   <- all three clean coverage, 0 null/144
-              mean 45.6 | median 39.4 | spread 1.2-113.0
+              09-19    2 Wh exported   } ratio not computed: auto-energy's
+              09-20    0 Wh exported   } /api/history now serves only the
+              09-21    0 Wh exported   } current day, so past generation
+              09-22    0.0   (0 Wh / ~0.72 kWh, 1 null/127)
+              mean 45.6 | median 39.4 | spread 1.2-113.0  (through 09-18)
 
 **Five consecutive days at 1.2-14.1 against a 115.6 baseline.** That is well
 outside the earlier 2.3-113.0 spread and no longer looks like day-to-day
@@ -384,9 +429,26 @@ mismatch is not seen consistently.
     09-17    9 (38), 10,11, 15 (27), 16 (58), 17 (72)  + 20 (30)
     09-18   14 (43), 16 (23)                    + 20 (27)   <- quiet day, 100 total
     09-19   10,11 (83), 13 (60), 14, 16 (66), 17 (91), 18 (48)  + 20 (27)
+    09-20   15 (1)                              + 19 (15), 20 (15)   33 total
+    09-21    9 (5), 13, 14, 16 (1-2 each)       + 19 (9), 20 (26)    44 total
+    09-22   11 (1)                              + 20 (7)              8 total
 
-**09-19 is the one to note: 414 samples and 336 on/off cycles, both records,
-and it now starts at 10:00.** A block that covered 16:00-20:00 would have
+**From 09-20 the load has almost gone**: 415 samples on 09-19, then 33 / 44 /
+8, and nearly all of that is the evening pump in hours 19-20. That fits the
+09-18 finding that the pump is also started by hand whenever someone is
+gardening. It is intermittent, not a new permanent load, and it cannot be
+blocked by time of day. Its absence is why relay throws fell from 96 to ~16.
+**The block/move decision is less urgent while it stays away, but it is
+unresolved.** It will come back the next time someone gardens.
+
+**Export stayed at 0 Wh on all three days without it.** That is the first
+evidence against the idea that the load was producing the low ratios in §1 by
+absorbing the surplus for free. With the load gone, the surplus was still
+absorbed. Moderate days only (09-22: ~0.72 kWh), so this says nothing yet
+about bright ones.
+
+**09-19 was the peak day: 414 samples and 336 on/off cycles, both records,
+and it started at 10:00.** A block that covered 16:00-20:00 would have
 missed more than half of it. This is the third consecutive revision of these
 hours, which is the argument against choosing a block at all.
 
@@ -481,9 +543,10 @@ the unit was read off the panel at 27 V the same day. The window was refused
 again at 25.1 V, and this time the whole sequence is on record in the trace
 (01:00:35 `window` -> 01:01/01:02 `hardware_override_pending` -> 01:03:37
 `hardware_override`). So this is a standing hardware constraint, not a bug and
-not something the nine fixes address: **below ~27 V the window cannot run, and
-the software's only correct response is the one it now gives.** See the day 3
-entry above for the evening-charge rule that predicts it.
+not something the nine fixes address, and the software's response is the
+correct one. **But "below ~27 V the window cannot run" is too strong.** 09-21
+ran from 25.2 V. The refusal seems to need the previous day to have ended in
+a hardware transfer. See the days 5-7 entry above.
 
 ## 2e. OPEN: `min_battery_voltage` has the same float-vs-resting flaw
 

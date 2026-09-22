@@ -1020,6 +1020,33 @@ the charger is running or just after. But here that is doing useful work:
   door draining the pack to 50% with nothing charging it, which is fixed. A
   pack that charges daily passes 27 V daily.
 
+**Refined 2026-09-22: program 13 is not a general entry threshold.** On the
+night of 09-21 the window opened at a *rested* 25.2 V, well under 27 V, and
+the inverter went to `B` within a minute. It ran until program 12 cut it at
+04:08, giving 90 Wh. So "25.0 < 27, so it was never going to comply" above is
+wrong as a general statement.
+
+What separates the nights is how the previous day's last battery span ended:
+
+    09-16  refused at 25.0   day ended in a hardware transfer (override 18:47)
+    09-18  refused at 25.1   day ended in a hardware transfer (override 18:38)
+    09-21  RAN at 25.2       day ended in a software POP00 at the 19:00 close
+    09-17/19/20/22 ran from 27+ float, all after a software 19:00 close
+
+Working hypothesis: **program 13 is a lockout, and the inverter's own
+low-battery transfer is what arms it.** After a program-12 transfer (including
+one caused by a load sag) the unit will not go back to battery until the pack
+reaches 27 V. After a commanded `POP00` it enters battery mode at any voltage
+above program 12. This fits the manual's wording ("back to battery mode"). It
+also explains why the earlier "charger still on at 01:00" rule fit four nights:
+both refusals had a rested pack *and* a hardware-ended day.
+
+Evidence is **n=1 on the case that tells the two rules apart**. It is
+confirmed if a rested night after a hardware-ended day is refused, and a rested
+night after a clean close runs. The "do not lower program 13" reasoning above
+is unaffected, and arguably stronger: the lockout damps the 1.2 kW chatter
+exactly where that chatter happens, and leaves the scheduled window alone.
+
 **What this does sharpen: `floor_voltage` (24.0) and program 12 (24 V) are now
 known to be identical, not merely close.** The software floor can never act
 first. Combined with the load gate — `below_floor` only counts under 10 W, so
