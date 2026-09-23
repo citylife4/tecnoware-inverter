@@ -551,6 +551,20 @@ class InverterService:
         v = snap.get("ac_output_active_power")
         return v if isinstance(v, (int, float)) else None
 
+    def battery_charging_current(self):
+        """battery_charging_current from the cached snapshot, or None.
+
+        Used by safety.LowBatteryLatch to see the charger reach float. Coarse
+        (whole amps) and it reads a flat ~4 A at float, so it says "tapered",
+        not "how much".
+        """
+        snap = self._latest
+        if not snap:
+            return None
+        v = snap.get("battery_charging_current")
+        return (v if isinstance(v, (int, float)) and not isinstance(v, bool)
+                and math.isfinite(v) else None)
+
     def battery_voltage(self):
         """Best known battery voltage, for the PCP03 safety interlock.
 

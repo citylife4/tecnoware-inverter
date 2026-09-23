@@ -1047,6 +1047,32 @@ night after a clean close runs. The "do not lower program 13" reasoning above
 is unaffected, and arguably stronger: the lockout damps the 1.2 kW chatter
 exactly where that chatter happens, and leaves the scheduled window alone.
 
+### 2026-09-23 — the three open decisions, deployed
+
+Deployed 21:35, restart outside every window. The reasoning is in
+WATCHLIST.md; recorded here so the before-state is not lost:
+
+- **`floor_voltage` 24.0 -> 24.5 V.** At 24.0 it equalled program 12, so the
+  nightly window always ended on a `hardware_override` (~07:40) and the
+  software floor never fired. The recommendation also proposed loosening the
+  10 W load gate; the data said no. 74% of night readings on 09-20 and 09-22
+  were already <=10 W, and the fridge sags the pack only 0.1-0.2 V in paired
+  samples (not the 0.4 V recorded 2026-08-25). Expected cost ~20-25% of a
+  night's energy.
+- **`hardware_override` debounce: 3 consecutive -> 3 of the last 5.** An
+  unreadable mode no longer resets the count. The old count needed 2h11m to
+  latch under the oscillating 1.2 kW load on 09-19.
+- **Daytime heavy-load hold-off**, 800 W / 2 readings in 10 min / 1 h. Sized
+  from the Shelly channel: on 09-19, 123 of the load's 137 runs were one 30 s
+  reading long. On 09-22, a quiet day, only the evening pump crossed 800 W.
+- **`min_battery_voltage` latch** in `grid_charge` and the scheduler.
+  Release condition sized from 09-20..22 line-mode telemetry: bulk 10-11 A,
+  tapering 8/6/5, then a flat 4 A at the 27.4 V float until the charger
+  stops.
+
+357 tests. The new debounce tests were checked to fail against the old
+code.
+
 **What this does sharpen: `floor_voltage` (24.0) and program 12 (24 V) are now
 known to be identical, not merely close.** The software floor can never act
 first. Combined with the load gate — `below_floor` only counts under 10 W, so

@@ -85,6 +85,12 @@ class FakeService:
     def battery_voltage(self):
         return self._battery_voltage
 
+    # Set by tests of safety.LowBatteryLatch; None like a missing reading.
+    _charging_current = None
+
+    def battery_charging_current(self):
+        return self._charging_current
+
     def output_load_w(self):
         return self._output_load_w
 

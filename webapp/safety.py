@@ -86,10 +86,73 @@ def is_finite_number(value) -> bool:
             and math.isfinite(value))
 
 
-def apply_low_battery_floor(service, target: str):
+# Release condition for LowBatteryLatch: the charger has taken the pack to
+# float. Measured 2026-09-20..22 in line mode: bulk runs at 10-11 A while the
+# voltage climbs, then the current tapers 8 -> 6 -> 5 and settles at 4 A once
+# the pack sits at the 27.4 V float (program 27). Both conditions together,
+# because either alone is also true at the wrong moment: a charger that has
+# not spun up yet reads 0 A, and bulk passes 27 V at the full 10 A.
+FLOOR_RELEASE_MIN_V = 27.0
+FLOOR_RELEASE_MAX_A = 4.0
+# Consecutive observations. Corrupt QPIGS frames happen (gotcha #8) -- the
+# telemetry has "2750.0" volts in it -- and one must not end a charge.
+FLOOR_RELEASE_CONFIRMATIONS = 3
+
+
+class LowBatteryLatch:
+    """Holds the low-battery override until the pack is actually full.
+
+    min_battery_voltage is compared against terminal voltage, and that is a
+    resting threshold only while nothing is charging. The moment the override
+    starts the charger the pack reads ~27 V even at ~50% state of charge, so a
+    stateless check releases on its own success: PCP01, charge, 27 V, PCP03,
+    settle, PCP01... a ~5-minute oscillation that does charge the pack, with
+    churn. Observed 2026-09-16 (see WATCHLIST.md 2e). Same class of mistake as
+    floor_voltage and resume_voltage: a threshold compared against a pack that
+    may be on charge must be a resting voltage, or must release on something
+    other than voltage. This releases on the charger reaching float.
+
+    observe() mutates and belongs in a controller's tick; `active` is a pure
+    read, so get_state() paths can pass the latch without side effects. Not
+    persisted: a restart falls back to the stateless check, which still
+    charges -- it just churns.
+    """
+
+    def __init__(self):
+        self.active = False
+        self._at_float = 0
+
+    def observe(self, service) -> None:
+        floor = getattr(service, "min_battery_voltage", None)
+        v = service.battery_voltage()
+        if not (is_finite_number(floor) and is_finite_number(v)):
+            self._at_float = 0
+            return
+        if v <= floor:
+            self.active = True
+            self._at_float = 0
+            return
+        if not self.active:
+            return
+        current_fn = getattr(service, "battery_charging_current", None)
+        amps = current_fn() if current_fn else None
+        if (is_finite_number(amps) and amps <= FLOOR_RELEASE_MAX_A
+                and v >= FLOOR_RELEASE_MIN_V):
+            self._at_float += 1
+            if self._at_float >= FLOOR_RELEASE_CONFIRMATIONS:
+                self.active = False
+                self._at_float = 0
+        else:
+            self._at_float = 0
+
+
+def apply_low_battery_floor(service, target: str, latch=None):
     """If `target` is the solar-only PCP and the battery is at/under
     `service.min_battery_voltage` (or unreadable), force utility-fallback
     ("01") instead and return why. Returns (effective_target, reason_or_None).
+
+    With a LowBatteryLatch that has been armed, the override also holds after
+    the voltage has recovered, until the charger reaches float.
 
     Shared by webapp/scheduler.py and webapp/grid_charge.py so every
     automation that can land on PCP03 enforces the identical interlock a
@@ -99,6 +162,12 @@ def apply_low_battery_floor(service, target: str):
     """
     if target != SOLAR_ONLY_PCP:
         return target, None
+    if latch is not None and latch.active:
+        v = service.battery_voltage()
+        shown = f"{v:.2f}V" if is_finite_number(v) else "?"
+        return "01", (f"OVERRIDE: holding utility charging until the pack "
+                      f"reaches float ({shown}) -- the voltage alone reads "
+                      f"high while charging")
     floor = service.min_battery_voltage
     if floor is None:
         return target, None

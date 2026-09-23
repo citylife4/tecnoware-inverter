@@ -143,11 +143,38 @@ class TestBatterySafety(unittest.TestCase):
         self.assertEqual(self.service.sent, [])
         self.assertTrue(self.runtime()["release_pending"])
 
-    def test_transient_line_transfer_does_not_spend_the_night(self):
-        self.enter()
-        for mode in ("L", "B", "L", None, "L", "B"):
+    def feed(self, modes):
+        for mode in modes:
             self.service._device_mode = mode
-            self.bw.tick(now=NIGHT, force=True)
+            self.bw.tick(now=NIGHT)
+
+    def test_isolated_line_blip_does_not_spend_the_night(self):
+        """2026-09-21 14:47:58: one 10 s `L` reading, `B` again on the next
+        tick. That is what the debounce is for."""
+        self.enter()
+        self.feed(("B", "B", "L", "B", "B", "B", "B"))
+        self.assertFalse(self.bw.get_state()["recovering"])
+        self.assertNotIn("POP00", self.service.sent)
+
+    def test_alternating_line_readings_latch(self):
+        """A device oscillating under the 1.2 kW load reads `B` about half
+        the time. A consecutive count never reached 3 against that: 2h11m of
+        relay throws on 2026-09-19. 3 of the last 5 latches on the third."""
+        self.enter()
+        self.feed(("L", "B", "L", "B"))
+        self.assertFalse(self.bw.get_state()["recovering"])
+        self.feed(("L",))
+        self.assertTrue(self.bw.get_state()["recovering"])
+        self.assertEqual(self.service.sent, ["POP00"])
+
+    def test_unreadable_mode_does_not_erase_line_readings(self):
+        self.enter()
+        self.feed(("L", None, "L", None, "L"))
+        self.assertTrue(self.bw.get_state()["recovering"])
+
+    def test_old_line_readings_age_out(self):
+        self.enter()
+        self.feed(("L", "B", "B", "B", "B", "L", "B", "B", "B", "B", "L"))
         self.assertFalse(self.bw.get_state()["recovering"])
         self.assertNotIn("POP00", self.service.sent)
 

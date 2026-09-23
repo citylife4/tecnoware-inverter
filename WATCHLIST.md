@@ -10,21 +10,51 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-22 (evening, days 5-7 of the regression watch)
+Last updated: 2026-09-23 (evening: regression watch closed, three decisions deployed)
 
 ---
 
-## Regression watch, 2026-09-16 to ~09-23
+## Deployed 2026-09-23 21:35 — watch these next
+
+Three changes, all from the open decisions below, all untested in
+production. What each should look like if it works:
+
+- **`floor_voltage` 24.0 -> 24.5 V** (live and `DEFAULT_CONFIG`). Nights should
+  now end on reason `floor` around 05:30-06:30, not on a `hardware_override`
+  at ~07:40. Expect ~20-25% less energy per night (~100-115 Wh, not 130-145).
+  If they still end on `hardware_override`, the floor still is not acting
+  first. Look at `below_floor` in the trace before anything else.
+- **Override debounce: 3 of the last 5 readings**, not 3 in a row
+  (`HARDWARE_OVERRIDE_LOOKBACK`). Under an oscillating load the latch should
+  come within ~5 ticks of the first transfer, not the 2h11m of 09-19. A single
+  `hardware_override_pending` that never fires is still correct.
+- **Daytime heavy-load hold-off.** Reason `daytime_heavy_load`: the daytime
+  window stays shut for 1 h after 2+ readings above 800 W within 10 min (the
+  Shelly in bypass, the inverter in battery mode), or after any daytime
+  `hardware_override`. `heavy_load_until` in the API shows it. On a gardening
+  day relay throws should stay near ~16, not 96. **Not persisted**: a restart
+  forgets it.
+- **`grid_charge` low-battery latch** (`safety.LowBatteryLatch`). Below
+  `min_battery_voltage` it holds PCP01 until the charger reaches float
+  (>= 27.0 V and <= 4 A, 3 readings in a row). The `why` column reads "holding
+  utility charging until the pack reaches float". Watch for PCP01 holding past
+  float, which would mean the release condition never matches on this unit's
+  current readings.
+
+## Regression watch, 2026-09-16 to 09-22 — closed
+
+Closed after seven days with every check clean. The session job had already
+lapsed; the systemd reports (09:00, 21:22) are the durable layer.
 
 Nine fixes were deployed on 09-16 and none had run a full production cycle.
-One scheduled check runs at 21:37 asking only: **did the deployed fixes
+One scheduled check ran at 21:37 asking only: **did the deployed fixes
 behave, and did anything regress?** What it watches:
 
 - the nightly window actually runs 01:00-08:00 (it failed twice before)
 - `release_pending` is false whenever the window is shut — true while shut
   means a hand-back is failing and nothing else says so
-- `hardware_override` needs 3 consecutive readings now; a single-reading one
-  is a regression
+- `hardware_override` needs 3 line readings now (3 in a row until
+  2026-09-23, 3 of the last 5 since); a single-reading one is a regression
 - relay throws stay at 4-6/day (09-14 was 36); +2 per restart is intentional
 - stalls recover in ~5 min, not ~16
 - `loop_error` and `pop_drift_stuck` stay null/false
@@ -35,8 +65,6 @@ behave, and did anything regress?** What it watches:
 the latter silently skips 22 tests, including every one guarding the battery
 hand-back.
 
-After a week of clean days the job should be stopped — the two systemd
-reports (09:00, 21:22) are the durable layer and need no session.
 
 **Day 1 (09-16), post-deploy behaviour clean.** The fixes went live 17:29 and
 18:01, so the split matters:
@@ -136,8 +164,8 @@ on 09-14 (window opened 17:15:57, override 17:20:58).
 
 This is the cost side of the 09-16 fix, and 2b predicted the mechanism before
 the fix existed. The debounce remains right for transients; it is the wrong
-instrument against a duty-cycling load. **Not changed — needs a decision**,
-alongside the block/move question in 2b, which this makes more urgent.
+instrument against a duty-cycling load. **Decided and deployed 2026-09-23:**
+3 of the last 5 readings. See the top of this file.
 
 **Live Telegram delivery is no longer untested.** The day-4 alert was sent and
 acknowledged (`enviado`) at ~22:15 on 09-19 — the first real message, where
@@ -228,7 +256,10 @@ Consequence worth carrying: `floor_voltage` (24.0) and program 12 (24 V) are
 now known to be *identical*. The software floor cannot act first, and its load
 gate stops it counting under the 1.2 kW load at all. Raising it to ~24.5 V
 would let the software act first with its debounce and latch instead of
-taking a `hardware_override` every time. **Not changed — needs a decision.**
+taking a `hardware_override` every time. **Raised to 24.5 V 2026-09-23.** The
+load gate turned out not to matter: ~74% of night readings are under 10 W, so
+there are plenty of quiet samples. What stopped the floor firing was that it
+sat exactly on program 12.
 
 **The 1.2 kW load is now the dominant problem and still has no block.** It ran
 hours 9, 10, 11, 15, 16, 17, 19 and 20 today — 72 samples in hour 17 alone.
@@ -241,9 +272,10 @@ right.
 
 ## Settled configuration — not under test
 
-`battery_window` **01:00-08:00** nightly, floor 24.0 V, resume 25.3 V, 3
-confirmations. Daytime window 08:00-19:00, enter 80 W, exit 50 W, dwell
-1200 s. Pump block 19:00-21:15. `grid_charge` **exclusive**, thresholds
+`battery_window` **01:00-08:00** nightly, floor **24.5 V** (from 2026-09-23;
+see the top of this file), resume 25.3 V, 3 confirmations. Daytime window
+08:00-19:00, enter 80 W, exit 50 W, dwell 1200 s, heavy-load hold-off 800 W /
+3600 s. Pump block 19:00-21:15. `grid_charge` **exclusive**, thresholds
 30/150 W.
 
 The window was extended from 04:30 on 2026-09-03 and the verdict came in on
@@ -548,9 +580,10 @@ correct one. **But "below ~27 V the window cannot run" is too strong.** 09-21
 ran from 25.2 V. The refusal seems to need the previous day to have ended in
 a hardware transfer. See the days 5-7 entry above.
 
-## 2e. OPEN: `min_battery_voltage` has the same float-vs-resting flaw
+## 2e. FIXED 2026-09-23: `min_battery_voltage` had the same float-vs-resting flaw
 
-Not changed — needs a decision. `min_battery_voltage = 25.5` is compared
+Fixed by releasing on the charger reaching float rather than on voltage. See
+`safety.LowBatteryLatch` and the top of this file. `min_battery_voltage = 25.5` is compared
 against terminal voltage, which jumps to 27.0 V the moment charging starts
 even at a real ~50% SoC. So it works as an *entry* threshold and fails as an
 *exit* one: observed 09-16, PCP03 queued (held only by the 300 s dwell) with

@@ -44,6 +44,7 @@ import math
 import os
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 
 import requests
@@ -52,7 +53,7 @@ from transport import InverterError
 from webapp import config_error
 from webapp.atomic_write import write_json_atomic
 from webapp.trace import append_row
-from webapp.safety import PCP_VALUES, apply_low_battery_floor
+from webapp.safety import PCP_VALUES, LowBatteryLatch, apply_low_battery_floor
 
 # Como é que este controlador se relaciona com o agendamento horário:
 #
@@ -145,6 +146,10 @@ DEFAULT_CONFIG = {
 VALID_KEYS = set(DEFAULT_CONFIG)
 
 
+# How much inverter_input_w history heavy_input_readings() can look back on.
+INPUT_HISTORY_S = 900
+
+
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -232,6 +237,16 @@ class GridChargeController:
         # definite evidence. See _generating_with_hysteresis().
         self._generating = None
         self._generating_pending = 0
+        # See safety.LowBatteryLatch: the low-battery override holds until
+        # the charger reaches float, not until the terminal voltage (which
+        # the charger itself raises) clears min_battery_voltage.
+        self._floor_latch = LowBatteryLatch()
+        # (monotonic, inverter_input_w) for every reading in the last
+        # INPUT_HISTORY_S. BatteryWindow asks how many were heavy, because
+        # the 1.2 kW load shows up here as isolated single readings -- it
+        # cycles on and off inside one 30 s poll -- so only this controller,
+        # which sees every reading, can count them.
+        self._input_history = deque()
 
     # ---- persistence ------------------------------------------------------
 
@@ -358,6 +373,16 @@ class GridChargeController:
                 return None, False
             age = time.monotonic() - self._last_fetch_ok_mono
             return self._last_signal, age <= self._config["stale_after"]
+
+    def heavy_input_readings(self, threshold_w: float, lookback_s: float) -> int:
+        """How many inverter_input_w readings above `threshold_w` arrived in
+        the last `lookback_s` seconds. Shelly channel 1 measures the real
+        load in bypass, where the inverter's own ac_output_active_power is a
+        1 W placeholder (CLAUDE.md gotcha #3)."""
+        with self._lock:
+            now_mono = time.monotonic()
+            return sum(1 for at, w in self._input_history
+                       if now_mono - at <= lookback_s and w > threshold_w)
 
     def last_live_payload(self):
         """The most recent auto-energy `latest` dict, or None. Read-only
@@ -620,6 +645,10 @@ class GridChargeController:
             self._last_net_balance = net
             self._last_inverter_input = inverter_w
             self._last_signal = signal
+            self._input_history.append((now_mono, inverter_w))
+            while (self._input_history and
+                   now_mono - self._input_history[0][0] > INPUT_HISTORY_S):
+                self._input_history.popleft()
             self._last_solar = solar_w
             self._last_remote_ts = remote_ts
 
@@ -678,7 +707,8 @@ class GridChargeController:
                 desired = held or "idle"
 
         raw_target = cfg["charge_pcp"] if desired == "charging" else cfg["idle_pcp"]
-        target, override = apply_low_battery_floor(self.service, raw_target)
+        target, override = apply_low_battery_floor(
+            self.service, raw_target, latch=self._floor_latch)
         return desired, target, override, known
 
     def tick(self, force: bool = False) -> dict:
@@ -687,6 +717,7 @@ class GridChargeController:
 
     def _tick(self, force: bool = False) -> dict:
         cfg = self._config
+        self._floor_latch.observe(self.service)
         desired, target, override, known = self._evaluate()
         self._desired = desired
 

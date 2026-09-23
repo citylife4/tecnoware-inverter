@@ -283,8 +283,13 @@ disabled its fourth interlock for as long as the mode was `exclusive`.
   trickle and the surplus goes to the grid regardless.
 
 Both PCP controllers share `apply_low_battery_floor` in `webapp/safety.py`
-— don't duplicate that logic. **It does nothing for `battery_window`**: it
-works by writing PCP, and PCP is a no-op while `POP=02` (gotcha #1), so in
+— don't duplicate that logic. Each passes its own `LowBatteryLatch`: once
+armed below `min_battery_voltage`, the override holds until the charger
+reaches float (>= 27.0 V, <= 4 A). It no longer releases on voltage, which
+the charger itself raises past the threshold at ~50% state of charge.
+
+**The low-battery floor does nothing for `battery_window`**: it works by
+writing PCP, and PCP is a no-op while `POP=02` (gotcha #1), so in
 battery mode `BatteryWindow` is the *only* thing protecting the pack.
 
 ### `battery_window` — the four interlocks
@@ -316,6 +321,9 @@ output as the loads:
    **one discharge per night**. Releasing on voltage alone would discharge
    to the floor, recharge, and discharge again: several cycles a night,
    which is the exact wear the controller exists to prevent.
+   Since 2026-09-23 the floor is **24.5 V**. At 24.0 it was identical to
+   front-panel program 12 (24 V), so the hardware always ended the night
+   first. Keep it above program 12, or it is decorative.
 3. **Unreadable battery voltage** → utility. Never a reason to stay on
    battery.
 4. **Yields to `grid_charge`** via `override_check`, wired to
@@ -373,6 +381,19 @@ often this window crosses its band compared with the nightly window.
 Everything else still applies: the pump block, the voltage floor (whose
 counter now runs during either window, not just the nightly one), and the
 yield to `grid_charge`. A missing or stale signal keeps the window shut.
+
+**Heavy-load hold-off (2026-09-23).** The ~1.2 kW pump is also started by
+hand, so no time block covers it. The window instead closes for
+`daytime_heavy_load_holdoff` (1 h) after 2+ readings above
+`daytime_heavy_load_w` (800 W) within 10 min, or after any daytime
+`hardware_override`. Bypass readings come from the Shelly via
+`GridChargeController.heavy_input_readings()`, since the inverter's own
+figure is a 1 W placeholder there (gotcha #3). It takes two readings because
+the fridge's inrush reaches ~1.2 kW for a single sample. It is a count and
+not a sustained run, because the pump cycles within one 30 s poll. On
+09-19 it opened into that load all afternoon: 96 relay throws. A day that
+ends in the inverter's own transfer to line can also cost the next night's
+window (program 13; see NOTES.md).
 
 Note the latch's release stays keyed to the **nightly** window, so "one
 discharge per night" survives while the daytime mode is free to cycle as

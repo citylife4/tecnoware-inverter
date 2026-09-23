@@ -29,7 +29,7 @@ from charge_schedule import VALID_PCP, parse_hhmm, pick_rule  # noqa: F401  (re-
 from transport import InverterError
 from webapp import config_error
 from webapp.atomic_write import write_json_atomic
-from webapp.safety import apply_low_battery_floor
+from webapp.safety import LowBatteryLatch, apply_low_battery_floor
 
 DEFAULT_STATE = {"enabled": False, "rules": []}
 
@@ -82,6 +82,8 @@ class Scheduler:
         # PCP em cadências diferentes (60s vs 30s) e ficavam a lutar um com
         # o outro. None = ninguém sobrepõe (comportamento de sempre).
         self._override_check = override_check
+        # See safety.LowBatteryLatch.
+        self._floor_latch = LowBatteryLatch()
 
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -183,7 +185,8 @@ class Scheduler:
         if rule is None:
             return None, None, None, None
         why = rule.get("why", "")
-        target, override = apply_low_battery_floor(self.service, rule["pcp"])
+        target, override = apply_low_battery_floor(
+            self.service, rule["pcp"], latch=self._floor_latch)
         return rule, target, why, override
 
     def _is_overridden(self) -> bool:
@@ -207,6 +210,7 @@ class Scheduler:
 
     def _tick(self, force: bool = False, now=None) -> dict:
         now = now or datetime.now()
+        self._floor_latch.observe(self.service)
         rule, target, why, override = self._evaluate(now)
         result = {"at": _utcnow(), "rule": rule, "target": target,
                   "why": override or why, "applied": False, "note": ""}

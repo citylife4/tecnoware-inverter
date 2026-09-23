@@ -194,7 +194,11 @@ def main() -> int:
                                    # A janela diurna condicional decide sobre
                                    # o mesmo sinal que o excedente usa -- ver
                                    # GridChargeController.last_signal().
-                                   signal_source=grid_charge.last_signal)
+                                   signal_source=grid_charge.last_signal,
+                                   # A carga pesada (bomba) vê-se no canal da
+                                   # Shelly em bypass -- ver
+                                   # GridChargeController.heavy_input_readings().
+                                   heavy_load_source=grid_charge.heavy_input_readings)
 
     scheduler = Scheduler(service, path=cfg["schedule_config"],
                           poll_interval=float(cfg["schedule_poll_interval"]),

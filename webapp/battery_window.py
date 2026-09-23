@@ -49,7 +49,9 @@ import math
 import os
 import sys
 import threading
-from datetime import datetime, timezone
+import time
+from collections import deque
+from datetime import datetime, timedelta, timezone
 
 from charge_schedule import parse_hhmm, rule_active
 from transport import InverterError
@@ -133,7 +135,34 @@ GRID_PRESENT_MIN_V = 180.0
 # ticks is ~3 minutes -- against the 8 hours this went uncorrected on
 # 2026-08-30, that is still effectively immediate.
 POP_DRIFT_CONFIRMATIONS = 3
+
+# A healthy-voltage line transfer latches the night once this many of the
+# last HARDWARE_OVERRIDE_LOOKBACK observations were line readings.
+#
+# It used to be 3 *consecutive* readings, which is right against a transient
+# and wrong against a duty-cycling load. A device oscillating B<->L under the
+# 1.2 kW load reads `B` about half the time, so a consecutive count keeps
+# resetting: on 2026-09-19 the first entry into that load was 16:13 and the
+# latch came at 18:24, 2h11m of relay throws (96 that day), against ~5
+# minutes under the pre-debounce code on 09-14.
+#
+# 3 of 5 keeps what the debounce is for -- on 2026-09-21 at 14:47:58 a single
+# 10 s `L` reading, back to `B` on the next tick, did not latch -- and an
+# alternating L/B/L latches on the third line reading.
 HARDWARE_OVERRIDE_CONFIRMATIONS = 3
+HARDWARE_OVERRIDE_LOOKBACK = 5
+
+# The daytime window's heavy-load hold-off counts this many readings above
+# daytime_heavy_load_w within HEAVY_LOAD_LOOKBACK_S before closing.
+#
+# Two, not one: the fridge compressor's inrush reaches 1129-1223 W for a
+# single sample. Not a sustained-run requirement either, because the 1.2 kW
+# load does not run sustained -- on the Shelly's 30 s readings 123 of its 137
+# runs on 2026-09-19 were a single reading long. It is intermittent, and the
+# count over a lookback is what separates it from the fridge: on the quiet
+# 2026-09-22 this rule fired only on the evening pump.
+HEAVY_LOAD_READINGS = 2
+HEAVY_LOAD_LOOKBACK_S = 600.0
 
 # How many corrective POP writes to attempt before giving up and just
 # reporting. If the device has ignored this many, it is not going to comply
@@ -179,7 +208,16 @@ DEFAULT_CONFIG = {
     # It has to move now regardless: with resume_voltage corrected to 25.3 V,
     # a 25.5 V floor made DEFAULT_CONFIG fail its own validation
     # (resume_voltage must exceed floor_voltage).
-    "floor_voltage": 24.0,
+    #
+    # 24.5 V since 2026-09-23. At 24.0 it was identical to front-panel
+    # program 12 (24 V, read off the unit 2026-09-18), so the hardware always
+    # acted first and every night ended in a hardware_override instead of
+    # this floor with its confirmations and latch. The cost is ~20-25% of a
+    # night's energy (09-20: ~27 of 130 Wh; 09-22: ~30 of 145 Wh) for a
+    # shallower cycle and the software ending the night itself. Quiet
+    # samples are not what was missing: ~74% of night readings are under
+    # FLOOR_MAX_LOAD_W.
+    "floor_voltage": 24.5,
     # Must recover to here before battery mode is allowed again, so the
     # controller doesn't sit at the floor toggling the transfer relay.
     #
@@ -239,6 +277,19 @@ DEFAULT_CONFIG = {
     # POP throws a physical relay, and daytime conditions cross the band far
     # more often than the once-a-night pattern this class started with.
     "daytime_min_switch_interval": 1200.0,
+    # Keep the daytime window shut for daytime_heavy_load_holdoff seconds
+    # once a load above daytime_heavy_load_w has been seen (see
+    # HEAVY_LOAD_READINGS), or after a daytime hardware_override.
+    #
+    # The pack cannot carry the ~1.2 kW load that appears on this output --
+    # the pump, which is also started by hand whenever someone is gardening,
+    # so no time block can cover it. Opening into it throws the relay dozens
+    # of times, and a day that ends in the inverter's own transfer to line
+    # arms program 13's lockout and can cost the following night's window
+    # (refused on 2026-09-16 and 09-18). Detected on the real channel rather
+    # than predicted by the clock.
+    "daytime_heavy_load_w": 800.0,
+    "daytime_heavy_load_holdoff": 3600.0,
     # The pump's hours. Defaults to DEFAULT_PUMP_WINDOW; a config written
     # before this key existed inherits it rather than losing the block.
     "pump_window": [dict(w) for w in DEFAULT_PUMP_WINDOW],
@@ -337,7 +388,8 @@ def validate_config(cfg: dict) -> dict:
         except (ValueError, AttributeError, TypeError):
             raise ValueError(f"{key} must be \"HH:MM\" (24h), got {out[key]!r}")
     for key in ("daytime_enter_w", "daytime_exit_w",
-                "daytime_min_switch_interval"):
+                "daytime_min_switch_interval", "daytime_heavy_load_w",
+                "daytime_heavy_load_holdoff"):
         try:
             out[key] = float(out[key])
         except (TypeError, ValueError, OverflowError):
@@ -350,6 +402,10 @@ def validate_config(cfg: dict) -> dict:
                          "daytime median sits near zero")
     if out["daytime_min_switch_interval"] < 0:
         raise ValueError("daytime_min_switch_interval must not be negative")
+    if out["daytime_heavy_load_w"] <= 0:
+        raise ValueError("daytime_heavy_load_w must be positive")
+    if out["daytime_heavy_load_holdoff"] < 0:
+        raise ValueError("daytime_heavy_load_holdoff must not be negative")
 
     out["forbidden"] = _validate_windows(out["forbidden"], "forbidden")
     out["pump_window"] = _validate_windows(out["pump_window"], "pump_window")
@@ -369,7 +425,7 @@ class BatteryWindow:
     lock, retries and audit log with every other write source."""
 
     def __init__(self, service, path: str, override_check=None,
-                 trace_dir=None, signal_source=None):
+                 trace_dir=None, signal_source=None, heavy_load_source=None):
         self.service = service
         self.path = path
         # One CSV per day of what was decided and why. The telemetry log
@@ -385,6 +441,12 @@ class BatteryWindow:
         # window uses it; without it that window simply never opens, which
         # is the safe direction.
         self._signal_source = signal_source
+        # Callable (threshold_w, lookback_s) -> int: how many inverter-input
+        # readings above threshold arrived in the lookback -- see
+        # GridChargeController.heavy_input_readings(). That channel sees the
+        # load in bypass; in battery mode this class reads it off the
+        # inverter itself. Without it only the battery-mode half works.
+        self._heavy_load_source = heavy_load_source
 
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -403,7 +465,15 @@ class BatteryWindow:
         self._above_resume = 0
         self._pop_drift = 0           # consecutive ticks of POP disagreement
         self._pop_drift_writes = 0    # corrective writes already attempted
-        self._hardware_override_readings = 0
+        # True per healthy-voltage line reading, False per battery reading,
+        # while we believe POP02. See HARDWARE_OVERRIDE_LOOKBACK.
+        self._line_readings = deque(maxlen=HARDWARE_OVERRIDE_LOOKBACK)
+        # Monotonic times of heavy battery-mode load readings, and the wall
+        # clock time the daytime window stays shut until. Not persisted: a
+        # restart forgets the hold-off, which costs at most one attempt to
+        # open into the load before the next reading re-arms it.
+        self._heavy_seen = deque()
+        self._heavy_until = None
         self._pop_drift_alert = runtime.get("pop_drift_stuck", False)
         # A requested POP02 remains our responsibility until POP00 is ACKed.
         # QMOD=L and a lost reply cannot discharge that responsibility.
@@ -517,6 +587,10 @@ class BatteryWindow:
                 # If this stays True while the window is shut, a hand-back is
                 # failing and nobody is being told.
                 "release_pending": self._release_pending,
+                # Daytime window held shut by the heavy load until this
+                # local time, or None.
+                "heavy_load_until": (self._heavy_until.isoformat(timespec="seconds")
+                                     if self._heavy_until else None),
             }
 
     def set_config(self, updates: dict, now=None) -> dict:
@@ -611,19 +685,22 @@ class BatteryWindow:
         """
         mode = self.service.mode()
         if mode is None:
-            self._hardware_override_readings = 0
+            # No evidence either way. Not a reset: an unreadable mode in the
+            # middle of an oscillation must not erase the line readings
+            # already seen.
             return None
 
         if self._last_applied_pop == BATTERY_POP and mode != "B":
             v = self._battery_voltage()
             if mode == "L" and v is not None and v > self._config["floor_voltage"]:
                 # A healthy-voltage line transfer may be a transient. Require
-                # consecutive observations before spending the whole night.
+                # HARDWARE_OVERRIDE_CONFIRMATIONS line readings among the last
+                # HARDWARE_OVERRIDE_LOOKBACK before spending the whole night.
                 # Low/unknown voltage and fault modes still exit immediately.
-                self._hardware_override_readings += 1
-                if self._hardware_override_readings < HARDWARE_OVERRIDE_CONFIRMATIONS:
+                self._line_readings.append(True)
+                if sum(self._line_readings) < HARDWARE_OVERRIDE_CONFIRMATIONS:
                     return "hardware_override_pending"
-            self._hardware_override_readings = 0
+            self._line_readings.clear()
             # We believe we're discharging the pack; the device disagrees.
             # Treat tonight's discharge as already over -- that matches
             # physical reality -- and forget the stale assumption so the
@@ -634,7 +711,10 @@ class BatteryWindow:
             self._save_runtime()
             return "hardware_override"
 
-        self._hardware_override_readings = 0
+        if self._last_applied_pop == BATTERY_POP:
+            self._line_readings.append(False)     # mode == "B": agrees
+        else:
+            self._line_readings.clear()
         if self._last_applied_pop == GRID_POP and mode == "B":
             # We believe loads are on the grid; the device is on battery
             # anyway. Two very different causes, and the AC input voltage
@@ -686,6 +766,35 @@ class BatteryWindow:
             self._pop_drift_alert = False
             self._save_runtime()
         return None
+
+    def _note_heavy_load(self, now, mismatch) -> None:
+        """Arm the daytime hold-off on evidence of the heavy load: enough
+        heavy readings in the lookback (battery mode from the inverter,
+        bypass from the Shelly), or the device knocking a daytime discharge
+        back to line on its own."""
+        cfg = self._config
+        threshold = cfg["daytime_heavy_load_w"]
+        mono = time.monotonic()
+        if self.service.mode() == "B":
+            load = self.service.output_load_w()
+            if is_finite_number(load) and load > threshold:
+                self._heavy_seen.append(mono)
+        while self._heavy_seen and mono - self._heavy_seen[0] > HEAVY_LOAD_LOOKBACK_S:
+            self._heavy_seen.popleft()
+        count = len(self._heavy_seen)
+        if self._heavy_load_source is not None:
+            try:
+                external = self._heavy_load_source(threshold, HEAVY_LOAD_LOOKBACK_S)
+                if isinstance(external, int) and not isinstance(external, bool):
+                    count += external
+            except Exception:
+                pass    # the battery-mode half still works
+        in_night = rule_active(now.time(), parse_hhmm(cfg["from"]),
+                               parse_hhmm(cfg["to"]))
+        if count >= HEAVY_LOAD_READINGS or (
+                mismatch == "hardware_override" and not in_night):
+            self._heavy_until = now + timedelta(
+                seconds=cfg["daytime_heavy_load_holdoff"])
 
     def _surplus_signal(self):
         """(signal, fresh), or (None, False) when it cannot be had. A missing
@@ -781,6 +890,16 @@ class BatteryWindow:
                 f"já descarregou nesta janela ({v:.2f}V) — "
                 f"só volta à bateria na próxima")
 
+        if not in_night and self._heavy_until is not None and now < self._heavy_until:
+            # Before the surplus signal: the signal can be ideal while the
+            # pump runs, and that is exactly when this matters. Also closes
+            # an open daytime discharge -- one relay throw now instead of the
+            # inverter throwing it dozens of times under the load.
+            return GRID_POP, "daytime_heavy_load", (
+                f"carga pesada na saída (>{cfg['daytime_heavy_load_w']:.0f}W) — "
+                f"janela diurna fechada até {self._heavy_until:%H:%M}; "
+                f"a bateria não a aguenta")
+
         if not in_night:
             # Daytime hours: allowed only while the surplus signal says the
             # house would still be importing without this inverter. That
@@ -832,6 +951,7 @@ class BatteryWindow:
         # always fires one poll late. Kept out of _decide() so that
         # get_state() stays a pure read with no side effects.
         mismatch = self._reconcile_with_device()
+        self._note_heavy_load(now or datetime.now(), mismatch)
 
         v = self._battery_voltage()
         previous_runtime = (self._recovering, self._below_floor)
@@ -925,7 +1045,7 @@ class BatteryWindow:
         # The daytime mode crosses its band far more often than the nightly
         # window changes state, so it gets its own, larger dwell.
         dwell = (cfg["daytime_min_switch_interval"]
-                 if reason in ("daytime", "daytime_surplus")
+                 if reason in ("daytime", "daytime_surplus", "daytime_heavy_load")
                  else cfg["min_switch_interval"])
         dwell_ok = (now_mono - self._last_switch_mono) >= dwell
         # Going back to utility is a safety action; it never waits out the

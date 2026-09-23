@@ -776,6 +776,7 @@ const BW_REASON_TONE = {
   recovering: "warn",
   unknown_voltage: "err",
   yielding: "warn",
+  daytime_heavy_load: "warn",
 };
 
 function renderBatteryWindow(state) {
