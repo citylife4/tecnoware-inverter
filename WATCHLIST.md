@@ -41,6 +41,35 @@ production. What each should look like if it works:
   float, which would mean the release condition never matches on this unit's
   current readings.
 
+**09-24 morning. The nightly window was refused, and the program-13 rule
+predicted it (3 refusals, 3 hardware-ended days).** On 09-23 charging
+stopped at 16:59. The last battery span ended 17:15, followed by hardware
+overrides at 18:04, 18:27 and 18:50. The pack then sat rested at 25.6 to
+25.3 V all night and never reached 27 V. At 01:00 the POP02 reply came back
+garbled and was re-applied at 01:01. There were 2 pending ticks, and the
+latch came at 01:04 at 25.3 V. So the new floor was not tested at night.
+
+**The 24.5 V floor fired for the first time ever, in the daytime window.**
+The window opened at 08:12 into a pack that had only been surface-charged
+(capacity 50%). It fell to 24.5 V by 08:44 under ~50 W. `floor` latched at
+08:46 after 3 readings, before program 12. That is the software acting first,
+as intended.
+
+**New flaw, exposed by that, not a regression.** The latch released at 08:49,
+3 minutes after it fired. In daytime, release is `v >= resume_voltage` (25.3),
+and the charger had the pack at 27.0 V. This is the fourth
+float-vs-resting-voltage threshold. Only the 1200 s dwell and then
+`daytime_surplus` (signal 55-78 W, under 80) have kept a ~50% pack off
+battery since. The floor bounds each discharge, but a sunny day could cycle
+it floor-to-charge repeatedly. **Proposed fix, not applied:** release the
+daytime latch on the charger reaching float, the same condition as
+`LowBatteryLatch`.
+
+`release_pending` false, `loop_error` null, `pop_drift_stuck` false,
+`config_error` null, and no single-reading override. `LowBatteryLatch` never
+engaged: grid charging was already wanted. The heavy-load hold-off was not
+triggered.
+
 ## Regression watch, 2026-09-16 to 09-22 — closed
 
 Closed after seven days with every check clean. The session job had already
