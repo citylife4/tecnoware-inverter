@@ -70,6 +70,35 @@ daytime latch on the charger reaching float, the same condition as
 engaged: grid charging was already wanted. The heavy-load hold-off was not
 triggered.
 
+**09-24 evening. Day 1 of 5 — not clean. Two things misbehaved.**
+
+- **The heavy-load hold-off missed an oscillation.** The load came on at 18:55
+  while the daytime window had the pack on battery. The inverter oscillated
+  B/L with 1194-1986 W readings about every 20 s until the 19:00 pump block
+  closed the window: 16 of the day's 30 relay throws came in hour 18. The
+  hold-off never armed. It samples the inverter's load only once per 60 s
+  tick, and every tick landed on a `B`/45 W or `L` reading. The Shelly saw
+  only one heavy reading before 19:00. **Fix proposed, not applied:** count
+  heavy battery-mode samples from the service's 10 s telemetry history, not
+  from the tick's single sample.
+- **It did work once, correctly.** It armed at 16:51 on two Shelly readings
+  (1309 and 1289 W at 16:43) with the load really there, and held 60 ticks.
+  It never fired without a heavy load, and no fridge inrush triggered it.
+- **A stall, the first since 09-11.** No telemetry from 16:28:18 to 16:34:48
+  (390 s), with the HTTP API also unresponsive, so the whole process was
+  wedged. `usb_watchdog` caught it at 16:33:10. Its restart hung 60 s
+  ("shutdown hand-back blocked by active tick; persisted obligation
+  retained"), so it rebound USB and restarted at 16:34:57. The loads were on
+  utility throughout (POP00, `release_pending` false), so it was harmless.
+  Recovery took ~6.5 min. The in-process 300 s detector did not get there
+  first. Minute :28, so it does not fit the :02 pattern.
+
+Debounce: one override (01:04, 2 min from the first pending). A single
+pending at 18:57 did not fire. `LowBatteryLatch` never engaged (0 ticks).
+`release_pending` false, `loop_error` null, `pop_drift_stuck` false,
+`config_error` null, 357 tests green. Export 0 Wh. 5 POP write failures
+(one 2-tick episode at 18:24-18:25), all recovered.
+
 ## Regression watch, 2026-09-16 to 09-22 — closed
 
 Closed after seven days with every check clean. The session job had already
