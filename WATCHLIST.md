@@ -70,6 +70,19 @@ daytime latch on the charger reaching float, the same condition as
 engaged: grid charging was already wanted. The heavy-load hold-off was not
 triggered.
 
+**09-25 morning. The first night ever to end on the software floor.** The
+window opened at 01:00 at 27.6 V (float; the charger ran to 22:12). It
+discharged until `below_floor` counted 1, 2, 3 at 06:05, 06:06 and 06:07, and
+`floor` handed back at 06:07:50. There was no `hardware_override` all night,
+and none on a single reading. Quiet-sample minimum was 24.5 V at 06:03, and
+it delivered **71 Wh**, below the 100-115 Wh predicted from 09-20/22. That is
+one night, so draw no conclusion yet. The grid then recharged it in bulk
+(10-11 A, 29.0 V) and tapered to 4 A by ~08:00. The daytime window re-entered
+at 08:49, so today the daytime latch release happened to coincide with float.
+The flaw from 09-24 is still there in principle. `release_pending` is True at
+09:07, which is correct because the daytime window has the pack on battery.
+`loop_error` null, `pop_drift_stuck` false, `config_error` null.
+
 **09-24 evening. Day 1 of 5 — not clean. Two things misbehaved.**
 
 - **The heavy-load hold-off missed an oscillation.** The load came on at 18:55
