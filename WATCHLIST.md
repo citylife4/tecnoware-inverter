@@ -70,6 +70,28 @@ daytime latch on the charger reaching float, the same condition as
 engaged: grid charging was already wanted. The heavy-load hold-off was not
 triggered.
 
+**09-25 evening. Clean day (1 of 5; 09-24 was not clean).**
+
+- **The hold-off worked as intended.** The load ran 16:53-17:04 while the
+  window was yielding to grid charge (loads on grid, so no throws; the
+  inverter reported ~1190 W in `L`). The hold-off armed on it and kept the
+  daytime window shut from 17:08 to 18:08 (63 ticks). It reopened at 18:11
+  with no load. No false triggers: the two lone Shelly readings at 08:53 and
+  10:47 did not arm it.
+- **Relay throws 18**, back in the normal range. >800 W samples by local
+  hour: 16 (16), 17 (13), 18 (1), 19 (7), 20 (22).
+- No `hardware_override` today, so the debounce wasn't exercised.
+  `LowBatteryLatch` never engaged (0 ticks).
+- `release_pending` false, `loop_error` null, `pop_drift_stuck` false,
+  `config_error` null. No restart or stall (up since 09-24 16:34). 357 tests
+  green. Export 0 Wh. 5 POP + 2 PCP write failures, all recovered. The 19:00
+  POP00 timed out, but the device obeyed (`L` at 19:01:16) and the next tick
+  confirmed it.
+- **Prediction for tonight (program-13 rule):** charging stopped at 17:07,
+  but the day ended in a software close (`B` until 19:00:41, then POP00). So
+  the window should **run** from a rested ~25.5-25.8 V, as on 09-21, and hit
+  the 24.5 V floor early.
+
 **09-25 morning. The first night ever to end on the software floor.** The
 window opened at 01:00 at 27.6 V (float; the charger ran to 22:12). It
 discharged until `below_floor` counted 1, 2, 3 at 06:05, 06:06 and 06:07, and
