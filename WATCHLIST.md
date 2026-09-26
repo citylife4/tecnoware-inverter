@@ -70,6 +70,17 @@ daytime latch on the charger reaching float, the same condition as
 engaged: grid charging was already wanted. The heavy-load hold-off was not
 triggered.
 
+**Deployed 2026-09-26 22:37: the daytime latch releases on float, not on
+charging voltage.** `BatteryWindow._recovered()`: while the charger runs
+(current > 0), the latch re-arms only at >= 27.0 V and <= 4 A, the same
+condition as `LowBatteryLatch`. With 0 A it is `resume_voltage` as before, so
+the 09-15 rested-pack release survives. An unknown current releases nothing.
+Replay tests of the 09-26 morning fail against the old code. **What to look
+for:** after a night that ends on the floor, `recovering` should hold through
+bulk and release only once the current reads 4 A at ~29 V. No `daytime`
+entry should happen into a pack below ~25.5 V. Clean-day count restarts
+from 09-27.
+
 **09-26 evening. Not a clean day (the morning's extra discharge, below); the
 rest behaved.** Clean-day count still 1 (09-25).
 

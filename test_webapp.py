@@ -85,8 +85,9 @@ class FakeService:
     def battery_voltage(self):
         return self._battery_voltage
 
-    # Set by tests of safety.LowBatteryLatch; None like a missing reading.
-    _charging_current = None
+    # Charger off by default, like most tests assume. Tests of the latches
+    # set it; None stands for a missing reading.
+    _charging_current = 0
 
     def battery_charging_current(self):
         return self._charging_current

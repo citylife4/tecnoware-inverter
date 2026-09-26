@@ -1073,6 +1073,16 @@ WATCHLIST.md; recorded here so the before-state is not lost:
 357 tests. The new debounce tests were checked to fail against the old
 code.
 
+**2026-09-26 22:37 — fourth float-vs-resting threshold fixed.** The
+battery-window latch released on `v >= resume_voltage` while the morning
+charger was running: 27.0 V at ~50% state of charge. The daytime window
+re-entered and took the pack to 24.2 V. It now releases on float
+(>= 27.0 V, <= 4 A) while charging, and on `resume_voltage` only at 0 A. The
+four instances so far are `floor_voltage` (08-25), `resume_voltage` (09-15),
+`min_battery_voltage` (09-23) and this one. **Any new threshold compared
+against battery voltage needs the same question asked: can the charger be
+on when it is read?**
+
 **What this does sharpen: `floor_voltage` (24.0) and program 12 (24 V) are now
 known to be identical, not merely close.** The software floor can never act
 first. Combined with the load gate — `below_floor` only counts under 10 W, so

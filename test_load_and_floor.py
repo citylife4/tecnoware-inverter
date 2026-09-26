@@ -171,6 +171,60 @@ class TestLowBatteryLatch(unittest.TestCase):
                          "the old stateless check would write PCP03 here")
 
 
+class TestDaytimeLatchRelease(unittest.TestCase):
+    """2026-09-26: the night ended on the floor at 03:10; the charger started
+    at 08:22 and the latch released at 08:25 on 27.0 V of charging voltage.
+    The daytime window put a ~50% pack back on battery and it hit 24.2 V."""
+
+    MORNING = datetime(2026, 9, 26, 9, 0)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.service = FakeService(battery_voltage=24.5, output_load_w=1)
+        self.bw = BatteryWindow(
+            self.service, os.path.join(self.tmp.name, "bw.json"),
+            signal_source=lambda: (300.0, True))
+        self.bw.set_config({"enabled": True, "min_switch_interval": 0,
+                            "daytime_enabled": True,
+                            "daytime_min_switch_interval": 0}, now=NIGHT)
+        for _ in range(3):
+            self.bw.tick(now=NIGHT)          # floor latches at 24.5 V
+        self.assertTrue(self.bw.get_state()["recovering"])
+        self.service._device_mode = "L"
+
+    def ticks(self, v, amps, n=5):
+        self.service._battery_voltage = v
+        self.service._charging_current = amps
+        for _ in range(n):
+            r = self.bw.tick(now=self.MORNING)
+        return r
+
+    def test_bulk_charging_voltage_does_not_release(self):
+        r = self.ticks(27.0, 10)
+        self.assertTrue(self.bw.get_state()["recovering"])
+        self.assertEqual(r["target"], GRID_POP)
+        r = self.ticks(29.0, 8)
+        self.assertTrue(self.bw.get_state()["recovering"])
+
+    def test_releases_once_the_charger_reaches_float(self):
+        self.ticks(29.0, 10)
+        self.service.sent.clear()
+        self.ticks(29.1, 4, n=3)
+        self.assertFalse(self.bw.get_state()["recovering"])
+        self.assertEqual(self.service.sent, ["POP02"])
+
+    def test_rested_pack_with_the_charger_off_still_releases(self):
+        """The 2026-09-15 fix must survive: a rested full pack, nothing
+        charging overnight."""
+        self.ticks(25.4, 0)
+        self.assertFalse(self.bw.get_state()["recovering"])
+
+    def test_unknown_current_does_not_release(self):
+        self.ticks(27.4, None)
+        self.assertTrue(self.bw.get_state()["recovering"])
+
+
 class TestHeavyInputReadings(unittest.TestCase):
     def test_counts_heavy_shelly_readings(self):
         tmp = tempfile.TemporaryDirectory()

@@ -321,6 +321,10 @@ output as the loads:
    **one discharge per night**. Releasing on voltage alone would discharge
    to the floor, recharge, and discharge again: several cycles a night,
    which is the exact wear the controller exists to prevent.
+   Outside the night, while charging, the latch releases only once the
+   charger reaches float (>= 27.0 V, <= 4 A), not on `resume_voltage`. On
+   2026-09-26 it released on 27.0 V of charging voltage and put a ~50% pack
+   back on battery.
    Since 2026-09-23 the floor is **24.5 V**. At 24.0 it was identical to
    front-panel program 12 (24 V), so the hardware always ended the night
    first. Keep it above program 12, or it is decorative.

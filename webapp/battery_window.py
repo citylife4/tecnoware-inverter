@@ -57,7 +57,8 @@ from charge_schedule import parse_hhmm, rule_active
 from transport import InverterError
 from webapp import config_error
 from webapp.atomic_write import write_json_atomic
-from webapp.safety import is_finite_number
+from webapp.safety import (FLOOR_RELEASE_MAX_A, FLOOR_RELEASE_MIN_V,
+                           is_finite_number)
 from webapp.trace import append_row
 
 GRID_POP = "00"       # utility first -- loads on grid, charger able to work
@@ -767,6 +768,32 @@ class BatteryWindow:
             self._save_runtime()
         return None
 
+    def _recovered(self, v) -> bool:
+        """Has the pack recovered enough to re-arm the latch?
+
+        `v >= resume_voltage` alone is only meaningful at rest. The charger
+        raises the terminal voltage past 25.3 V within minutes, whatever the
+        state of charge. Live on 2026-09-26: the night ended on the floor at
+        03:10, charging began at 08:22, and at 08:25 the latch released on
+        27.0 V. The daytime window then put a ~50% pack straight back on
+        battery. It fell 25.4 -> 24.2 V in 7 minutes, below the floor, before
+        it latched again. That is the fourth float-vs-resting-voltage threshold
+        on this installation (see CLAUDE.md), and the same fix as
+        safety.LowBatteryLatch.
+
+        So: while charging, recovered means the charger has reached float.
+        With nothing charging, resume_voltage applies as before, which keeps
+        the 2026-09-15 fix (release on a rested full pack with no charger). An
+        unknown current releases nothing -- the safe direction for a latch.
+        """
+        fn = getattr(self.service, "battery_charging_current", None)
+        amps = fn() if fn else None
+        if not is_finite_number(amps):
+            return False
+        if amps > 0:
+            return amps <= FLOOR_RELEASE_MAX_A and v >= FLOOR_RELEASE_MIN_V
+        return v >= self._config["resume_voltage"]
+
     def _note_heavy_load(self, now, mismatch) -> None:
         """Arm the daytime hold-off on evidence of the heavy load: enough
         heavy readings in the lookback (battery mode from the inverter,
@@ -999,7 +1026,7 @@ class BatteryWindow:
                 self._recovering = True
                 self._above_resume = 0
             elif (self._recovering and not in_night
-                    and v >= cfg["resume_voltage"]):
+                    and self._recovered(v)):
                 # Nightly window closed and the pack is back up: re-arm, once
                 # RESUME_CONFIRMATIONS consecutive readings agree. Keyed to
                 # the nightly window only, so "one discharge per night"
