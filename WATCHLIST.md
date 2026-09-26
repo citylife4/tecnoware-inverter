@@ -70,6 +70,42 @@ daytime latch on the charger reaching float, the same condition as
 engaged: grid charging was already wanted. The heavy-load hold-off was not
 triggered.
 
+**09-26 morning. Not clean: the daytime-latch flaw caused a real extra
+discharge.**
+
+- **The night confirmed the program-13 prediction.** It ran from a rested
+  25.2 V (a software close the previous evening), the second rested night to
+  run after a software close. `below_floor` counted 1, 2, 3 and `floor` fired
+  at 03:10 at 24.4 V. POP00 timed out and was re-applied at 03:11. It
+  delivered **36 Wh**, with a quiet minimum of 24.4 V. There was no
+  `hardware_override`.
+- **The pack then sat at 24.5-24.6 V from 03:10 to 08:23 with nothing
+  charging.** `grid_charge` is `disabled_no_solar` overnight and writes
+  nothing. That's shallower than the old 24.0 V end, but it's 5 h at ~50%.
+  (Cosmetic: `below_floor` kept counting in `L` mode, reaching 122, and the
+  reason flips `floor`/`recovering` all night. It's harmless because the
+  latch was already set.)
+- **`LowBatteryLatch` engaged for the first time and worked.** From 08:22
+  `grid_charge` wanted `idle` (PCP03) but held PCP01 with "holding utility
+  charging until the pack reaches float". At 09:07 it was still holding at
+  27.8 V and 10 A, where the old stateless check would have released at
+  27 V. (Correction: the trace has no `why` column, so the "0 latch ticks"
+  reported on 09-24/25 measured nothing. Read `why` from `/api/grid-charge`.)
+- **The daytime-latch flaw fired.** 3 minutes into that charge, the
+  battery-window latch released on 27.0 V (charging voltage, not resting,
+  against `resume_voltage` 25.3). At 08:25 the daytime window put the ~50%
+  pack back on battery. It fell 25.4 -> 24.2 V in 7 min under 45-92 W, and
+  `floor` latched at 08:32 at **24.2 V**, under the 24.5 floor because the
+  tick sees 1 sample in 6. That's one extra discharge and 2 relay throws.
+  Since then it has tried to re-enter three more times, held off only by the
+  1200 s dwell and `daytime_surplus`. **It will repeat on any day that starts
+  with a discharged pack.** The fix proposed on 09-24 (release on the charger
+  reaching float) is now justified by an actual occurrence. Not applied:
+  awaiting the user.
+
+`release_pending` false, `loop_error` null, `pop_drift_stuck` false,
+`config_error` null. No single-reading override.
+
 **09-25 evening. Clean day (1 of 5; 09-24 was not clean).**
 
 - **The hold-off worked as intended.** The load ran 16:53-17:04 while the
