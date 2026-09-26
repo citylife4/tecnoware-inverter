@@ -61,9 +61,8 @@ and the charger had the pack at 27.0 V. This is the fourth
 float-vs-resting-voltage threshold. Only the 1200 s dwell and then
 `daytime_surplus` (signal 55-78 W, under 80) have kept a ~50% pack off
 battery since. The floor bounds each discharge, but a sunny day could cycle
-it floor-to-charge repeatedly. **Proposed fix, not applied:** release the
-daytime latch on the charger reaching float, the same condition as
-`LowBatteryLatch`.
+it floor-to-charge repeatedly. **Fixed 09-26 22:37** (release on the
+charger reaching float); see the entry above it.
 
 `release_pending` false, `loop_error` null, `pop_drift_stuck` false,
 `config_error` null, and no single-reading override. `LowBatteryLatch` never
