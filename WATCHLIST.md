@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-26 (22:37: daytime latch release fixed)
+Last updated: 2026-09-26 (22:55: daytime latch and hold-off sampling fixed)
 
 ---
 
@@ -30,7 +30,8 @@ production. What each should look like if it works:
   `hardware_override_pending` that never fires is still correct.
 - **Daytime heavy-load hold-off.** Reason `daytime_heavy_load`: the daytime
   window stays shut for 1 h after 2+ readings above 800 W within 10 min (the
-  Shelly in bypass, the inverter in battery mode), or after any daytime
+  inverter's 10 s telemetry in any mode, or the Shelly; the larger count,
+  since 09-26 22:55), or after any daytime
   `hardware_override`. `heavy_load_until` in the API shows it. On a gardening
   day relay throws should stay near ~16, not 96. **Not persisted**: a restart
   forgets it.
