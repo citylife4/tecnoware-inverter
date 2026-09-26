@@ -70,6 +70,28 @@ daytime latch on the charger reaching float, the same condition as
 engaged: grid charging was already wanted. The heavy-load hold-off was not
 triggered.
 
+**09-26 evening. Not a clean day (the morning's extra discharge, below); the
+rest behaved.** Clean-day count still 1 (09-25).
+
+- **`LowBatteryLatch` never held PCP01 past float.** There were three override
+  spans (desired `idle`, target 01): 08:22-09:29 during bulk at 10-11 A;
+  12:36-13:19 after a daytime discharge ended at 25.4 V; and 17:58 until
+  sunset. Each ended in genuine `charging` (export absorption) or with PCP03
+  on the next `idle` tick. The trace has no `why` column, so the exact release
+  tick isn't visible. **Side effect to watch:** at `min_battery_voltage` 25.5
+  it re-arms after almost every daytime discharge (those end at 25.4-25.5 V)
+  and then grid-charges the pack to float in daylight. Export was **5 Wh**
+  today (45 samples, worst -40 W), the first non-zero day since 09-19. One
+  day, so this is not established as the cause.
+- After 08:32 the daytime window only entered from a full pack (11:05 from
+  26.4 V, 17:35 from 25.8 V), so there was no repeat of the morning's flaw.
+- Heavy-load hold-off: 0 daytime ticks. It armed on the evening pump
+  (19:04-20:33, outside the daytime window) and did not arm on a lone
+  night-time reading at 03:53. Throws 14. No `hardware_override`.
+- `release_pending` false, `loop_error` null, `pop_drift_stuck` false,
+  `config_error` null. No stall (up since 09-24 16:34). 357 tests green.
+  3 POP write failures, all recovered.
+
 **09-26 morning. Not clean: the daytime-latch flaw caused a real extra
 discharge.**
 
