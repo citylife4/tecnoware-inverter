@@ -5,7 +5,7 @@ Both added 2026-09-23 from WATCHLIST.md decisions 1 and 3.
 import os
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from test_webapp import FakeService
 from webapp.battery_window import (BATTERY_POP, GRID_POP, BatteryWindow,
@@ -98,6 +98,36 @@ class TestDaytimeHeavyLoad(unittest.TestCase):
         def boom(w, s):
             raise RuntimeError("auto-energy down")
         self.bw._heavy_load_source = boom
+        self.assertEqual(self.bw.tick(now=NOON)["reason"], "daytime")
+
+    def history_with(self, *watts):
+        now = datetime.now(timezone.utc)
+        return [{"ts": (now - timedelta(seconds=10 * i)).isoformat(),
+                 "ac_output_active_power": w} for i, w in enumerate(watts)]
+
+    def test_samples_between_ticks_arm_it(self):
+        """2026-09-24 18:55: heavy readings every ~20 s, none on a tick."""
+        self.service._device_mode = "B"
+        self.service._output_load_w = 45      # what the tick itself sees
+        self.service.history = lambda: self.history_with(45, 1194, 1, 1986, 45)
+        r = self.bw.tick(now=NOON)
+        self.assertEqual(r["reason"], "daytime_heavy_load")
+
+    def test_one_inrush_in_the_history_does_not(self):
+        self.service._device_mode = "B"
+        self.service.history = lambda: self.history_with(45, 1223, 46, 45, 45)
+        self.assertEqual(self.bw.tick(now=NOON)["reason"], "daytime")
+
+    def test_old_samples_age_out(self):
+        old = datetime.now(timezone.utc) - timedelta(minutes=30)
+        self.service.history = lambda: [
+            {"ts": (old - timedelta(seconds=i)).isoformat(),
+             "ac_output_active_power": 1200} for i in range(5)]
+        self.assertEqual(self.bw.tick(now=NOON)["reason"], "daytime")
+
+    def test_same_event_on_both_sources_counts_once(self):
+        self.external["n"] = 1
+        self.service.history = lambda: self.history_with(45, 1223, 45)
         self.assertEqual(self.bw.tick(now=NOON)["reason"], "daytime")
 
     def test_validation(self):

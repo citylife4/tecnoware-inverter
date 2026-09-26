@@ -390,7 +390,9 @@ yield to `grid_charge`. A missing or stale signal keeps the window shut.
 hand, so no time block covers it. The window instead closes for
 `daytime_heavy_load_holdoff` (1 h) after 2+ readings above
 `daytime_heavy_load_w` (800 W) within 10 min, or after any daytime
-`hardware_override`. Bypass readings come from the Shelly via
+`hardware_override`. The inverter's readings come from its 10 s telemetry
+history, not the 60 s tick's single sample, which missed a whole oscillation
+on 2026-09-24. Bypass readings also come from the Shelly via
 `GridChargeController.heavy_input_readings()`, since the inverter's own
 figure is a 1 W placeholder there (gotcha #3). It takes two readings because
 the fridge's inrush reaches ~1.2 kW for a single sample. It is a count and

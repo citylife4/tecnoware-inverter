@@ -794,31 +794,74 @@ class BatteryWindow:
             return amps <= FLOOR_RELEASE_MAX_A and v >= FLOOR_RELEASE_MIN_V
         return v >= self._config["resume_voltage"]
 
+    def _heavy_samples_from_history(self, threshold, mono):
+        """Heavy readings in the lookback from the service's 10 s telemetry,
+        or None when there is no history to read.
+
+        The tick runs every 60 s and used to test only the sample it landed
+        on. On 2026-09-24, 18:55-19:00, the inverter logged 1194-1986 W about
+        every 20 s while oscillating B/L under the pump, every tick landed
+        between them, and the hold-off never armed: 16 relay throws in that
+        hour. Any mode counts. In bypass the placeholder is 1 W, so a reading
+        above threshold is a real load there too (~1190 W in `L`, 2026-09-25).
+        """
+        try:
+            history = self.service.history()
+        except Exception:
+            return None
+        if not history:
+            return None
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=HEAVY_LOAD_LOOKBACK_S)
+        count = 0
+        for sample in history:
+            w = sample.get("ac_output_active_power")
+            if not (is_finite_number(w) and w > threshold):
+                continue
+            try:
+                at = datetime.fromisoformat(sample["ts"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=timezone.utc)
+            if at >= cutoff:
+                count += 1
+        return count
+
     def _note_heavy_load(self, now, mismatch) -> None:
         """Arm the daytime hold-off on evidence of the heavy load: enough
-        heavy readings in the lookback (battery mode from the inverter,
-        bypass from the Shelly), or the device knocking a daytime discharge
-        back to line on its own."""
+        heavy readings in the lookback from either source (the inverter's own
+        telemetry, or the Shelly via heavy_load_source), or the device knocking
+        a daytime discharge back to line on its own.
+
+        The larger of the two counts, not the sum: the two sources often see
+        the same event. One fridge inrush caught once by each must not add up
+        to the two readings a real heavy load produces.
+        """
         cfg = self._config
         threshold = cfg["daytime_heavy_load_w"]
         mono = time.monotonic()
-        if self.service.mode() == "B":
-            load = self.service.output_load_w()
-            if is_finite_number(load) and load > threshold:
-                self._heavy_seen.append(mono)
-        while self._heavy_seen and mono - self._heavy_seen[0] > HEAVY_LOAD_LOOKBACK_S:
-            self._heavy_seen.popleft()
-        count = len(self._heavy_seen)
+        own = self._heavy_samples_from_history(threshold, mono)
+        if own is None:
+            # No telemetry history (tests, or the poller not yet started):
+            # fall back to the sample this tick sees, in battery mode only.
+            if self.service.mode() == "B":
+                load = self.service.output_load_w()
+                if is_finite_number(load) and load > threshold:
+                    self._heavy_seen.append(mono)
+            while self._heavy_seen and mono - self._heavy_seen[0] > HEAVY_LOAD_LOOKBACK_S:
+                self._heavy_seen.popleft()
+            own = len(self._heavy_seen)
+        external = 0
         if self._heavy_load_source is not None:
             try:
-                external = self._heavy_load_source(threshold, HEAVY_LOAD_LOOKBACK_S)
-                if isinstance(external, int) and not isinstance(external, bool):
-                    count += external
+                value = self._heavy_load_source(threshold, HEAVY_LOAD_LOOKBACK_S)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    external = value
             except Exception:
-                pass    # the battery-mode half still works
+                pass    # the inverter's own half still works
         in_night = rule_active(now.time(), parse_hhmm(cfg["from"]),
                                parse_hhmm(cfg["to"]))
-        if count >= HEAVY_LOAD_READINGS or (
+        if max(own, external) >= HEAVY_LOAD_READINGS or (
                 mismatch == "hardware_override" and not in_night):
             self._heavy_until = now + timedelta(
                 seconds=cfg["daytime_heavy_load_holdoff"])

@@ -71,6 +71,15 @@ charger reaching float); see the entry above it.
 engaged: grid charging was already wanted. The heavy-load hold-off was not
 triggered.
 
+**Deployed 2026-09-26 22:55: the hold-off counts the inverter's 10 s
+telemetry, not the tick's one sample.** Any mode counts, because a reading
+above 800 W is real even in bypass. It takes the larger of the inverter and
+Shelly counts, not the sum, so one inrush seen by both doesn't arm it.
+Replayed on 09-18..26: it arms only on pump clusters (6x on 09-19, none on
+09-20/22/26), never on isolated spikes, and it would have caught 09-24 18:56.
+**What to look for:** on a pump day, `daytime_heavy_load` within ~1 minute
+of the load starting while on battery, and at most a few throws per episode.
+
 **Deployed 2026-09-26 22:37: the daytime latch releases on float, not on
 charging voltage.** `BatteryWindow._recovered()`: while the charger runs
 (current > 0), the latch re-arms only at >= 27.0 V and <= 4 A, the same
