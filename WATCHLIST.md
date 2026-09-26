@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-23 (evening: regression watch closed, three decisions deployed)
+Last updated: 2026-09-26 (22:37: daytime latch release fixed)
 
 ---
 
@@ -36,8 +36,10 @@ production. What each should look like if it works:
   forgets it.
 - **`grid_charge` low-battery latch** (`safety.LowBatteryLatch`). Below
   `min_battery_voltage` it holds PCP01 until the charger reaches float
-  (>= 27.0 V and <= 4 A, 3 readings in a row). The `why` column reads "holding
-  utility charging until the pack reaches float". Watch for PCP01 holding past
+  (>= 27.0 V and <= 4 A, 3 readings in a row). `why` in `/api/grid-charge`
+  reads "holding utility charging until the pack reaches float". The trace CSV
+  has no `why` column, so find it there as desired `idle` with target `01`.
+  Watch for PCP01 holding past
   float, which would mean the release condition never matches on this unit's
   current readings.
 
