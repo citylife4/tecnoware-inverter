@@ -72,6 +72,18 @@ charger reaching float); see the entry above it.
 engaged: grid charging was already wanted. The heavy-load hold-off was not
 triggered.
 
+**09-27 morning. Clean, and the 09-26 latch fix confirmed live.** The window
+opened at 01:00 at 27.6 V (float). `below_floor` reached 3 and `floor` handed
+back at 06:08 at 24.5 V (quiet minimum 24.5 V at 06:05), after **76 Wh**
+overnight. There was no `hardware_override`. The charger started at once
+(10 A by 06:20, PCP01 standing from the evening). **`recovering` held through
+bulk** (27.1 -> 29.0 V at 10 A) and released only at 08:02 at 29.1 V / 4 A,
+exactly the float condition. The daytime window then entered from a full
+pack. On 09-26 the same sequence released at 27.0 V after 3 minutes.
+`release_pending` True at 09:07, which is correct because the daytime window
+has the pack on battery. `loop_error` null, `pop_drift_stuck` false,
+`config_error` null.
+
 **Deployed 2026-09-26 22:55: the hold-off counts the inverter's 10 s
 telemetry, not the tick's one sample.** Any mode counts, because a reading
 above 800 W is real even in bypass. It takes the larger of the inverter and
