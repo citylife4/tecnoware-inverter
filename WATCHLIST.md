@@ -72,6 +72,32 @@ charger reaching float); see the entry above it.
 engaged: grid charging was already wanted. The heavy-load hold-off was not
 triggered.
 
+**09-27 evening. Clean day (1 of 5, counting from 09-27). The new hold-off
+sampling worked live on a pump day.**
+
+- **Hold-off.** The pump started at 12:46:49 while the pack was on battery.
+  The next tick read `hardware_override_pending` (12:47:16), and the one after
+  armed `daytime_heavy_load` and handed back (12:48:16): ~1.5 min and 5 relay
+  throws, against 09-24's missed episode and 09-19's 2h11m. It then re-armed
+  on each later pump cluster through 17:16 (176 ticks, interleaved with
+  `yielding`). Heavy samples by local hour: 12 (4), 13 (1), 14 (23), 15 (4),
+  16 (9), 19 (7), 20 (41). Every arming matched real heavy readings; no false
+  triggers. **Relay throws 18** on a pump day, against 96 on 09-19. One sag to
+  23.3 V at 1333 W was sag, not depth.
+- **Debounce:** no `hardware_override`. The one pending at 12:47 was superseded
+  by the hold-off, which is correct.
+- **`LowBatteryLatch`:** override spans 08:51-09:25 (then genuine charging),
+  12:22-13:14, and 17:39 to sunset. At 13:14 it released ~1.5 min after the
+  current reached 4 A at 27.4 V, the float condition, to PCP03. **One odd
+  tick:** at 04:17:31 a reading marked not-fresh made `grid_charge` evaluate
+  `idle` instead of `disabled_no_solar`. The latch was armed (pack 25.0 V on
+  battery), so it wrote PCP01 once. That's a no-op under POP02 and harmless,
+  but it's the existing "unknown -> idle" path writing at night, noted rather
+  than fixed.
+- `release_pending` false, `loop_error` null, `pop_drift_stuck` false,
+  `config_error` null. No stall (up since 09-26 22:55). 365 tests green.
+  Export 0 Wh. 1 POP + 3 PCP write failures, all recovered.
+
 **09-27 morning. Clean, and the 09-26 latch fix confirmed live.** The window
 opened at 01:00 at 27.6 V (float). `below_floor` reached 3 and `floor` handed
 back at 06:08 at 24.5 V (quiet minimum 24.5 V at 06:05), after **76 Wh**
