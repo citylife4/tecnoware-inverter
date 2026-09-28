@@ -72,16 +72,32 @@ charger reaching float); see the entry above it.
 engaged: grid charging was already wanted. The heavy-load hold-off was not
 triggered.
 
-**09-28 morning. Clean on everything that could be checked.** The window
+**09-28 evening. Clean day (2 of 5).**
+
+- **Hold-off armed on a short pump burst.** Two ~1.2 kW transfers 80 s apart
+  (08:28:03 at 1189 W, 08:29:21 at 1235 W, the pump's signature, not the
+  fridge's) put the pack briefly on line twice while on battery. The next tick
+  (08:29:57) armed `daytime_heavy_load` and handed back. The POP00 reply was
+  garbled, but the device was in `L` by 08:30:10 and the following tick
+  confirmed it. 66 ticks of hold-off in total. No false triggers.
+- **Relay throws 16**: 6 in hour 8, 4 of them that burst. >800 W samples by
+  local hour: 8 (2), 10 (1), 17 (1), 20 (28).
+- No `hardware_override`. `LowBatteryLatch` override spans at 10:45 (one tick,
+  then genuine charging) and 16:17-17:04 (then charging, then PCP03 at 17:26),
+  none past float.
+- `release_pending` false, `loop_error` null, `pop_drift_stuck` false,
+  `config_error` null. No stall (up since 09-26 22:55). 365 tests green.
+  Export **2 Wh** (22 samples, worst -35 W). 2 PCP write failures, recovered.
+
+**09-28 morning. Clean.** The window
 opened at 01:00 at 27.3 V (float). `below_floor` counted 1, 2, 3 at 06:09,
 06:10 and 06:11, and `floor` handed back at 06:11:55 at 24.5 V. No override
 all night: `recovering` stayed False and the window stayed on POP02 until the
 floor. The latch then held through bulk to 29.1 V and released at 08:02:57.
 The daytime window entered from a full pack, the same as 09-27. The persisted
-state shows `release_pending` false and `pop_drift_stuck` false. **Not
-checked:** Bash was unavailable this run (the auto-mode classifier returned
-no verdict 4 times), so Wh delivered, the quiet-sample minimum, `loop_error`
-and `config_error` were not read. The evening check should cover them.
+state shows `release_pending` false and `pop_drift_stuck` false. Filled in by the evening
+run, since Bash was unavailable in the morning: **67 Wh** overnight, quiet
+minimum 24.5 V at 06:08, `loop_error` null, `config_error` null.
 
 **09-27 evening. Clean day (1 of 5, counting from 09-27). The new hold-off
 sampling worked live on a pump day.**
