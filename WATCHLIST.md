@@ -72,6 +72,17 @@ charger reaching float); see the entry above it.
 engaged: grid charging was already wanted. The heavy-load hold-off was not
 triggered.
 
+**09-28 morning. Clean on everything that could be checked.** The window
+opened at 01:00 at 27.3 V (float). `below_floor` counted 1, 2, 3 at 06:09,
+06:10 and 06:11, and `floor` handed back at 06:11:55 at 24.5 V. No override
+all night: `recovering` stayed False and the window stayed on POP02 until the
+floor. The latch then held through bulk to 29.1 V and released at 08:02:57.
+The daytime window entered from a full pack, the same as 09-27. The persisted
+state shows `release_pending` false and `pop_drift_stuck` false. **Not
+checked:** Bash was unavailable this run (the auto-mode classifier returned
+no verdict 4 times), so Wh delivered, the quiet-sample minimum, `loop_error`
+and `config_error` were not read. The evening check should cover them.
+
 **09-27 evening. Clean day (1 of 5, counting from 09-27). The new hold-off
 sampling worked live on a pump day.**
 
