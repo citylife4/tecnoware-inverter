@@ -11,7 +11,7 @@
    aparece no browser é que é traduzido. */
 const UI_LABELS = (() => {
   try { return JSON.parse(document.getElementById("ui-labels").textContent); }
-  catch (e) { return { modes: {}, ratings: {}, batteryTypes: {} }; }
+  catch (e) { return { modes: {}, ratings: {}, batteryTypes: {}, profiles: {} }; }
 })();
 
 const KIND_LABELS = {
@@ -781,6 +781,7 @@ const BW_REASON_TONE = {
 
 function renderBatteryWindow(state) {
   if (!document.querySelector("#bw-enabled")) return;   // secção não renderizada
+  renderBatteryProfile(state);
   const cfg = state.config || {};
   $("#bw-enabled").checked = cfg.enabled;
   $("#bw-status").textContent = cfg.enabled ? "ativada" : "desativada";
@@ -885,6 +886,29 @@ function renderBatteryWindow(state) {
   }
 }
 
+/* Perfil ativo: deduzido pelo servidor das definições atuais, por isso
+   uma edição manual aparece como "personalizado" e nenhum botão acende. */
+function renderBatteryProfile(state) {
+  const box = document.querySelector("#bw-profiles");
+  if (!box) return;
+  box.querySelectorAll("[data-profile]").forEach((b) => {
+    b.classList.toggle("active", b.dataset.profile === state.profile);
+  });
+  const custom = document.querySelector("#bw-profile-custom");
+  if (custom) custom.hidden = state.profile !== "custom";
+}
+
+async function applyBatteryProfile(name) {
+  const d = await api("/api/battery-window/profile",
+                      { method: "PUT", body: JSON.stringify({ profile: name }) });
+  if (d.ok) {
+    batteryWindowState = d; renderBatteryWindow(d);
+    logConsole(`perfil aplicado: ${(UI_LABELS.profiles || {})[name] || name}`);
+  } else {
+    logConsole(`falha ao aplicar o perfil: ${d.error}`, "err");
+  }
+}
+
 async function loadBatteryWindow() {
   const d = await api("/api/battery-window");
   if (!d.ok) return;
@@ -956,6 +980,10 @@ function wireBatteryWindow() {
 
   enabledBox.addEventListener("change", () => {
     saveBatteryWindow({ enabled: enabledBox.checked });
+  });
+
+  document.querySelectorAll("#bw-profiles [data-profile]").forEach((b) => {
+    b.addEventListener("click", () => applyBatteryProfile(b.dataset.profile));
   });
 
   $("#bw-save").addEventListener("click", async (e) => {

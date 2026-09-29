@@ -149,6 +149,7 @@ def create_app(service, scheduler=None, grid_charge=None,
                                mode_labels=ui_labels.MODE_LABELS_PT,
                                rating_labels=ui_labels.RATING_LABELS_PT,
                                battery_type_labels=ui_labels.BATTERY_TYPE_LABELS_PT,
+                               profile_labels=ui_labels.PROFILE_LABELS_PT,
                                allow_writes=service.allow_writes,
                                scheduler_available=scheduler is not None,
                                grid_charge_available=grid_charge is not None,
@@ -389,6 +390,20 @@ def create_app(service, scheduler=None, grid_charge=None,
             state = battery_window.set_config(body)
         except ValueError as e:
             return _fail(str(e), code="invalid_config", status=400)
+        return jsonify({"ok": True, **state})
+
+    @app.route("/api/battery-window/profile", methods=["PUT"])
+    @require_json_write
+    def api_battery_window_profile():
+        """Switch between the named setting sets in PROFILES ("occupied",
+        "away"). The current one is `profile` in GET /api/battery-window."""
+        if battery_window is None:
+            return _no_battery_window()
+        body = request.get_json(silent=True) or {}
+        try:
+            state = battery_window.apply_profile(body.get("profile"))
+        except ValueError as e:
+            return _fail(str(e), code="invalid_profile", status=400)
         return jsonify({"ok": True, **state})
 
     @app.route("/api/battery-window/apply-now", methods=["POST"])

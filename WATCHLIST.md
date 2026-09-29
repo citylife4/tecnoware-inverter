@@ -10,9 +10,32 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-26 (22:55: daytime latch and hold-off sampling fixed)
+Last updated: 2026-09-29 (06:03: occupied/away profiles, trial of occupied started)
 
 ---
+
+## TRIAL from 2026-09-29 06:03 — profile "occupied" (Casa ocupada)
+
+The dashboard now has two profiles (`PROFILES` in `webapp/battery_window.py`,
+`PUT /api/battery-window/profile`). **Live: `occupied`**, meaning
+`floor_voltage` 25.0 V and the daytime window off. `away` is the deep setting
+that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
+~93% of its ~500 Wh/day solar directly. With no battery it would export only
+~37 Wh/day, while the battery was cycling ~111 Wh/day, mostly grid energy at
+~25-35% loss. Numbers in NOTES.md.
+
+**What the trial should show (the checks judge against this):**
+- Nights end on `floor` at ~25.0 V after **~40-50 Wh**, around 03:00-04:00
+  when the window opens at float. That is the intended result, not a short
+  night.
+- **Export stays ~0-5 Wh/day.** This is the test. If it rises on sunny days,
+  45 Wh of headroom is too little for this house and the floor should drop
+  towards 24.9-24.8 V (~55-60 Wh).
+- No `daytime` or `daytime_heavy_load` ticks (the window is off), so the
+  hold-off and daytime latch are not exercised.
+- Battery Wh/day falls from ~111 to ~45.
+- `profile` in `/api/battery-window` reads `occupied`. `custom` means someone
+  edited a setting by hand.
 
 ## Deployed 2026-09-23 21:35 — watch these next
 

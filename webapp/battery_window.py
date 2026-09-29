@@ -300,6 +300,29 @@ DEFAULT_CONFIG = {
 
 VALID_KEYS = set(DEFAULT_CONFIG)
 
+# Named settings the dashboard switches between as a whole. Added 2026-09-29.
+#
+# Measured over 09-20..28 (see NOTES.md): the house already uses ~93% of its
+# solar directly, and with no battery at all it would export ~37 Wh/day
+# (worst day ~93). The battery was delivering ~111 Wh/day, most of it grid
+# energy cycled through a lead-acid pack at ~25-35% loss.
+#
+#   occupied  Sized to the export it has to absorb. Four nights starting from
+#             float reached a resting 25.0 V after 39-44 Wh (24.9 V after
+#             54-60), so a 25.0 V floor leaves ~45 Wh of headroom. The
+#             daytime window is off: it drew down in the evening what the
+#             night then did not have (09-28 -> 09-29: 30 Wh, floor at 02:30).
+#   away      Deep: what ran 09-23..29. With nobody home, consumption falls
+#             and the surplus grows, so the pack needs more room.
+#
+# The active profile is derived from the live config, not stored, so a manual
+# edit shows as "custom" instead of a label that no longer matches.
+PROFILES = {
+    "occupied": {"enabled": True, "floor_voltage": 25.0, "daytime_enabled": False},
+    "away": {"enabled": True, "floor_voltage": 24.5, "daytime_enabled": True},
+}
+CUSTOM_PROFILE = "custom"
+
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -592,7 +615,21 @@ class BatteryWindow:
                 # local time, or None.
                 "heavy_load_until": (self._heavy_until.isoformat(timespec="seconds")
                                      if self._heavy_until else None),
+                "profile": self._current_profile(),
+                "profiles": {k: dict(v) for k, v in PROFILES.items()},
             }
+
+    def _current_profile(self) -> str:
+        for name, values in PROFILES.items():
+            if all(self._config.get(k) == v for k, v in values.items()):
+                return name
+        return CUSTOM_PROFILE
+
+    def apply_profile(self, name: str, now=None) -> dict:
+        if name not in PROFILES:
+            raise ValueError(f"unknown profile {name!r}; expected one of "
+                             f"{sorted(PROFILES)}")
+        return self.set_config(dict(PROFILES[name]), now=now)
 
     def set_config(self, updates: dict, now=None) -> dict:
         """Apply immediately rather than making an edit wait out

@@ -81,3 +81,12 @@ BATTERY_TYPE_LABELS_PT = {
     "Flooded": "Chumbo-ácido aberta",
     "User-defined": "Definida pelo utilizador",
 }
+
+
+# Perfis da janela de bateria (webapp/battery_window.py PROFILES). A API
+# devolve as chaves em inglês; aqui só o texto do botão.
+PROFILE_LABELS_PT = {
+    "occupied": "Casa ocupada",
+    "away": "Casa vazia",
+    "custom": "Personalizado",
+}

@@ -1073,6 +1073,31 @@ WATCHLIST.md; recorded here so the before-state is not lost:
 357 tests. The new debounce tests were checked to fail against the old
 code.
 
+**2026-09-29 — is the battery actually harnessing solar? Mostly not.**
+Measured 09-20..28 from auto-energy `/api/history` and the gridcharge trace:
+
+    solar produced            ~500 Wh/day (343-732)
+    used directly by house    ~93%
+    exported, actual            1-3 Wh/day
+    export with no battery     ~37 Wh/day   (surplus signal + 35 W of loads)
+    battery delivered         ~111 Wh/day   (daily_report)
+
+At most ~35 Wh/day of the battery's throughput can be solar that would have
+been exported. The rest is grid energy, because the panels are not on the
+inverter's PV input and the only charge path is the AC charger (>= ~350 W
+against a 193 W panel peak). Lead-acid plus charger plus inverter losses
+(~25-35%, estimated because the charging-current field is unreliable) cost
+about as much as the solar captured. **Compliance works; storage of solar
+does not, to any meaningful degree.** Genuine solar storage needs the panels
+on the inverter's MPPT input (a wiring change).
+
+Response: two profiles. `occupied` sizes the nightly discharge to the export
+it has to absorb. Four float-start nights reached a resting 25.0 V after
+39-44 Wh and 24.9 V after 54-60, so the floor is 25.0 V, and the daytime
+window is off (on 09-28 it drained the pack before a night that then got
+30 Wh). `away` keeps the deep setting for an empty house with more surplus.
+The trial of `occupied` started 09-29 06:03.
+
 **2026-09-26 22:37 — fourth float-vs-resting threshold fixed.** The
 battery-window latch released on `v >= resume_voltage` while the morning
 charger was running: 27.0 V at ~50% state of charge. The daytime window

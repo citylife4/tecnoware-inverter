@@ -363,6 +363,17 @@ corrupt `QPIGS` frames (gotcha #8), and **the pack sags ~0.4 V while the
 fridge compressor runs at only 46 W** (measured — see NOTES.md). Either would end a
 night's discharge on a value that was never the pack's real state.
 
+### Profiles: "occupied" and "away"
+
+Added 2026-09-29. `PROFILES` in `webapp/battery_window.py`, switched from the
+dashboard or `PUT /api/battery-window/profile`. `occupied` (floor 25.0 V,
+daytime off) sizes the discharge to the ~37 Wh/day this house would export.
+`away` (24.5 V, daytime on) is for an empty house with a larger surplus. The
+active profile is derived from the live config, so a hand edit shows as
+`custom`. Why this exists: the battery stores little solar here, since the
+panels are not on the PV input, so deep daily cycling mostly moves grid
+energy through a lossy pack (NOTES.md, 2026-09-29).
+
 ### The conditional daytime window
 
 Added 2026-09-01. A second window (`daytime_*` keys) that discharges during

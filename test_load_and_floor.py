@@ -270,5 +270,74 @@ class TestHeavyInputReadings(unittest.TestCase):
         self.assertEqual(gc.heavy_input_readings(800, 0), 0)
 
 
+class TestProfiles(unittest.TestCase):
+    """The occupied/away switch, added 2026-09-29."""
+
+    def setUp(self):
+        import json
+        from test_webapp import AUTH, client_for
+        self.json = json
+        self.auth = AUTH
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.service = FakeService(battery_voltage=27.0)
+        self.bw = BatteryWindow(self.service, os.path.join(self.tmp.name, "bw.json"))
+        self.client = client_for(self.service, battery_window=self.bw)
+
+    def put(self, name):
+        return self.client.put("/api/battery-window/profile",
+                               data=self.json.dumps({"profile": name}),
+                               content_type="application/json", headers=self.auth)
+
+    def test_occupied_is_shallow_and_has_no_daytime_window(self):
+        body = self.put("occupied").get_json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["profile"], "occupied")
+        self.assertEqual(body["config"]["floor_voltage"], 25.0)
+        self.assertFalse(body["config"]["daytime_enabled"])
+        self.assertTrue(body["config"]["enabled"])
+
+    def test_away_is_deep_with_the_daytime_window(self):
+        body = self.put("away").get_json()
+        self.assertEqual(body["profile"], "away")
+        self.assertEqual(body["config"]["floor_voltage"], 24.5)
+        self.assertTrue(body["config"]["daytime_enabled"])
+
+    def test_a_manual_edit_reads_as_custom(self):
+        self.put("occupied")
+        self.bw.set_config({"floor_voltage": 24.8})
+        self.assertEqual(self.bw.get_state()["profile"], "custom")
+
+    def test_switching_keeps_other_settings(self):
+        self.bw.set_config({"from": "02:00", "resume_voltage": 25.4})
+        cfg = self.put("occupied").get_json()["config"]
+        self.assertEqual(cfg["from"], "02:00")
+        self.assertEqual(cfg["resume_voltage"], 25.4)
+
+    def test_unknown_profile_is_refused(self):
+        r = self.put("holiday")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["code"], "invalid_profile")
+
+    def test_every_profile_passes_validation(self):
+        from webapp.battery_window import PROFILES
+        for values in PROFILES.values():
+            validate_config(values)
+
+    def test_every_profile_has_a_pt_label(self):
+        from webapp import ui_labels
+        from webapp.battery_window import CUSTOM_PROFILE, PROFILES
+        self.assertEqual(set(ui_labels.PROFILE_LABELS_PT),
+                         set(PROFILES) | {CUSTOM_PROFILE})
+
+    def test_the_dashboard_renders_the_switch(self):
+        from test_webapp import TOKEN
+        with self.client.session_transaction() as sess:
+            sess["authed"] = True
+        html = self.client.get("/").get_data(as_text=True)
+        self.assertIn('data-profile="occupied"', html)
+        self.assertIn('"Casa vazia"', html)
+
+
 if __name__ == "__main__":
     unittest.main()

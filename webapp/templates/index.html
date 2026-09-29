@@ -13,7 +13,8 @@
 <script id="ui-labels" type="application/json">
 {"modes": {{ mode_labels | tojson }},
  "ratings": {{ rating_labels | tojson }},
- "batteryTypes": {{ battery_type_labels | tojson }}}
+ "batteryTypes": {{ battery_type_labels | tojson }},
+ "profiles": {{ profile_labels | tojson }}}
 </script>
 <header class="topbar">
   <div class="brand">
@@ -294,6 +295,20 @@
         <span class="badge" id="bw-status">&mdash;</span>
       </div>
       <p class="small" id="bw-current"></p>
+
+      <h3>Perfil</h3>
+      <div class="btnrow" id="bw-profiles">
+        <button class="opt" data-profile="occupied">Casa ocupada</button>
+        <button class="opt" data-profile="away">Casa vazia</button>
+      </div>
+      <p class="muted small">
+        <strong>Casa ocupada</strong>: descarga curta à noite (até 25,0&nbsp;V,
+        ~45&nbsp;Wh), só o espaço necessário para absorver o excedente; sem
+        janela diurna. Menos perdas e menos desgaste da bateria.
+        <strong>Casa vazia</strong>: descarga funda (até 24,5&nbsp;V) e janela
+        diurna ligada, porque sem consumo o excedente é maior.
+        <span id="bw-profile-custom" hidden>&mdash; As definições atuais não
+        correspondem a nenhum perfil (<em>personalizado</em>).</span></p>
       <p class="warn small" id="bw-mismatch" hidden></p>
       <p class="warn small" id="bw-latched" hidden></p>
 
