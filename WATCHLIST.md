@@ -37,6 +37,24 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
 - `profile` in `/api/battery-window` reads `occupied`. `custom` means someone
   edited a setting by hand.
 
+**09-29 morning — the night before the trial (still `away`).** Opened
+rested at 25.1 V (the daytime window drew the pack down until 19:00 on 09-28
+and nothing charged after). Floor at 02:30 at 24.4 V after **31 Wh**, quiet
+minimum 24.4 V, no `hardware_override`. `profile` `occupied` (applied 06:03),
+`release_pending` false, `loop_error` null, `pop_drift_stuck` false,
+`config_error` null.
+
+**Open gap: nothing charges a low pack while there is no sun.** At 09:07 the
+pack had been at 24.3-24.5 V (~50%) since 02:30. The morning is heavily
+overcast (`ac_solar_w` 0, `solar_rad` ~20-25 W/m²), so `grid_charge` is still
+`disabled_no_solar` and writes nothing. PCP03 from the evening stands, and the
+`LowBatteryLatch` override never gets applied, because that branch returns
+before it. On a dark day the pack could sit half-empty all day, and several
+dark days in a row is the 09-13..16 drain pattern (2d). Not changed yet;
+needs a decision. The likely fix: let an armed `LowBatteryLatch` write PCP01
+even in `disabled_no_solar`, so it stops at float. That's battery maintenance
+from the grid, which costs energy but protects the pack.
+
 ## Deployed 2026-09-23 21:35 — watch these next
 
 Three changes, all from the open decisions below, all untested in
