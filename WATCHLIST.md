@@ -37,6 +37,25 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
 - `profile` in `/api/battery-window` reads `occupied`. `custom` means someone
   edited a setting by hand.
 
+**Trial table.** Only sunny days count towards the pass (3 needed, export
+<= 5 Wh). The first trial night is 09-29/30.
+
+    date    solar Wh  export Wh  battery Wh  counts?
+    09-29      116        0         30       no: overcast (peak 35 W), and the
+                                             night was still `away`
+
+**09-29 evening. Clean, but a dark day, so no test of the trial.** Solar was
+116 Wh (0 nulls, peak 35 W), export 0. The only battery use was the pre-trial
+night (30 Wh). No `daytime` ticks, as the window is off. Throws 2 (the night's
+entry and floor). No `hardware_override`. Charging only began at 11:34, once
+solar crossed 8 W; the morning gap above is real. `LowBatteryLatch` held PCP01
+from 11:34 and released ~14:00 as the current fell to 4 A at 29.0 V, which is
+the float condition. PCP03 then timed out and grid charge flipped to genuine
+`charging` until 15:54. The pack rested at 25.6 V at 22:13. `profile`
+`occupied`, `release_pending` false, `loop_error` null, `pop_drift_stuck`
+false, `config_error` null. No stall (restarted for the deploy at 06:02).
+373 tests green.
+
 **09-29 morning — the night before the trial (still `away`).** Opened
 rested at 25.1 V (the daytime window drew the pack down until 19:00 on 09-28
 and nothing charged after). Floor at 02:30 at 24.4 V after **31 Wh**, quiet
