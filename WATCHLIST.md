@@ -43,6 +43,25 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
     date    solar Wh  export Wh  battery Wh  counts?
     09-29      116        0         30       no: overcast (peak 35 W), and the
                                              night was still `away`
+    09-30      (evening)            13       first `occupied` night
+
+**09-30 morning. First `occupied` night: correct, but short.** It opened
+**rested at 25.4 V** (charging stopped 15:54 on 09-29 and the pack settled).
+`below_floor` counted 1, 2, 3 and `floor` handed back at 01:42 at 25.0 V after
+only **13 Wh**. Quiet minimum 25.0 V, no `hardware_override`. Expected: the
+~45 Wh figure is for a window that opens at float. From a rested pack, 25.0 V
+is only ~0.4 V away. `profile` `occupied`, `release_pending` false,
+`loop_error` null, `pop_drift_stuck` false, `config_error` null.
+
+**The pack drains in line mode while nothing charges it.** After the floor it
+fell steadily, 25.2 V at 02:17 to 24.6 V at 09:07, with 0 A charging, the
+loads on grid, and `grid_charge` still `disabled_no_solar` (PCP03 standing).
+~0.07 V/h is consistent with the inverter drawing its own standby from the
+pack while the charger is blocked. That is not measured directly. It also
+matches the slower sag on 09-26 and 09-29 mornings. It turns the no-sun gap
+above from "sits half-empty" into "keeps draining", and it is the likely
+mechanism of the 09-13..16 drain. It strengthens the case for letting an
+armed `LowBatteryLatch` charge regardless of sun.
 
 **09-29 evening. Clean, but a dark day, so no test of the trial.** Solar was
 116 Wh (0 nulls, peak 35 W), export 0. The only battery use was the pre-trial
