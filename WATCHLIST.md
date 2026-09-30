@@ -43,7 +43,25 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
     date    solar Wh  export Wh  battery Wh  counts?
     09-29      116        0         30       no: overcast (peak 35 W), and the
                                              night was still `away`
-    09-30      (evening)            13       first `occupied` night
+    09-30      229        0         13       no: dim (peak 83 W); first
+                                             `occupied` night, rested start
+
+**09-30 evening. Clean, second dim day. The trial is untested so far.** Solar
+229 Wh (0 nulls, peak 83 W), export 0, battery 13 Wh (the night). No `daytime`
+ticks. Throws 2 (the night's entry and floor). No `hardware_override`, no
+stall, 373 tests green. `profile` `occupied`, all four flags clear.
+`LowBatteryLatch` held PCP01 from 10:35. Clouds dropped `grid_charge` into
+`disabled_no_solar` twice (PCP01 stood meanwhile). It released at 12:25 as the
+current reached 4 A at 27.4 V, which is correct.
+
+**Headroom is smaller than the trial assumed.** The ~45 Wh came from nights
+that opened at **float**, and those were nights when the charger ran into the
+evening absorbing export. On `occupied` days the charger reaches float by
+early afternoon and then idles (PCP03). The pack rests down to ~25.4 V by
+01:00 (25.4 V at 22:13 tonight), and the window gets only **~13 Wh** before
+25.0 V. That is well under the ~37 Wh/day this house could export. **The
+sunny-day export numbers are the real test.** If they rise, lower the floor
+towards 24.8 V. From a rested 25.4 V start that gives roughly 30-45 Wh.
 
 **09-30 morning. First `occupied` night: correct, but short.** It opened
 **rested at 25.4 V** (charging stopped 15:54 on 09-29 and the pack settled).
