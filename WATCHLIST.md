@@ -45,7 +45,28 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
                                              night was still `away`
     09-30      229        0         13       no: dim (peak 83 W); first
                                              `occupied` night, rested start
-    10-01      (evening)            0        night was a no-op (below)
+    10-01      416        0          0       borderline: moderate (peak 143 W);
+                                             night was a no-op. Not counted.
+
+**10-01 evening. The best solar of the trial so far, still 0 export, but
+the battery contributed nothing.** Solar 416 Wh (0 nulls, peak 143 W), export
+**0 Wh** (3 samples, worst -23 W). Battery 0 Wh. Grid charge absorbed the
+surplus itself, flipping into genuine `charging` 5 times between 13:27 and
+17:14 on a pack already near float. So today's zero export was the charger's
+work, with no help from night headroom. The pre-trial baseline on days of
+~400 Wh was only 2-7 Wh/day, so this day cannot separate the two. Not counted
+as sunny. `LowBatteryLatch` held PCP01 08:29-09:32, then genuine charging. No
+`daytime` ticks. Throws 2 (the night). No `hardware_override`. 373 tests
+green. `profile` `occupied`, all four flags clear.
+
+**A stall, the second in 8 days, with the same signature as 09-24.** No
+telemetry from 15:57:48 to 16:02:55 (307 s), and the API was unreachable.
+`usb_watchdog` caught it at 16:01:18. Its restart hung on "shutdown hand-back
+blocked by active tick" (a tick wedged inside a serial call, holding the
+lock), and systemd completed the stop at 16:02:49. Recovery ~5 min. Loads on
+grid throughout (`outside`, POP00), so harmless. Two occurrences with the
+same pattern now make a stall inside a battery-window tick worth looking at,
+for example a timeout on the lock or on the serial call.
 
 **10-01 morning. The window was a no-op.** It opened rested at **25.2 V**
 (25.4 V at 22:13, drifting at the standby rate noted on 09-30). It went to
