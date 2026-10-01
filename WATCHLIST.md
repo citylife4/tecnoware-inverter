@@ -45,6 +45,23 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
                                              night was still `away`
     09-30      229        0         13       no: dim (peak 83 W); first
                                              `occupied` night, rested start
+    10-01      (evening)            0        night was a no-op (below)
+
+**10-01 morning. The window was a no-op.** It opened rested at **25.2 V**
+(25.4 V at 22:13, drifting at the standby rate noted on 09-30). It went to
+`B` and `floor` fired three ticks later, at 01:03 at 24.9 V: **0 Wh** for 2
+relay throws. Quiet minimum 24.9 V, no `hardware_override`. `profile`
+`occupied`, all four flags clear. Charging resumed this morning (27.4 V at
+6 A by 09:07, solar 16 W).
+
+Correct per the rules, but pointless: under `occupied` a dim day leaves the
+pack resting at ~25.2-25.4 V by 01:00, within a few tenths of the 25.0 V
+floor. Two possible changes, **not applied**:
+- **Skip the entry when the pack is already near the floor** (e.g. rested
+  within 0.3 V of it). That saves the relay throws on nights like this.
+- **Lower the `occupied` floor towards 24.8 V**, so a rested start still
+  creates ~30-45 Wh of headroom. The sunny-day export numbers decide whether
+  this is needed.
 
 **09-30 evening. Clean, second dim day. The trial is untested so far.** Solar
 229 Wh (0 nulls, peak 83 W), export 0, battery 13 Wh (the night). No `daytime`
