@@ -47,7 +47,17 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
                                              `occupied` night, rested start
     10-01      416        0          0       borderline: moderate (peak 143 W);
                                              night was a no-op. Not counted.
-    10-02      (evening)            1        night a no-op again
+    10-02      460        1          1       borderline: moderate (peak 122 W);
+                                             night a no-op. Not counted.
+
+**10-02 evening. Clean, moderate day, still no real test.** Solar 460 Wh
+(0 nulls, peak 122 W), export **1 Wh** (9 samples, worst -20 W), battery 1 Wh.
+Grid charge absorbed the surplus alone: genuine `charging` 408 ticks across
+6 spells, 09:40-16:42. `LowBatteryLatch` held PCP01 08:16-09:40, then genuine
+charging. No `daytime` ticks, throws 2 (the night), no `hardware_override`,
+no stall, 373 tests green. `profile` `occupied`, all four flags clear.
+3 PCP write failures, all recovered. Sunny days counted: **0 of 3**. Four
+trial days so far, with no day over ~460 Wh.
 
 **10-02 morning. A no-op again, the second night running.** It opened rested
 at **25.1 V**, and `floor` fired three ticks later (01:03, 24.9 V): **1 Wh**
