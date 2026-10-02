@@ -47,6 +47,16 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
                                              `occupied` night, rested start
     10-01      416        0          0       borderline: moderate (peak 143 W);
                                              night was a no-op. Not counted.
+    10-02      (evening)            1        night a no-op again
+
+**10-02 morning. A no-op again, the second night running.** It opened rested
+at **25.1 V**, and `floor` fired three ticks later (01:03, 24.9 V): **1 Wh**
+for 2 relay throws. Quiet minimum 24.9 V, no `hardware_override`. `profile`
+`occupied`, all four flags clear. Charging resumed this morning (29.0 V at
+7 A by 09:07). Three trial nights so far: 13, 0 and 1 Wh. **As configured,
+`occupied` creates essentially no headroom on these days**, so the battery is
+contributing nothing to export control. Grid charge is doing all of it. See
+the two options under 10-01 morning.
 
 **10-01 evening. The best solar of the trial so far, still 0 export, but
 the battery contributed nothing.** Solar 416 Wh (0 nulls, peak 143 W), export
