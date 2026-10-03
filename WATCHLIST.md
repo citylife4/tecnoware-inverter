@@ -49,6 +49,23 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
                                              night was a no-op. Not counted.
     10-02      460        1          1       borderline: moderate (peak 122 W);
                                              night a no-op. Not counted.
+    10-03      (evening)            0        night a no-op (third)
+
+**10-03 morning. Third no-op night, and a real grid outage handled
+correctly.** The window opened rested at **25.2 V** and `floor` fired at 01:08
+at 25.0 V: **0 Wh**, no `hardware_override`. Trial nights so far: 13, 0, 1,
+0 Wh.
+
+**Grid outage ~04:36-04:42** (`grid_voltage` 0 V at 04:36:39, 230 V again by
+04:42:15). The inverter carried the loads on the pack, as utility-first does
+when the grid fails. The reconciler classed it as `unexpected_battery` (grid
+absent), **not** `pop_drift`, and wrote nothing, which is correct. Pack 24.8 V
+at the time; the quiet minimum of 24.7 V came during the outage. Afterwards
+`grid_charge` wrote PCP01 at 04:38 (audit: `grid_export`). That fits the
+measurement going stale during the outage ("unknown -> idle") while
+`LowBatteryLatch` was armed. The pack then charged to 29.1 V before dawn,
+the night-time maintenance charge the no-sun gap lacks, by accident.
+`profile` `occupied`, all four flags clear.
 
 **10-02 evening. Clean, moderate day, still no real test.** Solar 460 Wh
 (0 nulls, peak 122 W), export **1 Wh** (9 samples, worst -20 W), battery 1 Wh.
