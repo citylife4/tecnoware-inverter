@@ -49,7 +49,28 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
                                              night was a no-op. Not counted.
     10-02      460        1          1       borderline: moderate (peak 122 W);
                                              night a no-op. Not counted.
-    10-03      (evening)            0        night a no-op (third)
+    10-03      341        5          0       dim, yet 5 Wh at the limit:
+                                             pack full, see below
+
+**10-03 evening. The trial's failure mode has shown up, on a dim day.**
+Solar only 341 Wh (0 nulls, peak 128 W), yet export reached **5 Wh**
+(36 samples, worst -57 W). That's the trial's limit, on less sun than 10-01
+(416 Wh, 0 Wh) and 10-02 (460 Wh, 1 Wh). Every exporting sample came **with
+PCP01 already set**: 13:45-14:10 and 15:48-15:58, peaking at -57 W. The pack
+was at **float, 27.4 V, 100%, taking 0-4 A**. The charger was on and had
+nowhere to put the energy. This is CLAUDE.md's "known limitation" (a full
+battery absorbs nothing), and it is exactly what night headroom is for.
+Under `occupied` the nights have been no-ops (13, 0, 1, 0 Wh), so the pack
+is full by late morning every day.
+
+**Verdict: `occupied` at 25.0 V is too shallow for this house.** On a
+genuinely sunny day this would be well over 5 Wh. Recommended: lower its
+floor to **24.8 V**, which gives ~30-45 Wh from a rested start, and skip nights
+that would open within ~0.3 V of the floor. Not applied; awaiting the user.
+
+Otherwise clean: battery 0 Wh. Throws 4: the night's entry and floor, plus
+the outage's B<->L. No `daytime` ticks, no `hardware_override`, no stall,
+373 tests green. `profile` `occupied`, all four flags clear.
 
 **10-03 morning. Third no-op night, and a real grid outage handled
 correctly.** The window opened rested at **25.2 V** and `floor` fired at 01:08
