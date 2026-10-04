@@ -51,6 +51,15 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
                                              night a no-op. Not counted.
     10-03      341        5          0       dim, yet 5 Wh at the limit:
                                              pack full, see below
+    10-04      (evening)            0        night a no-op (fourth)
+
+**10-04 morning. Fourth no-op night.** It opened rested at **25.2 V**, and
+`floor` fired at 01:03 at 25.0 V after three ticks: **0 Wh**. That POP00 reply
+was garbled; it was re-applied at 01:04. No `hardware_override`, quiet minimum
+25.0 V. Charging resumed this morning (27.5 V at 6 A by 09:07). Trial nights:
+13, 0, 1, 0, 0 Wh. `profile` `occupied`, all four flags clear. The
+recommended change (24.8 V and skip near the floor) is still awaiting the
+user.
 
 **10-03 evening. The trial's failure mode has shown up, on a dim day.**
 Solar only 341 Wh (0 nulls, peak 128 W), yet export reached **5 Wh**
