@@ -51,7 +51,15 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
                                              night a no-op. Not counted.
     10-03      341        5          0       dim, yet 5 Wh at the limit:
                                              pack full, see below
-    10-04      (evening)            0        night a no-op (fourth)
+    10-04      256        0          0       dim (peak 90 W); night a no-op
+
+**10-04 evening. Clean, dim day.** Solar 256 Wh (0 nulls, peak 90 W),
+export 0 Wh (no exporting samples), battery 0 Wh. `LowBatteryLatch` held
+PCP01 08:15-08:47, then genuine charging. No `daytime` ticks, throws 2 (the
+night), no `hardware_override`, no stall, 373 tests green. `profile`
+`occupied`, all four flags clear. Sunny days counted: 0 of 3. The checks
+expire on 10-06. The 10-03 verdict stands: too shallow, so 24.8 V is
+recommended.
 
 **10-04 morning. Fourth no-op night.** It opened rested at **25.2 V**, and
 `floor` fired at 01:03 at 25.0 V after three ticks: **0 Wh**. That POP00 reply
