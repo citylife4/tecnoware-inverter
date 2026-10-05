@@ -52,7 +52,22 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
     10-03      341        5          0       dim, yet 5 Wh at the limit:
                                              pack full, see below
     10-04      256        0          0       dim (peak 90 W); night a no-op
-    10-05      (evening)            1        night ~1 Wh (fifth no-op)
+    10-05      291        0          1       dim (peak 97 W); night ~1 Wh
+
+**10-05 evening. Clean, dim day. The trial is closing without a sunny
+day.** Solar 291 Wh (0 nulls, peak 97 W), export 0 Wh, battery ~1 Wh. No
+`daytime` ticks, throws 2 (the night), no `hardware_override`, no stall (up
+since 10-01 16:03), 373 tests green. `profile` `occupied`, all four flags
+clear. The scheduled checks expire 10-06.
+
+**Trial summary, 09-29..10-05:** seven days, none sunny (116-460 Wh solar
+against ~500-730 on the September baseline days). Export 0, 0, 0, 1, 5, 0, 0
+Wh. Battery 30*, 13, 0, 1, 0, 0, 1 Wh (*the pre-trial night). The pass
+condition (3 sunny days, export <= 5 Wh) was **never testable**. One finding
+stands regardless: at 25.0 V the `occupied` floor creates no headroom on
+these days. The pack rests at 25.2-25.4 V by 01:00, nights deliver 0-13 Wh,
+and on 10-03 a full pack let 5 Wh escape on only 341 Wh of solar.
+**Recommendation unchanged: 24.8 V plus skip-near-floor.**
 
 **10-05 morning. Fifth no-op night.** It opened rested at **25.4 V**, and
 `floor` fired at 01:43 at 25.0 V: **~1 Wh**. That POP00 reply was garbled and
