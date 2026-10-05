@@ -52,6 +52,13 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
     10-03      341        5          0       dim, yet 5 Wh at the limit:
                                              pack full, see below
     10-04      256        0          0       dim (peak 90 W); night a no-op
+    10-05      (evening)            1        night ~1 Wh (fifth no-op)
+
+**10-05 morning. Fifth no-op night.** It opened rested at **25.4 V**, and
+`floor` fired at 01:43 at 25.0 V: **~1 Wh**. That POP00 reply was garbled and
+re-applied at 01:44. No `hardware_override`, quiet minimum 25.0 V. Charging
+resumed this morning (27.4 V at 5 A by 09:07). Trial nights: 13, 0, 1, 0, 0,
+1 Wh. `profile` `occupied`, all four flags clear.
 
 **10-04 evening. Clean, dim day.** Solar 256 Wh (0 nulls, peak 90 W),
 export 0 Wh (no exporting samples), battery 0 Wh. `LowBatteryLatch` held
