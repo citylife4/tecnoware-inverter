@@ -53,7 +53,17 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
                                              pack full, see below
     10-04      256        0          0       dim (peak 90 W); night a no-op
     10-05      291        0          1       dim (peak 97 W); night ~1 Wh
-    10-06      (evening)            0        night a no-op (sixth)
+    10-06      279        0          0       dim (peak 105 W); night a no-op
+
+**10-06 evening. Clean, dim day. Last scheduled check; the jobs expire
+tonight.** Solar 279 Wh (0 nulls, peak 105 W), export 0 Wh, battery 0 Wh.
+No `daytime` ticks, throws 2 (the night), no `hardware_override`, no stall,
+373 tests green. `profile` `occupied`, all four flags clear. **The trial ends
+inconclusive on its pass condition** (no sunny day in eight). Its finding,
+recorded under 10-05 evening, stands: `occupied` at 25.0 V creates no
+headroom. **Awaiting the user:** 24.8 V plus skip-near-floor; deliberate
+no-sun maintenance charging; the stall in a battery-window tick. `occupied`
+stays live until then.
 
 **10-06 morning. Sixth no-op night, then an accidental pre-dawn charge.**
 The window opened rested at **25.2 V**. `floor` fired at 01:03 at 25.0 V:
