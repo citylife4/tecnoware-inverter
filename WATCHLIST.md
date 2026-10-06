@@ -53,6 +53,19 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
                                              pack full, see below
     10-04      256        0          0       dim (peak 90 W); night a no-op
     10-05      291        0          1       dim (peak 97 W); night ~1 Wh
+    10-06      (evening)            0        night a no-op (sixth)
+
+**10-06 morning. Sixth no-op night, then an accidental pre-dawn charge.**
+The window opened rested at **25.2 V**. `floor` fired at 01:03 at 25.0 V:
+**0 Wh**. That POP00 reply was garbled and re-applied at 01:04. No
+`hardware_override`, quiet minimum 25.0 V. The pack then drained in `L` to
+24.7 V by 04:30. At 05:28 one stale auth-energy reading (`known=False`) took
+`grid_charge` down the "unknown -> idle" path with `LowBatteryLatch` armed.
+It wrote PCP01 (and again at 06:07), and the pack charged to float
+(27.4 V at 9 A by 05:37) until ~08:07, when the latch released to PCP03.
+Same mechanism as after the 10-03 outage. It is the night maintenance charge
+the no-sun gap lacks, but it depends on a glitch. `profile` `occupied`, all
+four flags clear.
 
 **10-05 evening. Clean, dim day. The trial is closing without a sunny
 day.** Solar 291 Wh (0 nulls, peak 97 W), export 0 Wh, battery ~1 Wh. No
