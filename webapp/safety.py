@@ -122,28 +122,54 @@ class LowBatteryLatch:
         self.active = False
         self._at_float = 0
 
-    def observe(self, service) -> None:
+    def arm(self) -> None:
+        """Arm for a reason other than min_battery_voltage (a deep pack at
+        night, an overdue maintenance charge). Released the same way."""
+        self.active = True
+        self._at_float = 0
+
+    def observe(self, service, arm_on_floor: bool = True) -> None:
+        """`arm_on_floor=False` releases but never arms. grid_charge passes
+        that at night: there the threshold would turn a planned discharge
+        plus standby drift into a grid refill before dawn.
+
+        Only line-mode readings arm it. A battery-mode reading sags under load
+        (2 V at 1.2 kW, 0.1-0.2 V under the fridge), and a pack on battery is
+        the battery window's job, with its own floor."""
         floor = getattr(service, "min_battery_voltage", None)
         v = service.battery_voltage()
         if not (is_finite_number(floor) and is_finite_number(v)):
             self._at_float = 0
             return
+        mode_fn = getattr(service, "mode", None)
+        on_battery = (mode_fn() if mode_fn else None) == "B"
         if v <= floor:
-            self.active = True
+            if arm_on_floor and not on_battery:
+                self.arm()
             self._at_float = 0
             return
         if not self.active:
             return
-        current_fn = getattr(service, "battery_charging_current", None)
-        amps = current_fn() if current_fn else None
-        if (is_finite_number(amps) and amps <= FLOOR_RELEASE_MAX_A
-                and v >= FLOOR_RELEASE_MIN_V):
+        if at_float(service):
             self._at_float += 1
             if self._at_float >= FLOOR_RELEASE_CONFIRMATIONS:
                 self.active = False
                 self._at_float = 0
         else:
             self._at_float = 0
+
+
+def at_float(service) -> bool:
+    """True when the charger has the pack at float: >= FLOOR_RELEASE_MIN_V
+    and <= FLOOR_RELEASE_MAX_A, and not in battery mode."""
+    v = service.battery_voltage()
+    current_fn = getattr(service, "battery_charging_current", None)
+    amps = current_fn() if current_fn else None
+    mode_fn = getattr(service, "mode", None)
+    if (mode_fn() if mode_fn else None) == "B":
+        return False
+    return (is_finite_number(v) and is_finite_number(amps)
+            and amps <= FLOOR_RELEASE_MAX_A and v >= FLOOR_RELEASE_MIN_V)
 
 
 def apply_low_battery_floor(service, target: str, latch=None):

@@ -10,9 +10,42 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-09-29 (06:03: occupied/away profiles, trial of occupied started)
+Last updated: 2026-10-08 (21:35: night charging rules; house empty, profile away)
 
 ---
+
+## Deployed 2026-10-08 21:35 — night charging rules. Profile `away` since 10-07 21:24
+
+The house has been empty since 10-07 (consumption 3.7 and 2.8 kWh/day,
+against 6.4-7.5). The user switched to `away` on 10-07 at 21:24.
+
+**Why the change:** on 10-08 the night discharged 27.7 -> 24.5 V (floor
+05:58), and from 06:06, in the dark, the charger refilled it to 29 V by
+08:09. The reason: PCP01 had been left standing since the afternoon, because
+`grid_charge` wrote nothing after dark. The afternoon surplus (149 Wh with
+the inverter idle, the most since September) then hit a full pack and
+**19 Wh** escaped, all 15:00-17:00 with PCP01 set at float. Whether the
+night's headroom survived had come down to the last PCP before sunset (lost
+on 09-25, 27, 28 and 10-08).
+
+**Changed:**
+- `grid_charge` writes **PCP03 at sunset** (exclusive mode), once.
+- `min_battery_voltage` **25.5 -> 24.3 V** (`web.json`), below both profile
+  floors, so a planned discharge no longer triggers a grid refill. It arms
+  `LowBatteryLatch` only in daylight and only on line-mode readings.
+- At night the latch arms only on a resting pack <= **24.0 V**
+  (`NIGHT_DEEP_V`), or **48 h without float** (`MAINTENANCE_AFTER_S`, clock
+  persisted in `web_gridcharge.json.state`). It then charges to float.
+
+**What should happen now:** after a floor-ended night the pack stays low
+until the sun. `grid_charge` refills it only while the surplus signal says
+`charging`, and export stays ~0 on sunny empty-house days. Watch for:
+- any PCP01 in the dark (`gridcharge` trace: target 01 with desired
+  `disabled_no_solar`) without `latch_active` in `/api/grid-charge`
+  `battery_maintenance`;
+- the pack sitting under ~24.5 V for more than a day, which the 48 h rule
+  should catch;
+- export on sunny days.
 
 ## TRIAL from 2026-09-29 06:03 — profile "occupied" (Casa ocupada)
 
@@ -54,6 +87,11 @@ that ran 09-23..29 (24.5 V, daytime on). Why: over 09-20..28 the house used
     10-04      256        0          0       dim (peak 90 W); night a no-op
     10-05      291        0          1       dim (peak 97 W); night ~1 Wh
     10-06      279        0          0       dim (peak 105 W); night a no-op
+
+**10-07/08, house empty.** See the 10-08 deployment at the top: profile
+`away` from 10-07 21:24, 154 Wh from the battery on 10-08, and 19 Wh export
+caused by the dark refill. The occupied trial is closed; its 24.8 V
+recommendation still applies to `occupied` when the house is in use again.
 
 **10-06 evening. Clean, dim day. Last scheduled check; the jobs expire
 tonight.** Solar 279 Wh (0 nulls, peak 105 W), export 0 Wh, battery 0 Wh.

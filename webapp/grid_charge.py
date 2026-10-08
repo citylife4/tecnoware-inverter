@@ -53,7 +53,8 @@ from transport import InverterError
 from webapp import config_error
 from webapp.atomic_write import write_json_atomic
 from webapp.trace import append_row
-from webapp.safety import PCP_VALUES, LowBatteryLatch, apply_low_battery_floor
+from webapp.safety import (PCP_VALUES, LowBatteryLatch, apply_low_battery_floor,
+                           at_float, is_finite_number)
 
 # Como é que este controlador se relaciona com o agendamento horário:
 #
@@ -148,6 +149,32 @@ VALID_KEYS = set(DEFAULT_CONFIG)
 
 # How much inverter_input_w history heavy_input_readings() can look back on.
 INPUT_HISTORY_S = 900
+
+# Night charging. Added 2026-10-08.
+#
+# After dark this controller used to write nothing, so whatever PCP the day
+# ended on stood all night. Ending on PCP01 (still absorbing export at
+# sunset) meant the charger refilled the pack from the grid the moment the
+# nightly window handed back: on 10-08 it discharged 27.7 -> 24.5 V by 05:58,
+# and at 06:06, in the dark, the charger took it back to 29 V by 08:09. All of
+# the night's headroom was gone before sunrise, and 19 Wh escaped that
+# afternoon on a full pack. Same on 09-25, 27 and 28. Ending on PCP03 left
+# the pack waiting for the sun, as intended -- so whether the headroom
+# survived came down to the last write before sunset.
+#
+# Now, in exclusive mode, the night target is idle_pcp (PCP03), except
+# while LowBatteryLatch is armed, which charges to float. At night it arms
+# only on:
+#   * a pack at or under NIGHT_DEEP_V, resting. That is the inverter's own
+#     program 12 and ABSOLUTE_FLOOR_V, so a planned discharge never
+#     reaches it. Protects against standby drift (~0.07-0.09 V/h measured
+#     09-30, 10-01 with PCP03 standing) and dark days.
+#   * no float for MAINTENANCE_AFTER_S. A lead-acid pack must not sit
+#     part-charged for days, and a dark spell is exactly when nothing else
+#     would fill it.
+# min_battery_voltage arms it only in daylight (see _tick).
+NIGHT_DEEP_V = 24.0
+MAINTENANCE_AFTER_S = 48 * 3600
 
 
 def _utcnow() -> str:
@@ -247,6 +274,15 @@ class GridChargeController:
         # cycles on and off inside one 30 s poll -- so only this controller,
         # which sees every reading, can count them.
         self._input_history = deque()
+        # Was the last tick a night (disabled_no_solar) one? Leaving the night
+        # forgets the cached PCP, so the first daylight decision is written
+        # for real -- someone may have changed it overnight.
+        self._was_night = False
+        # Last time the pack was seen at float. Persisted, so a restart does
+        # not reset the maintenance clock. Unknown counts as "now": the first
+        # maintenance charge is then at most MAINTENANCE_AFTER_S away.
+        self._last_float_at = self._load_last_float() or datetime.now(timezone.utc)
+        self._last_float_saved = self._last_float_at
 
     # ---- persistence ------------------------------------------------------
 
@@ -268,6 +304,40 @@ class GridChargeController:
             # webapp/config_error.py -- so say so instead of going quiet.
             self._config_error = config_error.report(self.path, e)
             return dict(DEFAULT_CONFIG)
+
+    @property
+    def _runtime_path(self) -> str:
+        return self.path + ".state"
+
+    def _load_last_float(self):
+        try:
+            with open(self._runtime_path) as fh:
+                value = json.load(fh).get("last_float_at")
+            at = datetime.fromisoformat(value)
+            return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
+
+    def _note_battery_maintenance(self) -> None:
+        """Track float, and arm the latch for a deep pack or an overdue full
+        charge. See NIGHT_DEEP_V."""
+        now = datetime.now(timezone.utc)
+        if at_float(self.service):
+            self._last_float_at = now
+            # Hourly is plenty for a 48 h clock, and spares the SD card.
+            if (now - self._last_float_saved).total_seconds() >= 3600:
+                try:
+                    write_json_atomic(self._runtime_path, {
+                        "last_float_at": now.isoformat(timespec="seconds")})
+                    self._last_float_saved = now
+                except OSError:
+                    pass
+        v = self.service.battery_voltage()
+        if (is_finite_number(v) and v <= NIGHT_DEEP_V
+                and self.service.mode() != "B"):
+            self._floor_latch.arm()
+        if (now - self._last_float_at).total_seconds() >= MAINTENANCE_AFTER_S:
+            self._floor_latch.arm()
 
     def _save(self) -> None:
         write_json_atomic(self.path, self._config)
@@ -298,6 +368,12 @@ class GridChargeController:
                     "desired_state": self._desired,
                 },
                 "last_run": self._last_run,
+                "battery_maintenance": {
+                    "latch_active": self._floor_latch.active,
+                    "last_float_at": self._last_float_at.isoformat(timespec="seconds"),
+                    "night_deep_v": NIGHT_DEEP_V,
+                    "maintenance_after_h": MAINTENANCE_AFTER_S / 3600,
+                },
             }
 
     def _pop_warning(self):
@@ -672,12 +748,19 @@ class GridChargeController:
             generating = self._generating_with_hysteresis(solar, balance)
 
             if not generating:
-                # No generation means no export-control work exists. This is
-                # distinct from "idle", which owns PCP03 in exclusive mode.
-                # Returning no target also bypasses the low-battery PCP01
-                # override: battery maintenance is outside this controller's
-                # job while the sun is down.
-                return "disabled_no_solar", None, None, known
+                # No generation means no export-control work. But writing
+                # nothing left the day's last PCP standing all night -- see
+                # NIGHT_DEEP_V for what that cost. In exclusive mode the night
+                # is PCP03 unless the latch says the pack needs charging.
+                if cfg["mode"] != "exclusive":
+                    return "disabled_no_solar", None, None, known
+                if self._floor_latch.active:
+                    return "disabled_no_solar", "01", (
+                        "OVERRIDE: night charge -- pack deep or overdue for a "
+                        "full charge; holding utility charging until float"), known
+                if not is_finite_number(self.service.battery_voltage()):
+                    return "disabled_no_solar", None, None, known
+                return "disabled_no_solar", cfg["idle_pcp"], None, known
 
             if balance <= cfg["export_threshold_w"]:
                 desired = "charging"
@@ -717,9 +800,19 @@ class GridChargeController:
 
     def _tick(self, force: bool = False) -> dict:
         cfg = self._config
-        self._floor_latch.observe(self.service)
+        # min_battery_voltage arms the latch only in daylight. At night a
+        # planned discharge plus standby drift would cross it and refill the
+        # pack from the grid before dawn; _note_battery_maintenance() covers
+        # the night with a deeper threshold.
+        self._floor_latch.observe(self.service,
+                                  arm_on_floor=self._generating is True)
+        self._note_battery_maintenance()
         desired, target, override, known = self._evaluate()
         self._desired = desired
+        night = desired == "disabled_no_solar"
+        if self._was_night and not night:
+            self._last_applied_pcp = None
+        self._was_night = night
 
         result = {
             "at": _utcnow(), "desired_state": desired, "target": target,
@@ -735,11 +828,10 @@ class GridChargeController:
 
         if not cfg["enabled"]:
             result["note"] = "grid-export charging disabled"
-        elif desired == "disabled_no_solar":
-            # Forget the cached PCP because another controller or a person
-            # may change it overnight. The first daylight decision must be
-            # applied to the inverter rather than incorrectly treated as an
-            # idempotent no-op.
+        elif desired == "disabled_no_solar" and target is None:
+            # No night target (override mode, or the voltage is unreadable).
+            # Forget the cached PCP: another controller or a person may change
+            # it overnight, so the first daylight decision must be written.
             self._last_applied_pcp = None
             result["note"] = "no solar generation — grid-export control inactive"
         elif cfg["mode"] == "override" and desired != "charging":

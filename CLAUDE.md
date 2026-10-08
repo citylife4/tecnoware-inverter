@@ -462,6 +462,18 @@ the charger topping the pack up from the grid — destroying exactly the
 absorption headroom the nightly battery window exists to create. A *missing*
 solar reading is not treated as nightfall.
 
+**CORRECTED 2026-10-08: that rule decided "idle" but wrote nothing**, so the
+day's last PCP still stood all night. On days ending in `PCP01` the charger
+refilled the pack from the grid the moment the nightly window hit its floor.
+On 10-08 it went 24.5 V at 05:58 to 29 V by 08:09, in the dark, and 19 Wh
+escaped that afternoon on a full pack. Now, in `exclusive` mode, the night
+target is `PCP03`, written once at sunset. `min_battery_voltage` is **24.3 V**
+(was 25.5), below both profile floors, and it arms the low-battery latch only
+in daylight on line-mode readings. At night the latch arms only for a resting
+pack at or under `NIGHT_DEEP_V` (24.0) or after `MAINTENANCE_AFTER_S` (48 h)
+without float. Once armed it holds `PCP01` until float, so the 08-26
+PCP03/PCP01 flap cannot return.
+
 Thresholds are now **positive** (+50 W start, +250 W stop) and that is
 deliberate: waiting for `net_balance` to go negative means export has
 already happened by the time it is detected, PCP is written (seconds on this

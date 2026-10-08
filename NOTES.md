@@ -1073,6 +1073,20 @@ WATCHLIST.md; recorded here so the before-state is not lost:
 357 tests. The new debounce tests were checked to fail against the old
 code.
 
+**2026-10-08 — the night's headroom was being refilled from the grid in the
+dark.** Measured across 09-25..10-08: on every night that followed a day
+whose last PCP write was 01 (09-25, 27, 28, 10-08), bulk charging started
+within minutes of the nightly floor, in the dark, at 10-11 A to 29 V. On days
+ending in 03 it did not (except two glitches: the 10-03 outage and a stale
+reading on 10-06). `grid_charge` decided "idle" at sunset but wrote nothing.
+On 10-08, with the house empty (2.8 kWh/day, against 6.4-7.5 occupied), the
+surplus was 149 Wh, and 19 Wh escaped on a pack refilled before sunrise.
+Fixed the same evening: PCP03 at sunset, `min_battery_voltage` 25.5 -> 24.3 V
+(daylight, line-mode only), and night charging only for <= 24.0 V or 48 h
+without float. The earlier conclusion that the battery mostly moves grid
+energy (below) was partly this bug. With the headroom preserved, it should
+fill from surplus instead.
+
 **2026-09-29 — is the battery actually harnessing solar? Mostly not.**
 Measured 09-20..28 from auto-energy `/api/history` and the gridcharge trace:
 

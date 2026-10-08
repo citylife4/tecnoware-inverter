@@ -1219,7 +1219,14 @@ class TestGridChargeController(unittest.TestCase):
         overnight, this produced a real PCP03<->PCP01 flap roughly every
         25-30 minutes all night -- confirmed in telemetry. No solar now
         means no PCP command AT ALL, bypassing that override too: battery
-        maintenance at night is not this controller's job."""
+        maintenance at night is not this controller's job.
+
+        2026-10-08: writing nothing was itself the bug this test describes --
+        the day's last PCP stood all night, and a day ending in PCP01 refilled
+        the pack from the grid right after the nightly window (10-08: 24.5 V
+        at 05:58, 29 V by 08:09, in the dark). Sunset now writes PCP03 once.
+        The 08-26 flap cannot return: min_battery_voltage no longer arms at
+        night, and anything that does arm holds until float."""
         service, stub, gc = self.make(net_balance=-200)     # exporting, sunny
         gc.set_config({"enabled": True, "min_switch_interval": 0})
         self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
@@ -1229,7 +1236,10 @@ class TestGridChargeController(unittest.TestCase):
         for _ in range(GENERATING_CONFIRMATIONS):
             gc.tick()                # debounced: sunset is not one sample
         self.assertEqual(gc.get_state()["current"]["desired_state"], "disabled_no_solar")
-        self.assertEqual(service.sent, [])   # no PCP write, not even PCP03
+        self.assertEqual(service.sent, ["PCP03"])   # once, and never PCP01
+        for _ in range(5):
+            gc.tick()
+        self.assertEqual(service.sent, ["PCP03"])
 
     def test_low_battery_does_not_force_a_charge_at_night(self):
         """The low-battery floor exists for daytime idling (PCP03 with no
@@ -1251,12 +1261,12 @@ class TestGridChargeController(unittest.TestCase):
         service, stub, gc = self.make(net_balance=-200)
         stub.ac_solar_w = 0.0     # set before set_config's own forced tick
         gc.set_config({"enabled": True, "min_switch_interval": 0})
-        self.assertEqual(service.sent, [])
+        self.assertEqual(service.sent, ["PCP03"])
         stub.ac_solar_w = 500.0      # sunrise
         for _ in range(GENERATING_CONFIRMATIONS):
             gc.tick()
         self.assertEqual(gc.get_state()["current"]["desired_state"], "charging")
-        self.assertEqual(service.sent, ["PCP01"])
+        self.assertEqual(service.sent, ["PCP03", "PCP01"])
 
     def test_deadband_never_holds_the_disabled_state(self):
         """2026-09-16: this drained the pack for four days.
@@ -1336,7 +1346,8 @@ class TestGridChargeController(unittest.TestCase):
             gc.tick()
         self.assertEqual(gc.get_state()["current"]["desired_state"],
                          "disabled_no_solar")
-        self.assertEqual(service.sent, [])
+        # Night in exclusive mode is PCP03 since 2026-10-08 -- never PCP01.
+        self.assertEqual(service.sent, ["PCP03"])
 
     def test_a_known_zero_solar_still_wins_over_export(self):
         """A working meter reading below the floor is direct evidence and

@@ -339,5 +339,99 @@ class TestProfiles(unittest.TestCase):
         self.assertIn('"Casa vazia"', html)
 
 
+class TestNightCharging(unittest.TestCase):
+    """2026-10-08: the day's last PCP used to stand all night. Ending on
+    PCP01 refilled the pack from the grid right after the nightly window,
+    destroying the headroom for the next day's surplus."""
+
+    def setUp(self):
+        from test_webapp import FetchStub
+        from webapp.grid_charge import GENERATING_CONFIRMATIONS
+        self.n = GENERATING_CONFIRMATIONS
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, "gc.json")
+        self.service = FakeService(battery_voltage=27.4, min_battery_voltage=24.3,
+                                   device_mode="L")
+        self.stub = FetchStub(-200)                 # sunny, exporting
+        self.gc = GridChargeController(self.service, self.path, fetch_fn=self.stub)
+        self.gc.set_config({"enabled": True, "min_switch_interval": 0})
+        self.assertEqual(self.service.sent[-1], "PCP01")   # absorbing export
+
+    def sunset(self):
+        self.stub.net_balance = 90
+        self.stub.ac_solar_w = 0.0
+        for _ in range(self.n):
+            self.gc.tick()
+
+    def test_a_day_ending_in_pcp01_is_closed_with_pcp03(self):
+        self.sunset()
+        self.assertEqual(self.service.sent[-1], "PCP03")
+
+    def test_planned_discharge_and_drift_do_not_charge_at_night(self):
+        """24.5 V floor, then standby drift under min_battery_voltage: the
+        10-08 case. No grid refill before dawn."""
+        self.sunset()
+        self.service.sent.clear()
+        for v in (24.5, 24.3, 24.2, 24.1):
+            self.service._battery_voltage = v
+            self.gc.tick()
+        self.assertEqual(self.service.sent, [])
+
+    def test_a_deep_pack_charges_at_night_until_float(self):
+        self.sunset()
+        self.service.sent.clear()
+        self.service._battery_voltage = 23.9
+        self.gc.tick()
+        self.assertEqual(self.service.sent, ["PCP01"])
+        self.service._battery_voltage = 27.2       # bulk: keep charging
+        self.service._charging_current = 10
+        for _ in range(3):
+            self.gc.tick()
+        self.assertEqual(self.service.sent, ["PCP01"])
+        self.service._battery_voltage = 27.4       # float
+        self.service._charging_current = 4
+        for _ in range(3):
+            self.gc.tick()
+        self.assertEqual(self.service.sent, ["PCP01", "PCP03"])
+
+    def test_a_low_reading_on_battery_does_not_arm(self):
+        """A pack on battery sags under load; that is the battery window's
+        job, with its own floor."""
+        self.sunset()
+        self.service.sent.clear()
+        self.service._device_mode = "B"
+        self.service._battery_voltage = 23.5
+        self.gc.tick()
+        self.assertEqual(self.service.sent, [])
+
+    def test_overdue_maintenance_charges_at_night(self):
+        from datetime import timezone as tz
+        self.sunset()
+        self.service.sent.clear()
+        self.service._battery_voltage = 25.2
+        self.gc._last_float_at = datetime.now(tz.utc) - timedelta(hours=49)
+        self.gc.tick()
+        self.assertEqual(self.service.sent, ["PCP01"])
+        self.assertTrue(self.gc.get_state()["battery_maintenance"]["latch_active"])
+
+    def test_last_float_survives_a_restart(self):
+        import json
+        from datetime import timezone as tz
+        old = datetime(2026, 10, 1, 12, 0, tzinfo=tz.utc)
+        with open(self.path + ".state", "w") as fh:
+            json.dump({"last_float_at": old.isoformat()}, fh)
+        restarted = GridChargeController(self.service, self.path, fetch_fn=self.stub)
+        self.assertEqual(restarted._last_float_at, old)
+
+    def test_min_battery_voltage_still_arms_in_daylight(self):
+        self.stub.net_balance = 200                 # importing: idle
+        self.service._battery_voltage = 24.2
+        for _ in range(3):
+            self.gc.tick()
+        self.assertEqual(self.service.sent[-1], "PCP01")
+        self.assertTrue(self.gc.get_state()["battery_maintenance"]["latch_active"])
+
+
 if __name__ == "__main__":
     unittest.main()
