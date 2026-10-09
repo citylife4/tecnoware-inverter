@@ -47,6 +47,31 @@ until the sun. `grid_charge` refills it only while the surplus signal says
   should catch;
 - export on sunny days.
 
+**10-09 morning. The key check passes: no dark charging. But two flaws
+in the 10-08 change.** The window opened rested at 25.5 V and `floor` latched
+at 05:14 at **24.2 V** (`away`, 24.5 V floor; the tick sees 1 sample in 6 plus
+3 confirmations), after **79 Wh**. No `hardware_override`. PCP03 held all
+night: 0 dark bulk samples, 0 night PCP01 writes, the pack resting at
+24.4 -> 24.2 V until sunrise, `latch_active` false. `profile` `away`, all
+four flags clear.
+
+**Flaw 1, a bug: the old churn at sunrise.** The first daylight tick
+(08:16:32) read 24.2 V <= 24.3. The stateless check in
+`apply_low_battery_floor` wrote PCP01, but the latch did **not** arm, because
+`arm_on_floor` uses the previous tick's `_generating`, which was still
+False. 30 s later the charger had the pack at 27.0 V, so the stateless check
+passed and the target went back to PCP03 (held only by the dwell). Fix: arm
+the latch whenever the stateless check fires.
+
+**Flaw 2: 24.3 V is too close to where an `away` night ends.** The 24.5 V
+floor actually latches around 24.2 V and the pack rests at 24.2-24.4 V. With
+flaw 1 fixed, every morning after an `away` night would grid-charge to float,
+which is the headroom loss 10-08 was meant to end. Today the bug saved it:
+the flip back to PCP03 let surplus charging take over at 08:40. Proposed:
+`min_battery_voltage` -> **24.0 V** (= `NIGHT_DEEP_V`, program 12). The 48 h
+maintenance rule then covers a pack that never reaches float. Neither applied;
+awaiting the user.
+
 ## TRIAL from 2026-09-29 06:03 — profile "occupied" (Casa ocupada)
 
 The dashboard now has two profiles (`PROFILES` in `webapp/battery_window.py`,
