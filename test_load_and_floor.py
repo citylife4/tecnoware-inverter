@@ -424,6 +424,31 @@ class TestNightCharging(unittest.TestCase):
         restarted = GridChargeController(self.service, self.path, fetch_fn=self.stub)
         self.assertEqual(restarted._last_float_at, old)
 
+    def test_first_daylight_tick_under_the_threshold_holds_until_float(self):
+        """2026-10-09 08:16: PCP01 on 24.2 V, then PCP03 30 s later at 27.0 V
+        because the latch had not armed."""
+        self.sunset()
+        self.service._battery_voltage = 24.2
+        self.stub.net_balance = 200            # sunrise, importing: idle
+        self.stub.ac_solar_w = 40.0
+        for _ in range(self.n):
+            self.gc.tick()
+        self.assertEqual(self.service.sent[-1], "PCP01")
+        self.service.sent.clear()
+        self.service._battery_voltage = 27.0   # the charger's own voltage
+        self.service._charging_current = 10
+        for _ in range(3):
+            self.gc.tick()
+        self.assertEqual(self.service.sent, [])     # still PCP01, no flip
+        self.assertTrue(self.gc.get_state()["battery_maintenance"]["latch_active"])
+
+    def test_a_battery_mode_sag_in_daylight_does_not_arm(self):
+        self.stub.net_balance = 200
+        self.service._device_mode = "B"
+        self.service._battery_voltage = 23.9
+        self.gc.tick()
+        self.assertFalse(self.gc.get_state()["battery_maintenance"]["latch_active"])
+
     def test_min_battery_voltage_still_arms_in_daylight(self):
         self.stub.net_balance = 200                 # importing: idle
         self.service._battery_voltage = 24.2

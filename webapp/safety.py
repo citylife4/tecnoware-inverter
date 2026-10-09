@@ -205,6 +205,16 @@ def apply_low_battery_floor(service, target: str, latch=None):
         return "01", ("OVERRIDE: battery voltage could not be read -- "
                       "forcing utility charging rather than risk solar-only")
     if v <= floor:
+        # Arm the latch here too, or this check and the latch disagree. Live
+        # on 2026-10-09 08:16: the first daylight tick read 24.2 V <= 24.3,
+        # this wrote PCP01, but the latch had not armed (its observe() still
+        # saw the previous tick's night). 30 s later the charger had the pack
+        # at 27.0 V, this check passed, and the target went straight back to
+        # PCP03 -- the churn the latch exists to prevent. Line-mode readings
+        # only, as in observe(): a battery-mode one is sag, not state.
+        mode_fn = getattr(service, "mode", None)
+        if latch is not None and (mode_fn() if mode_fn else None) != "B":
+            latch.arm()
         return "01", (f"OVERRIDE: battery {v:.2f}V at or below {floor:.2f}V floor "
                       f"-- forcing utility charging")
     return target, None

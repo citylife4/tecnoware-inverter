@@ -467,9 +467,12 @@ day's last PCP still stood all night. On days ending in `PCP01` the charger
 refilled the pack from the grid the moment the nightly window hit its floor.
 On 10-08 it went 24.5 V at 05:58 to 29 V by 08:09, in the dark, and 19 Wh
 escaped that afternoon on a full pack. Now, in `exclusive` mode, the night
-target is `PCP03`, written once at sunset. `min_battery_voltage` is **24.3 V**
-(was 25.5), below both profile floors, and it arms the low-battery latch only
-in daylight on line-mode readings. At night the latch arms only for a resting
+target is `PCP03`, written once at sunset. `min_battery_voltage` is **24.0 V**
+(was 25.5; 24.3 for one day, which proved too close: an `away` night actually
+ends at ~24.2 V). It is the same as `NIGHT_DEEP_V` and program 12, so a
+planned discharge never trips it. It arms the low-battery latch in daylight on
+line-mode readings, and since 10-09 the stateless check arms the latch too,
+otherwise the two disagree and churn. At night the latch arms only for a resting
 pack at or under `NIGHT_DEEP_V` (24.0) or after `MAINTENANCE_AFTER_S` (48 h)
 without float. Once armed it holds `PCP01` until float, so the 08-26
 PCP03/PCP01 flap cannot return.

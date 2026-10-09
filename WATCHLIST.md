@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-10-08 (21:35: night charging rules; house empty, profile away)
+Last updated: 2026-10-09 (21:28: threshold 24.0 V, sunrise churn fixed)
 
 ---
 
@@ -30,9 +30,11 @@ on 09-25, 27, 28 and 10-08).
 
 **Changed:**
 - `grid_charge` writes **PCP03 at sunset** (exclusive mode), once.
-- `min_battery_voltage` **25.5 -> 24.3 V** (`web.json`), below both profile
-  floors, so a planned discharge no longer triggers a grid refill. It arms
-  `LowBatteryLatch` only in daylight and only on line-mode readings.
+- `min_battery_voltage` **25.5 -> 24.0 V** (`web.json`; 24.3 V for 10-08..09,
+  too close, see 10-09 morning), so a planned discharge no longer triggers a
+  grid refill. It arms `LowBatteryLatch` only in daylight and only on
+  line-mode readings. Since 10-09 21:28 the stateless check in
+  `apply_low_battery_floor` arms the latch too (the sunrise churn bug).
 - At night the latch arms only on a resting pack <= **24.0 V**
   (`NIGHT_DEEP_V`), or **48 h without float** (`MAINTENANCE_AFTER_S`, clock
   persisted in `web_gridcharge.json.state`). It then charges to float.
@@ -69,8 +71,8 @@ flaw 1 fixed, every morning after an `away` night would grid-charge to float,
 which is the headroom loss 10-08 was meant to end. Today the bug saved it:
 the flip back to PCP03 let surplus charging take over at 08:40. Proposed:
 `min_battery_voltage` -> **24.0 V** (= `NIGHT_DEEP_V`, program 12). The 48 h
-maintenance rule then covers a pack that never reaches float. Neither applied;
-awaiting the user.
+maintenance rule then covers a pack that never reaches float. **Both applied
+10-09 21:28.** (The pack had reached float at 17:25 that day, from surplus.)
 
 ## TRIAL from 2026-09-29 06:03 — profile "occupied" (Casa ocupada)
 
