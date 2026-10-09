@@ -49,6 +49,24 @@ until the sun. `grid_charge` refills it only while the surplus signal says
   should catch;
 - export on sunny days.
 
+**Night-charging table** (counts: >= ~400 Wh solar, export <= 5 Wh, no
+unexplained dark charge; 3 needed):
+
+    date    house Wh  solar Wh  export Wh  battery Wh  profile  counts?
+    10-08     2763       349        19        154       away     before the fix
+    10-09     2470       329         0        116       away     no: < 400 Wh
+
+**10-09 evening. Clean. The pack refilled from surplus and reached float.**
+Solar 329 Wh (0 nulls, peak 127 W), house 2470 Wh, export **0 Wh**, battery
+116 Wh (79 overnight plus the daytime window). After the night floor (24.2 V)
+the pack waited in the dark. The only grid write was the sunrise churn at
+08:16, fixed at 21:28. Refill was from surplus: `charging` 08:40-10:08 and
+14:27-17:36. Float was reached at 17:25 (`last_float_at`). Sunset wrote
+**PCP03** (17:37). `battery_maintenance` is sane: latch inactive,
+last_float_at today. Throws 5. No `hardware_override`, no
+`daytime_heavy_load`. No stall (the 21:27 restart was the deploy). 382 tests
+green. `profile` `away`, all four flags clear.
+
 **10-09 morning. The key check passes: no dark charging. But two flaws
 in the 10-08 change.** The window opened rested at 25.5 V and `floor` latched
 at 05:14 at **24.2 V** (`away`, 24.5 V floor; the tick sees 1 sample in 6 plus
