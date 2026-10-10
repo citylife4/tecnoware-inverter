@@ -55,6 +55,18 @@ unexplained dark charge; 3 needed):
     date    house Wh  solar Wh  export Wh  battery Wh  profile  counts?
     10-08     2763       349        19        154       away     before the fix
     10-09     2470       329         0        116       away     no: < 400 Wh
+    10-10     2743       236         0         59       away     no: < 400 Wh
+
+**10-10 evening. Clean.** Solar 236 Wh (0 nulls, peak 104 W), house 2743 Wh,
+export **0 Wh** (7 samples 13:24-16:37, worst -13 W), battery 59 Wh (42
+overnight plus the daytime window). The refill was entirely from surplus:
+`charging` from 08:18, 0 latch ticks. Float was reached at 17:57. Sunset wrote
+**PCP03** (17:57-18:01). Cloud gaps at 10:03 and 13:40 also dropped into
+`disabled_no_solar` and so wrote PCP03 mid-day. That's expected under the new
+rule and harmless (PCP moves no relay); `charging` resumed each time.
+`battery_maintenance` sane. Throws 8, no `hardware_override`, no
+`daytime_heavy_load`, no stall, 382 tests green. `profile` `away`, all four
+flags clear. Sunny days counted: 0 of 3.
 
 **10-10 morning. Clean: the first full night and morning under the
 corrected rules.** The window opened rested at 25.1 V. `floor` latched at
