@@ -56,6 +56,17 @@ unexplained dark charge; 3 needed):
     10-08     2763       349        19        154       away     before the fix
     10-09     2470       329         0        116       away     no: < 400 Wh
 
+**10-10 morning. Clean: the first full night and morning under the
+corrected rules.** The window opened rested at 25.1 V. `floor` latched at
+02:16 at 24.5 V after 3 readings, **42 Wh**, quiet minimum 24.4 V, no
+`hardware_override`. **No dark charging:** 0 bulk samples before sunrise and
+0 night PCP01 writes. The pack drifted 24.7 -> 24.2 V from 02:17 to 08:05
+(~0.08 V/h). At sunrise the 24.0 V threshold was not crossed, so no latch and
+no churn (unlike 10-09). The first write of the day was genuine surplus
+`charging` at 08:18, and the pack was at 28.7 V and 10 A by 09:00. `profile`
+`away`, all four flags clear. `battery_maintenance`: latch inactive,
+last_float_at 10-09 17:25.
+
 **10-09 evening. Clean. The pack refilled from surplus and reached float.**
 Solar 329 Wh (0 nulls, peak 127 W), house 2470 Wh, export **0 Wh**, battery
 116 Wh (79 overnight plus the daytime window). After the night floor (24.2 V)
