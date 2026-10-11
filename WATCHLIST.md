@@ -56,6 +56,35 @@ unexplained dark charge; 3 needed):
     10-08     2763       349        19        154       away     before the fix
     10-09     2470       329         0        116       away     no: < 400 Wh
     10-10     2743       236         0         59       away     no: < 400 Wh
+    10-11     2797       300         7         65       away     no: < 400 Wh, and 7 Wh
+
+**10-11 evening. Two things misbehaved.**
+
+**1. Export 7 Wh: the headroom ran out.** Solar 300 Wh (0 nulls, peak 115 W),
+house 2797 Wh, export **7 Wh**: 90 samples 15:29-16:37, worst -22 W. All of
+it came with PCP01 set (`charging`) and the pack at **float, 27.4-27.5 V,
+0 A** from ~15:40. The refill was from surplus (`charging` 09:26 onwards), so
+that part worked. But the night gave only 39 Wh (opened rested at 25.1 V),
+and the pack was full by mid-afternoon with sun still to come. A full pack
+absorbs nothing; that limit is unchanged.
+
+**2. A regression in the 10-08/09 change: one corrupt frame arms the
+latch.** Telemetry shows impossible frames on line mode: 14:19:08
+V=4.0/I=100, **16:30:54 V=0.0/I=100**, 17:20:48 V=4.0/I=100 (gotcha #8). The
+`NIGHT_DEEP_V` check and the stateless check in `apply_low_battery_floor`
+both arm on a **single** reading <= 24.0 V, so the 16:30:54 frame armed it.
+Sunset therefore left **PCP01** (17:36, desired `disabled_no_solar`), and the
+charger ran until float released it at 18:23. Harmless tonight (the pack was
+nearly full), but the same frame after a night floor would refill the pack
+from the grid in the dark. **Fix needed:** ignore implausible readings (a
+24 V pack still on line cannot read < ~18 V) and require consecutive
+confirmations before arming, like `floor_confirmations`. Not applied;
+awaiting the user.
+
+Otherwise: sunset ended on PCP03 once the latch released (18:23). Throws 6,
+no `hardware_override`, no `daytime_heavy_load`, no stall, 382 tests green.
+`profile` `away`, all four flags clear. `battery_maintenance` now: latch
+inactive, last_float_at 18:23.
 
 **10-11 morning. Clean.** The window opened rested at 25.1 V. The POP02 reply
 was garbled, but the device was on battery by the next tick. `floor` latched
