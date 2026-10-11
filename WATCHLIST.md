@@ -57,6 +57,15 @@ unexplained dark charge; 3 needed):
     10-09     2470       329         0        116       away     no: < 400 Wh
     10-10     2743       236         0         59       away     no: < 400 Wh
 
+**10-11 morning. Clean.** The window opened rested at 25.1 V. The POP02 reply
+was garbled, but the device was on battery by the next tick. `floor` latched
+at 03:02 at 24.3 V after 3 readings, **39 Wh**, quiet minimum 24.3 V, no
+`hardware_override`. **No dark charging:** 0 bulk samples, 0 night PCP01. The
+pack drifted 24.6 -> 24.2 V from 03:03 to 09:07, with no sun yet at 09:07
+(`disabled_no_solar`, PCP03). That's above the 24.0 V threshold, so it waits
+for the surplus, as intended. `profile` `away`, all four flags clear.
+`battery_maintenance`: latch inactive, last_float_at 10-10 17:57.
+
 **10-10 evening. Clean.** Solar 236 Wh (0 nulls, peak 104 W), house 2743 Wh,
 export **0 Wh** (7 samples 13:24-16:37, worst -13 W), battery 59 Wh (42
 overnight plus the daytime window). The refill was entirely from surplus:
