@@ -61,6 +61,20 @@ unexplained dark charge; 3 needed):
     10-09     2470       329         0        116       away     no: < 400 Wh
     10-10     2743       236         0         59       away     no: < 400 Wh
     10-11     2797       300         7         65       away     no: < 400 Wh, and 7 Wh
+    10-12     2598       253         0         44       away     no: < 400 Wh
+
+**10-12 evening. Clean apart from one pre-fix corrupt frame.** Solar 253 Wh
+(0 nulls, peak 116 W), house 2598 Wh, export **0 Wh**, battery 44 Wh. The
+refill was from surplus (`charging` from 09:09). Float was reached at 17:35,
+and sunset wrote **PCP03** (17:35). One corrupt frame, **11:28:16 V=6.0 /
+I=100** on line, armed the latch on the old single-reading code. The 12:18
+cloud gap therefore held PCP01 until float released it at 12:20 (27.4 V,
+4 A). Harmless in daylight. It's the 10-11 regression once more, fixed at
+21:28, so it should not recur. `battery_maintenance` sane: latch inactive,
+last_float_at 17:35. Throws 8, no `hardware_override`, no
+`daytime_heavy_load`. No stall (21:27 was the deploy). 389 tests green. 1 POP
+write failure, recovered. `profile` `away`, all four flags clear. Sunny days
+counted: 0 of 3.
 
 **10-12 morning. Clean.** The window opened rested at 25.2 V. `floor`
 latched at 03:07 at 24.5 V after 3 readings, **28 Wh**, quiet minimum 24.5 V,
