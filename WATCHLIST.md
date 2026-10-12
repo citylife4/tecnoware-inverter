@@ -58,6 +58,15 @@ unexplained dark charge; 3 needed):
     10-10     2743       236         0         59       away     no: < 400 Wh
     10-11     2797       300         7         65       away     no: < 400 Wh, and 7 Wh
 
+**10-12 morning. Clean.** The window opened rested at 25.2 V. `floor`
+latched at 03:07 at 24.5 V after 3 readings, **28 Wh**, quiet minimum 24.5 V,
+no `hardware_override`. **No dark charging:** 0 bulk samples, 0 night PCP01,
+no corrupt low-voltage frames overnight, so the single-frame flaw from 10-11
+had no chance to fire. The pack drifted 24.7 -> 24.4 V by 09:00 and is waiting
+for the sun. `profile` `away`, all four flags clear. `battery_maintenance`:
+latch inactive, last_float_at 10-11 18:23. The corrupt-frame fix is still
+awaiting the user.
+
 **10-11 evening. Two things misbehaved.**
 
 **1. Export 7 Wh: the headroom ran out.** Solar 300 Wh (0 nulls, peak 115 W),
