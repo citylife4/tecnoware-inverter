@@ -10,7 +10,7 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-10-09 (21:28: threshold 24.0 V, sunrise churn fixed)
+Last updated: 2026-10-12 (21:28: confirmed arming, corrupt frames ignored)
 
 ---
 
@@ -35,6 +35,10 @@ on 09-25, 27, 28 and 10-08).
   grid refill. It arms `LowBatteryLatch` only in daylight and only on
   line-mode readings. Since 10-09 21:28 the stateless check in
   `apply_low_battery_floor` arms the latch too (the sunrise churn bug).
+  **Since 10-12 21:28 arming needs 3 consecutive plausible readings, and
+  anything < 18 V is ignored** (the 10-11 corrupt-frame regression). Watch
+  for a dark charge after a corrupt frame (V < 18 V with I=100 in telemetry);
+  there should be none.
 - At night the latch arms only on a resting pack <= **24.0 V**
   (`NIGHT_DEEP_V`), or **48 h without float** (`MAINTENANCE_AFTER_S`, clock
   persisted in `web_gridcharge.json.state`). It then charges to float.
@@ -87,8 +91,8 @@ charger ran until float released it at 18:23. Harmless tonight (the pack was
 nearly full), but the same frame after a night floor would refill the pack
 from the grid in the dark. **Fix needed:** ignore implausible readings (a
 24 V pack still on line cannot read < ~18 V) and require consecutive
-confirmations before arming, like `floor_confirmations`. Not applied;
-awaiting the user.
+confirmations before arming, like `floor_confirmations`. **Applied 10-12
+21:28.**
 
 Otherwise: sunset ended on PCP03 once the latch released (18:23). Throws 6,
 no `hardware_override`, no `daytime_heavy_load`, no stall, 382 tests green.

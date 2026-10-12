@@ -332,10 +332,8 @@ class GridChargeController:
                     self._last_float_saved = now
                 except OSError:
                     pass
-        v = self.service.battery_voltage()
-        if (is_finite_number(v) and v <= NIGHT_DEEP_V
-                and self.service.mode() != "B"):
-            self._floor_latch.arm()
+        self._floor_latch.confirm_low("deep", self.service.battery_voltage(),
+                                      NIGHT_DEEP_V, self.service.mode() == "B")
         if (now - self._last_float_at).total_seconds() >= MAINTENANCE_AFTER_S:
             self._floor_latch.arm()
 
@@ -800,12 +798,12 @@ class GridChargeController:
 
     def _tick(self, force: bool = False) -> dict:
         cfg = self._config
-        # min_battery_voltage arms the latch only in daylight. At night a
-        # planned discharge plus standby drift would cross it and refill the
-        # pack from the grid before dawn; _note_battery_maintenance() covers
-        # the night with a deeper threshold.
-        self._floor_latch.observe(self.service,
-                                  arm_on_floor=self._generating is True)
+        # min_battery_voltage arms the latch only in daylight, inside
+        # apply_low_battery_floor(), which the night branch does not call: a
+        # planned discharge plus standby drift would otherwise refill the pack
+        # from the grid before dawn. _note_battery_maintenance() covers the
+        # night with a deeper threshold. Both need confirmed readings.
+        self._floor_latch.observe(self.service)
         self._note_battery_maintenance()
         desired, target, override, known = self._evaluate()
         self._desired = desired

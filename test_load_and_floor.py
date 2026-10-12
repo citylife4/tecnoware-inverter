@@ -156,27 +156,33 @@ class TestLowBatteryLatch(unittest.TestCase):
         self.latch.observe(self.service)
         return apply_low_battery_floor(self.service, "03", latch=self.latch)[0]
 
+    def arm(self, v=25.0):
+        """Three confirmed readings at or under the floor (2026-10-12)."""
+        for _ in range(3):
+            last = self.step(v, 0)
+        return last
+
     def test_holds_through_bulk_charging(self):
         """The 2026-09-16 failure: the charger raises the terminal voltage
         past min_battery_voltage at ~50% state of charge."""
-        self.assertEqual(self.step(25.0, 0), "01")
+        self.assertEqual(self.arm(), "01")
         for v in (26.5, 27.2, 28.5, 29.0):
             self.assertEqual(self.step(v, 10), "01")
 
     def test_releases_once_the_charger_reaches_float(self):
-        self.step(25.0, 0)
+        self.arm()
         for _ in range(FLOOR_RELEASE_CONFIRMATIONS - 1):
             self.assertEqual(self.step(27.4, 4), "01")
         self.assertEqual(self.step(27.4, 4), "03")
         self.assertFalse(self.latch.active)
 
     def test_charger_not_yet_running_is_not_float(self):
-        self.step(25.0, 0)
+        self.arm()
         for _ in range(5):
             self.assertEqual(self.step(25.8, 0), "01")
 
     def test_one_corrupt_frame_does_not_release(self):
-        self.step(25.0, 0)
+        self.arm()
         self.step(27.4, 4)
         self.step(27.4, 4)
         self.step(27.4, 10)          # still bulk: count restarts
@@ -192,7 +198,8 @@ class TestLowBatteryLatch(unittest.TestCase):
         sched = Scheduler(self.service, os.path.join(tmp.name, "s.json"))
         sched.set_state(True, [{"from": "00:00", "to": "23:59", "pcp": "03"}])
         self.service._battery_voltage = 25.0
-        sched.tick(force=True)
+        for _ in range(3):
+            sched.tick(force=True)
         self.assertEqual(self.service.sent[-1], "PCP01")
         self.service._battery_voltage = 27.1
         self.service._charging_current = 10
@@ -253,6 +260,66 @@ class TestDaytimeLatchRelease(unittest.TestCase):
     def test_unknown_current_does_not_release(self):
         self.ticks(27.4, None)
         self.assertTrue(self.bw.get_state()["recovering"])
+
+
+class TestCorruptFrames(unittest.TestCase):
+    """2026-10-11 16:30:54: a line-mode frame read V=0.0 / I=100 and armed
+    the latch on its own, leaving PCP01 standing at sunset."""
+
+    def setUp(self):
+        self.service = FakeService(battery_voltage=27.4, min_battery_voltage=24.0,
+                                   device_mode="L")
+        self.latch = LowBatteryLatch()
+
+    def feed(self, *volts):
+        for v in volts:
+            self.service._battery_voltage = v
+            apply_low_battery_floor(self.service, "03", latch=self.latch)
+
+    def test_a_single_corrupt_frame_does_not_arm(self):
+        self.feed(0.0)
+        self.assertFalse(self.latch.active)
+
+    def test_implausible_frames_never_count(self):
+        self.feed(0.0, 4.0, 0.0, 4.0)
+        self.assertFalse(self.latch.active)
+
+    def test_one_genuine_low_reading_does_not_arm(self):
+        self.feed(23.9, 25.5, 23.9, 25.5)
+        self.assertFalse(self.latch.active)
+
+    def test_three_genuine_low_readings_arm(self):
+        self.feed(23.9, 23.9, 23.9)
+        self.assertTrue(self.latch.active)
+
+    def test_a_corrupt_frame_neither_counts_nor_resets(self):
+        self.feed(23.9, 23.9, 0.0, 23.9)
+        self.assertTrue(self.latch.active)
+
+    def test_reading_state_does_not_count(self):
+        for _ in range(5):
+            self.service._battery_voltage = 23.9
+            apply_low_battery_floor(self.service, "03", latch=self.latch, count=False)
+        self.assertFalse(self.latch.active)
+
+    def test_a_corrupt_frame_at_night_does_not_charge(self):
+        from test_webapp import FetchStub
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        stub = FetchStub(90)
+        stub.ac_solar_w = 0.0
+        gc = GridChargeController(self.service, os.path.join(tmp.name, "gc.json"),
+                                  fetch_fn=stub)
+        gc.set_config({"enabled": True, "min_switch_interval": 0})
+        self.service._battery_voltage = 24.4      # after a night floor
+        gc.tick()
+        self.service.sent.clear()
+        self.service._battery_voltage = 0.0       # one corrupt frame
+        gc.tick()
+        self.service._battery_voltage = 24.4
+        for _ in range(3):
+            gc.tick()
+        self.assertNotIn("PCP01", self.service.sent)
 
 
 class TestHeavyInputReadings(unittest.TestCase):
@@ -382,7 +449,8 @@ class TestNightCharging(unittest.TestCase):
         self.sunset()
         self.service.sent.clear()
         self.service._battery_voltage = 23.9
-        self.gc.tick()
+        for _ in range(3):
+            self.gc.tick()
         self.assertEqual(self.service.sent, ["PCP01"])
         self.service._battery_voltage = 27.2       # bulk: keep charging
         self.service._charging_current = 10
@@ -431,7 +499,7 @@ class TestNightCharging(unittest.TestCase):
         self.service._battery_voltage = 24.2
         self.stub.net_balance = 200            # sunrise, importing: idle
         self.stub.ac_solar_w = 40.0
-        for _ in range(self.n):
+        for _ in range(self.n + 3):
             self.gc.tick()
         self.assertEqual(self.service.sent[-1], "PCP01")
         self.service.sent.clear()
@@ -452,7 +520,7 @@ class TestNightCharging(unittest.TestCase):
     def test_min_battery_voltage_still_arms_in_daylight(self):
         self.stub.net_balance = 200                 # importing: idle
         self.service._battery_voltage = 24.2
-        for _ in range(3):
+        for _ in range(4):
             self.gc.tick()
         self.assertEqual(self.service.sent[-1], "PCP01")
         self.assertTrue(self.gc.get_state()["battery_maintenance"]["latch_active"])

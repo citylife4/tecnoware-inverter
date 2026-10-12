@@ -472,7 +472,11 @@ target is `PCP03`, written once at sunset. `min_battery_voltage` is **24.0 V**
 ends at ~24.2 V). It is the same as `NIGHT_DEEP_V` and program 12, so a
 planned discharge never trips it. It arms the low-battery latch in daylight on
 line-mode readings, and since 10-09 the stateless check arms the latch too,
-otherwise the two disagree and churn. At night the latch arms only for a resting
+otherwise the two disagree and churn. **Since 10-12, arming needs
+`ARM_CONFIRMATIONS` (3) consecutive plausible readings, and anything under
+`PLAUSIBLE_MIN_V` (18 V) is ignored.** On 10-11 a single corrupt frame
+(V=0.0, I=100, on line) armed it and left PCP01 standing at sunset. After a
+night floor the same frame would refill the pack from the grid in the dark. At night the latch arms only for a resting
 pack at or under `NIGHT_DEEP_V` (24.0) or after `MAINTENANCE_AFTER_S` (48 h)
 without float. Once armed it holds `PCP01` until float, so the 08-26
 PCP03/PCP01 flap cannot return.

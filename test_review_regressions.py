@@ -38,7 +38,8 @@ class TestReviewRegressions(unittest.TestCase):
         self.assertTrue(result['applied'])
         self.assertIn('disk full', svc.latest()['priority_persistence_error'])
         svc.battery_voltage.return_value = 24
-        sched.tick(now=datetime(2026, 9, 16, 12))
+        for _ in range(3):       # three confirmed readings arm the latch
+            sched.tick(now=datetime(2026, 9, 16, 12))
         self.assertEqual(svc._conn.send_set_command.call_args.args, ('PCP01',))
 
     def test_watchdog_budget_survives_poll_and_rearms_on_health(self):

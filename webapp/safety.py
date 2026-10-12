@@ -98,6 +98,17 @@ FLOOR_RELEASE_MAX_A = 4.0
 # telemetry has "2750.0" volts in it -- and one must not end a charge.
 FLOOR_RELEASE_CONFIRMATIONS = 3
 
+# Arming needs the same: consecutive plausible low readings. On 2026-10-11 a
+# frame reading V=0.0 / I=100 on line mode (16:30:54; two more at 4.0 V the
+# same day) armed the latch on its own, and sunset left PCP01 standing. After a
+# night floor that would refill the pack from the grid in the dark -- what the
+# 10-08 change exists to stop. Below PLAUSIBLE_MIN_V a reading is corruption,
+# not state: a 24 V lead-acid bank on line cannot read that, and the deepest
+# real sag on record (2889 W motor start, on battery) was 20.9 V. Such a
+# reading neither counts nor resets.
+ARM_CONFIRMATIONS = 3
+PLAUSIBLE_MIN_V = 18.0
+
 
 class LowBatteryLatch:
     """Holds the low-battery override until the pack is actually full.
@@ -121,6 +132,24 @@ class LowBatteryLatch:
     def __init__(self):
         self.active = False
         self._at_float = 0
+        self._low = {}
+
+    def confirm_low(self, key: str, v, threshold: float, on_battery: bool) -> bool:
+        """Count a reading towards arming; arm on ARM_CONFIRMATIONS in a row.
+        `key` keeps separate counts per rule (daylight floor, night deep).
+        Call once per controller tick per rule. Implausible readings and
+        battery-mode ones (sag, not state) are ignored."""
+        if on_battery or not is_finite_number(v) or v < PLAUSIBLE_MIN_V:
+            return False
+        if v > threshold:
+            self._low[key] = 0
+            return False
+        self._low[key] = self._low.get(key, 0) + 1
+        if self._low[key] >= ARM_CONFIRMATIONS:
+            self._low[key] = 0
+            self.arm()
+            return True
+        return False
 
     def arm(self) -> None:
         """Arm for a reason other than min_battery_voltage (a deep pack at
@@ -128,27 +157,12 @@ class LowBatteryLatch:
         self.active = True
         self._at_float = 0
 
-    def observe(self, service, arm_on_floor: bool = True) -> None:
-        """`arm_on_floor=False` releases but never arms. grid_charge passes
-        that at night: there the threshold would turn a planned discharge
-        plus standby drift into a grid refill before dawn.
-
-        Only line-mode readings arm it. A battery-mode reading sags under load
-        (2 V at 1.2 kW, 0.1-0.2 V under the fridge), and a pack on battery is
-        the battery window's job, with its own floor."""
-        floor = getattr(service, "min_battery_voltage", None)
-        v = service.battery_voltage()
-        if not (is_finite_number(floor) and is_finite_number(v)):
-            self._at_float = 0
-            return
-        mode_fn = getattr(service, "mode", None)
-        on_battery = (mode_fn() if mode_fn else None) == "B"
-        if v <= floor:
-            if arm_on_floor and not on_battery:
-                self.arm()
-            self._at_float = 0
-            return
+    def observe(self, service) -> None:
+        """Release only. Arming is apply_low_battery_floor()'s job (daylight,
+        once per tick, confirmed) and grid_charge's night rules -- never on a
+        single reading."""
         if not self.active:
+            self._at_float = 0
             return
         if at_float(service):
             self._at_float += 1
@@ -172,7 +186,7 @@ def at_float(service) -> bool:
             and amps <= FLOOR_RELEASE_MAX_A and v >= FLOOR_RELEASE_MIN_V)
 
 
-def apply_low_battery_floor(service, target: str, latch=None):
+def apply_low_battery_floor(service, target: str, latch=None, count: bool = True):
     """If `target` is the solar-only PCP and the battery is at/under
     `service.min_battery_voltage` (or unreadable), force utility-fallback
     ("01") instead and return why. Returns (effective_target, reason_or_None).
@@ -186,6 +200,15 @@ def apply_low_battery_floor(service, target: str, latch=None):
     charging source drains the pack, and it already happened once on this
     hardware (see CLAUDE.md gotcha #2).
     """
+    if latch is not None and count and target != SOLAR_ONLY_PCP:
+        # Count while already charging too, so the latch is armed by the time
+        # the target flips to PCP03 -- otherwise that flip would stop the
+        # charger for ARM_CONFIRMATIONS ticks before the latch caught up.
+        floor = service.min_battery_voltage
+        if is_finite_number(floor):
+            mode_fn = getattr(service, "mode", None)
+            latch.confirm_low("floor", service.battery_voltage(), floor,
+                              (mode_fn() if mode_fn else None) == "B")
     if target != SOLAR_ONLY_PCP:
         return target, None
     if latch is not None and latch.active:
@@ -204,17 +227,21 @@ def apply_low_battery_floor(service, target: str, latch=None):
     if not is_finite_number(v):
         return "01", ("OVERRIDE: battery voltage could not be read -- "
                       "forcing utility charging rather than risk solar-only")
-    if v <= floor:
-        # Arm the latch here too, or this check and the latch disagree. Live
-        # on 2026-10-09 08:16: the first daylight tick read 24.2 V <= 24.3,
-        # this wrote PCP01, but the latch had not armed (its observe() still
-        # saw the previous tick's night). 30 s later the charger had the pack
-        # at 27.0 V, this check passed, and the target went straight back to
-        # PCP03 -- the churn the latch exists to prevent. Line-mode readings
-        # only, as in observe(): a battery-mode one is sag, not state.
+    if latch is not None:
+        # With a latch, the latch decides: ARM_CONFIRMATIONS plausible
+        # line-mode readings at or under the floor arm it, and it then holds
+        # until float. A single reading used to force PCP01 here directly,
+        # which both churned (2026-10-09 08:16: PCP01 at 24.2 V, PCP03 30 s
+        # later at the charger's 27.0 V) and let one corrupt frame through
+        # (2026-10-11 16:30:54, V=0.0). `count=False` is for read-only callers
+        # such as a get_state(), so looking at the dashboard arms nothing.
         mode_fn = getattr(service, "mode", None)
-        if latch is not None and (mode_fn() if mode_fn else None) != "B":
-            latch.arm()
+        on_battery = (mode_fn() if mode_fn else None) == "B"
+        if count and latch.confirm_low("floor", v, floor, on_battery):
+            return "01", (f"OVERRIDE: battery {v:.2f}V at or below {floor:.2f}V "
+                          f"floor -- forcing utility charging until float")
+        return target, None
+    if v <= floor:
         return "01", (f"OVERRIDE: battery {v:.2f}V at or below {floor:.2f}V floor "
                       f"-- forcing utility charging")
     return target, None

@@ -34,6 +34,9 @@ battery_test.log
 web_battery_window.json
 web_battery_window.json.tmp
 web_battery_window.json.state
+# grid_charge's battery-maintenance clock (last float) -- runtime state
+web_gridcharge.json.state
+web_gridcharge.json.state.tmp
 web_battery_window.json.state.tmp
 
 # persistent write audit -- instance-specific runtime state

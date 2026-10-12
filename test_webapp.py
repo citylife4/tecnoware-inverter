@@ -640,7 +640,9 @@ class TestOverrideMode(unittest.TestCase):
         gc.set_config({"mode": "override", "enabled": True, "idle_pcp": "03",
                        "charge_pcp": "03",   # pediríamos 03...
                        "export_threshold_w": -150, "min_switch_interval": 0})
-        self.assertEqual(service.sent, ["PCP01"])   # ...mas o piso força 01
+        gc.tick()
+        gc.tick()      # três leituras confirmadas armam o trinco
+        self.assertEqual(service.sent[-1], "PCP01")   # ...mas o piso força 01
 
     # ---- API coexistence ----
     def test_api_allows_both_when_grid_charge_is_override(self):
@@ -961,7 +963,9 @@ class TestScheduler(unittest.TestCase):
         service, sched = self.make(battery_voltage=20.0, min_battery_voltage=24.0)
         frm, to = window_around_now()
         sched.set_state(True, [{"from": frm, "to": to, "pcp": "03", "why": "daytime"}])
-        self.assertEqual(service.sent, ["PCP01"])
+        sched.tick(force=True)
+        sched.tick(force=True)   # three confirmed readings arm the latch
+        self.assertEqual(service.sent[-1], "PCP01")
         self.assertIn("OVERRIDE", sched.get_state()["last_run"]["why"])
 
     def test_solar_only_allowed_above_floor(self):
@@ -1145,7 +1149,9 @@ class TestGridChargeController(unittest.TestCase):
         service, _, gc = self.make(net_balance=100,   # importing -> would be idle
                                    battery_voltage=20.0, min_battery_voltage=24.0)
         gc.set_config({"enabled": True, "min_switch_interval": 0})
-        self.assertEqual(service.sent, ["PCP01"])
+        gc.tick()
+        gc.tick()      # three confirmed readings arm the latch (2026-10-12)
+        self.assertEqual(service.sent, ["PCP03", "PCP01"])
         self.assertIn("OVERRIDE", gc.get_state()["last_run"]["why"])
 
     def test_unreachable_dashboard_falls_back_to_idle(self):
@@ -1315,7 +1321,8 @@ class TestGridChargeController(unittest.TestCase):
         service.sent.clear()
         stub.ac_solar_w = 200.0
         stub.net_balance = 60                        # dead-band again
-        for _ in range(GENERATING_CONFIRMATIONS + 1):
+        # +2: arming needs ARM_CONFIRMATIONS daylight readings (2026-10-12).
+        for _ in range(GENERATING_CONFIRMATIONS + 3):
             gc.tick()
         self.assertIn("PCP01", service.sent,
                       "battery under min_battery_voltage must be charged")
@@ -3486,8 +3493,12 @@ class TestSchedulerForgetsAnUnacknowledgedWrite(unittest.TestCase):
         # Pack drains with the charger off; the floor must force PCP01 back.
         service.send_set = real_send
         service._battery_voltage = 23.0
+        sched.tick()
+        sched.tick()             # three confirmed readings arm the latch
         result = sched.tick()
-        self.assertEqual(service.sent, ["PCP01", "PCP03", "PCP01"],
+        # The unconfirmed cache makes the first tick re-send PCP03 before the
+        # latch arms (2026-10-12); what matters is that PCP01 is not skipped.
+        self.assertEqual(service.sent, ["PCP01", "PCP03", "PCP03", "PCP01"],
                          "a low-battery write must never be skipped on an "
                          "unconfirmed cache")
         self.assertIn("OVERRIDE", result["why"])

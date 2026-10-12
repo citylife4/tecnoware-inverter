@@ -130,7 +130,7 @@ class Scheduler:
 
     def get_state(self) -> dict:
         with self._lock:
-            rule, target, why, override = self._evaluate()
+            rule, target, why, override = self._evaluate(count=False)
             return {
                 "enabled": self._state["enabled"],
                 "rules": self._state["rules"],
@@ -177,7 +177,7 @@ class Scheduler:
 
     # ---- evaluation -------------------------------------------------------
 
-    def _evaluate(self, now=None):
+    def _evaluate(self, now=None, count=True):
         """Return (matching_rule, effective_target, why, override_reason).
         effective_target already has the low-battery override applied."""
         now = now or datetime.now()
@@ -186,7 +186,7 @@ class Scheduler:
             return None, None, None, None
         why = rule.get("why", "")
         target, override = apply_low_battery_floor(
-            self.service, rule["pcp"], latch=self._floor_latch)
+            self.service, rule["pcp"], latch=self._floor_latch, count=count)
         return rule, target, why, override
 
     def _is_overridden(self) -> bool:
