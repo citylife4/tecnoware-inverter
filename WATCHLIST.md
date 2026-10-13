@@ -36,6 +36,23 @@ The user switched back at 15:04. Deployed at the same time (final at 15:17):
 25.3 V. No dark charging, except to finish this latch's charge to float.
 Export on sunny days.
 
+**10-13 evening. Clean since the 15:17 fix.** House **4712 Wh** (occupied
+again, up from 2.6-2.8 kWh/day), solar 256 Wh (0 nulls, peak 118 W), export
+0 Wh, battery 44 Wh (the night). The occupied recharge worked: the latch armed
+at 15:20 on 24.1 V <= 24.8 V, charged at 10-11 A (`charging` for part of
+it), and reached float at 17:40. It held PCP01 through sunset (17:34) as
+designed, then released to **PCP03** on float. `battery_maintenance` sane,
+latch inactive. No corrupt frames. Throws 4, no `hardware_override`, no
+stall after 15:17, 397 tests green. `profile` `occupied`, all four flags
+clear. The day's earlier restarts were the deploy and the deadlock (above).
+
+**Expect tonight to be skipped.** The pack rests at 25.4 V at 22:13 and
+drifts ~0.07 V/h, so ~25.2 V at 01:00, inside the 0.3 V margin
+(`too_low_to_start`). That is the intended replacement for a 0-Wh no-op. But
+it also means `occupied` will create no headroom on most nights, which 10-03
+showed lets export through on brighter days. If sunny-day export appears
+under `occupied`, revisit 24.8 V as its floor (still unapplied).
+
 ## Deployed 2026-10-08 21:35 — night charging rules. Profile `away` since 10-07 21:24
 
 The house has been empty since 10-07 (consumption 3.7 and 2.8 kWh/day,
@@ -84,6 +101,7 @@ unexplained dark charge; 3 needed):
     10-10     2743       236         0         59       away     no: < 400 Wh
     10-11     2797       300         7         65       away     no: < 400 Wh, and 7 Wh
     10-12     2598       253         0         44       away     no: < 400 Wh
+    10-13     4712       256         0         44       occupied from 15:04; no: < 400 Wh
 
 **10-13 morning. Clean: the first night on confirmed arming.** The window
 opened rested at 25.1 V. `floor` latched at 03:07 at 24.2 V after 3 readings,
