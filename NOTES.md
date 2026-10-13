@@ -1073,6 +1073,21 @@ WATCHLIST.md; recorded here so the before-state is not lost:
 357 tests. The new debounce tests were checked to fail against the old
 code.
 
+**2026-10-13 — a deadlock, and why controllers may not call each other under
+lock.** Adding a per-profile recharge threshold had `grid_charge` ask
+`BatteryWindow` for it from inside grid_charge's locked tick, through a method
+that took the battery window's lock. The battery window's tick already held
+its own lock while calling `grid_charge.is_absorbing_export()`, which takes
+grid_charge's. Both froze within a minute of deploy. Telemetry kept flowing,
+since the poller has its own lock, which is what made the symptom confusing:
+the inverter was being read, but no API request answered. `usb_watchdog` saw
+"service unreachable", restarted twice, reset the USB hub twice and gave up.
+None of that could help, because each fresh process deadlocked again on its
+first ticks. Control was down 15:09-15:17, with the loads on grid. The cure
+was to read the threshold without the lock (a dict replaced whole, one key
+read). Lesson: a watchdog restart cannot fix a deterministic deadlock, and
+"telemetry fine, API dead" points at controller locks, not at USB.
+
 **2026-10-08 — the night's headroom was being refilled from the grid in the
 dark.** Measured across 09-25..10-08: on every night that followed a day
 whose last PCP write was 01 (09-25, 27, 28, 10-08), bulk charging started

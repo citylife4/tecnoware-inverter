@@ -370,7 +370,19 @@ dashboard or `PUT /api/battery-window/profile`. `occupied` (floor 25.0 V,
 daytime off) sizes the discharge to the ~37 Wh/day this house would export.
 `away` (24.5 V, daytime on) is for an empty house with a larger surplus. The
 active profile is derived from the live config, so a hand edit shows as
-`custom`. Why this exists: the battery stores little solar here, since the
+`custom`. Since 2026-10-13 each profile also sets `recharge_below_v`, the
+daylight grid-recharge threshold that grid_charge reads through
+`recharge_floor_source` (occupied 24.8 V, away 24.0 V; never below web.json's
+`min_battery_voltage`). An occupied house has little surplus to refill a low
+pack. Neither window *enters* battery mode within `SKIP_START_MARGIN_V`
+(0.3 V) of its floor.
+
+**Calls between controllers must not take the callee's lock.** BatteryWindow
+calls `grid_charge.is_absorbing_export()` while holding its own lock. When
+grid_charge started calling back into BatteryWindow under *its* lock, the two
+deadlocked (2026-10-13 15:11): every API request hung, and the watchdog reset
+USB three times and gave up. `recharge_below_v()` is lock-free for that
+reason, and `test_no_lock_order_deadlock_between_the_controllers` guards it. Why this exists: the battery stores little solar here, since the
 panels are not on the PV input, so deep daily cycling mostly moves grid
 energy through a lossy pack (NOTES.md, 2026-09-29).
 

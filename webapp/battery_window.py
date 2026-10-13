@@ -291,6 +291,13 @@ DEFAULT_CONFIG = {
     # than predicted by the clock.
     "daytime_heavy_load_w": 800.0,
     "daytime_heavy_load_holdoff": 3600.0,
+    # Below this, resting and in daylight, grid_charge charges the pack from
+    # the grid to float (see GridChargeController.recharge_floor_source). Part
+    # of the profile, because the right value depends on occupancy: an empty
+    # house has surplus to refill a low pack, so 24.0 waits for it; an occupied
+    # one has little, and at 24.0 the pack hovered at ~45% for a day
+    # (2026-10-13). Never below web.json's min_battery_voltage.
+    "recharge_below_v": 24.0,
     # The pump's hours. Defaults to DEFAULT_PUMP_WINDOW; a config written
     # before this key existed inherits it rather than losing the block.
     "pump_window": [dict(w) for w in DEFAULT_PUMP_WINDOW],
@@ -318,10 +325,18 @@ VALID_KEYS = set(DEFAULT_CONFIG)
 # The active profile is derived from the live config, not stored, so a manual
 # edit shows as "custom" instead of a label that no longer matches.
 PROFILES = {
-    "occupied": {"enabled": True, "floor_voltage": 25.0, "daytime_enabled": False},
-    "away": {"enabled": True, "floor_voltage": 24.5, "daytime_enabled": True},
+    "occupied": {"enabled": True, "floor_voltage": 25.0, "daytime_enabled": False,
+                 "recharge_below_v": 24.8},
+    "away": {"enabled": True, "floor_voltage": 24.5, "daytime_enabled": True,
+             "recharge_below_v": 24.0},
 }
 CUSTOM_PROFILE = "custom"
+
+# Don't ENTER battery mode with the pack already within this of the floor. On
+# 2026-09-30..10-05 the occupied nights opened at a rested 25.1-25.4 V
+# against a 25.0 V floor, and most delivered 0-1 Wh for two relay throws. Only
+# entry is gated; a discharge in progress still runs to the floor.
+SKIP_START_MARGIN_V = 0.3
 
 
 def _utcnow() -> str:
@@ -430,6 +445,15 @@ def validate_config(cfg: dict) -> dict:
         raise ValueError("daytime_heavy_load_w must be positive")
     if out["daytime_heavy_load_holdoff"] < 0:
         raise ValueError("daytime_heavy_load_holdoff must not be negative")
+    try:
+        out["recharge_below_v"] = float(out["recharge_below_v"])
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("recharge_below_v must be a number")
+    if not (ABSOLUTE_FLOOR_V <= out["recharge_below_v"] <= out["floor_voltage"]):
+        raise ValueError(
+            f"recharge_below_v must be at least {ABSOLUTE_FLOOR_V}V and not "
+            f"above floor_voltage -- above the floor, every planned discharge "
+            f"would be refilled from the grid")
 
     out["forbidden"] = _validate_windows(out["forbidden"], "forbidden")
     out["pump_window"] = _validate_windows(out["pump_window"], "pump_window")
@@ -864,6 +888,30 @@ class BatteryWindow:
                 count += 1
         return count
 
+    def _too_low_to_start(self, v):
+        """GRID_POP decision when the pack is too close to the floor to be
+        worth entering battery mode, else None. See SKIP_START_MARGIN_V."""
+        if self._last_applied_pop == BATTERY_POP:
+            return None
+        limit = self._config["floor_voltage"] + SKIP_START_MARGIN_V
+        if v > limit:
+            return None
+        return GRID_POP, "too_low_to_start", (
+            f"bateria {v:.2f}V já perto do piso ({limit:.2f}V) — não vale a "
+            f"pena passar para a bateria")
+
+    def recharge_below_v(self) -> float:
+        """The active profile's daylight recharge threshold, for
+        grid_charge.
+
+        Deliberately lock-free. grid_charge calls this while holding its own
+        lock, and this class's tick holds its lock while calling
+        grid_charge.is_absorbing_export(): taking self._lock here deadlocked
+        both controllers on 2026-10-13 15:11 (every API request hung, the
+        watchdog gave up). Reading one key of a dict that is only ever
+        replaced whole is safe without it."""
+        return self._config["recharge_below_v"]
+
     def _note_heavy_load(self, now, mismatch) -> None:
         """Arm the daytime hold-off on evidence of the heavy load: enough
         heavy readings in the lookback from either source (the inverter's own
@@ -1028,10 +1076,16 @@ class BatteryWindow:
                 return GRID_POP, "daytime_surplus", (
                     f"saldo sem o inversor {signal:.0f}W < {threshold:.0f}W "
                     f"— descarregar agora aumentaria a exportação")
+            skip = self._too_low_to_start(v)
+            if skip:
+                return skip
             return BATTERY_POP, "daytime", (
                 f"janela diurna {cfg['daytime_from']}-{cfg['daytime_to']}, "
                 f"saldo sem o inversor {signal:.0f}W, bateria {v:.2f}V")
 
+        skip = self._too_low_to_start(v)
+        if skip:
+            return skip
         return BATTERY_POP, "window", (
             f"janela {cfg['from']}-{cfg['to']}, bateria {v:.2f}V")
 

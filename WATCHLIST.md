@@ -10,9 +10,31 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-10-12 (21:28: confirmed arming, corrupt frames ignored)
+Last updated: 2026-10-13 (15:17: occupied again; per-profile recharge, skip-near-floor)
 
 ---
+
+## 2026-10-13 15:04: house occupied again, profile `occupied`
+
+The user switched back at 15:04. Deployed at the same time (final at 15:17):
+- **`recharge_below_v` per profile**: occupied 24.8 V, away 24.0 V. It is
+  grid_charge's daylight recharge threshold, never below web.json's 24.0.
+  It applied at once: the pack had sat at 24.1-24.2 V (~45%) since the
+  night, the latch armed at 15:19, and it charged at 11 A towards float.
+- **No entry within 0.3 V of the floor** (`too_low_to_start`). It stops the
+  occupied no-op nights (13, 0, 1, 0, 0, 1 Wh, two relay throws each).
+- **Outage I caused, 15:09-15:20.** The first deploy deadlocked the two
+  controllers (lock-order inversion, see CLAUDE.md). The API hung, and
+  `usb_watchdog` restarted the service twice, reset the USB hub and gave up
+  at 15:13 ("needs manual intervention"). Fixed and redeployed at 15:17,
+  watchdog `ok` from 15:18. The loads were on grid (POP00, outside the
+  windows) throughout, so the house was unaffected. There may be a Telegram
+  alert from 15:13.
+
+**What to watch under `occupied`:** tonight should be a real discharge to
+25.0 V from a fuller pack, or `too_low_to_start` if it is still under
+25.3 V. No dark charging, except to finish this latch's charge to float.
+Export on sunny days.
 
 ## Deployed 2026-10-08 21:35 — night charging rules. Profile `away` since 10-07 21:24
 

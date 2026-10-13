@@ -322,6 +322,97 @@ class TestCorruptFrames(unittest.TestCase):
         self.assertNotIn("PCP01", self.service.sent)
 
 
+class TestOccupiedRecharge(unittest.TestCase):
+    """2026-10-13: under `occupied` the pack sat at 24.2 V (~45%) with no
+    surplus to refill it, and the night would have entered battery mode at
+    24.2 V against a 25.0 V floor."""
+
+    def setUp(self):
+        from test_webapp import FetchStub
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.service = FakeService(battery_voltage=24.2, min_battery_voltage=24.0,
+                                   device_mode="L")
+        self.bw = BatteryWindow(self.service, os.path.join(self.tmp.name, "bw.json"))
+        self.stub = FetchStub(200)                 # daylight, importing: idle
+        self.gc = GridChargeController(self.service, os.path.join(self.tmp.name, "gc.json"),
+                                       fetch_fn=self.stub)
+        self.gc.recharge_floor_source = self.bw.recharge_below_v
+
+    def run_gc(self, n=4):
+        self.gc.set_config({"enabled": True, "min_switch_interval": 0})
+        for _ in range(n):
+            self.gc.tick()
+
+    def test_occupied_recharges_a_half_empty_pack(self):
+        self.bw.apply_profile("occupied", now=NOON)
+        self.run_gc()
+        self.assertEqual(self.service.sent[-1], "PCP01")
+        self.assertEqual(self.gc.get_state()["battery_maintenance"]["recharge_below_v"], 24.8)
+
+    def test_away_waits_for_surplus(self):
+        self.bw.apply_profile("away", now=NOON)
+        self.run_gc()
+        self.assertEqual(self.service.sent[-1], "PCP03")
+
+    def test_the_profile_cannot_go_below_the_hard_minimum(self):
+        self.service.min_battery_voltage = 24.5
+        self.bw.apply_profile("away", now=NOON)      # 24.0 < 24.5
+        self.assertEqual(self.gc._daylight_floor(), 24.5)
+
+    def test_no_entry_near_the_floor(self):
+        self.service._device_mode = None
+        self.bw.apply_profile("occupied", now=NIGHT)
+        r = self.bw.tick(now=NIGHT)
+        self.assertEqual(r["reason"], "too_low_to_start")
+        self.assertNotIn("POP02", self.service.sent)
+
+    def test_entry_well_above_the_floor(self):
+        self.service._device_mode = None
+        self.service._battery_voltage = 25.6
+        self.bw.apply_profile("occupied", now=NIGHT)
+        self.assertIn("POP02", self.service.sent)
+
+    def test_a_discharge_in_progress_still_runs_to_the_floor(self):
+        self.service._device_mode = None
+        self.service._battery_voltage = 25.6
+        self.bw.apply_profile("occupied", now=NIGHT)
+        self.service._battery_voltage = 25.1        # inside the margin now
+        r = self.bw.tick(now=NIGHT)
+        self.assertEqual(r["reason"], "window")
+
+    def test_no_lock_order_deadlock_between_the_controllers(self):
+        """2026-10-13 15:11: grid_charge held its lock and asked the battery
+        window for the threshold (taking that lock), while the battery
+        window held its lock and asked grid_charge is_absorbing_export.
+        Both froze and every API request hung. The threshold read must not
+        need the battery window's lock."""
+        import threading
+        self.bw.apply_profile("occupied", now=NOON)
+        self.gc.set_config({"enabled": True, "min_switch_interval": 0})
+        holding = threading.Event()
+        release = threading.Event()
+
+        def hold_window_lock():
+            with self.bw._lock:
+                holding.set()
+                release.wait(5)
+
+        t = threading.Thread(target=hold_window_lock)
+        t.start()
+        holding.wait(5)
+        done = threading.Event()
+        threading.Thread(target=lambda: (self.gc.tick(), done.set())).start()
+        finished = done.wait(2)
+        release.set()
+        t.join()
+        self.assertTrue(finished, "grid_charge blocked on the battery window's lock")
+
+    def test_recharge_above_the_floor_is_refused(self):
+        with self.assertRaises(ValueError):
+            validate_config({"floor_voltage": 24.5, "recharge_below_v": 24.8})
+
+
 class TestHeavyInputReadings(unittest.TestCase):
     def test_counts_heavy_shelly_readings(self):
         tmp = tempfile.TemporaryDirectory()

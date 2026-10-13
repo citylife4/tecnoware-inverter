@@ -199,6 +199,9 @@ def main() -> int:
                                    # Shelly em bypass -- ver
                                    # GridChargeController.heavy_input_readings().
                                    heavy_load_source=grid_charge.heavy_input_readings)
+    # O limiar de recarga diurna vem do perfil ativo da janela de bateria
+    # (ocupada 24,8 V, vazia 24,0 V), nunca abaixo do min_battery_voltage.
+    grid_charge.recharge_floor_source = battery_window.recharge_below_v
 
     scheduler = Scheduler(service, path=cfg["schedule_config"],
                           poll_interval=float(cfg["schedule_poll_interval"]),

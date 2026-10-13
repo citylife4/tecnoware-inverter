@@ -186,7 +186,8 @@ def at_float(service) -> bool:
             and amps <= FLOOR_RELEASE_MAX_A and v >= FLOOR_RELEASE_MIN_V)
 
 
-def apply_low_battery_floor(service, target: str, latch=None, count: bool = True):
+def apply_low_battery_floor(service, target: str, latch=None, count: bool = True,
+                            floor=None):
     """If `target` is the solar-only PCP and the battery is at/under
     `service.min_battery_voltage` (or unreadable), force utility-fallback
     ("01") instead and return why. Returns (effective_target, reason_or_None).
@@ -204,10 +205,10 @@ def apply_low_battery_floor(service, target: str, latch=None, count: bool = True
         # Count while already charging too, so the latch is armed by the time
         # the target flips to PCP03 -- otherwise that flip would stop the
         # charger for ARM_CONFIRMATIONS ticks before the latch caught up.
-        floor = service.min_battery_voltage
-        if is_finite_number(floor):
+        level = service.min_battery_voltage if floor is None else floor
+        if is_finite_number(level):
             mode_fn = getattr(service, "mode", None)
-            latch.confirm_low("floor", service.battery_voltage(), floor,
+            latch.confirm_low("floor", service.battery_voltage(), level,
                               (mode_fn() if mode_fn else None) == "B")
     if target != SOLAR_ONLY_PCP:
         return target, None
@@ -217,7 +218,7 @@ def apply_low_battery_floor(service, target: str, latch=None, count: bool = True
         return "01", (f"OVERRIDE: holding utility charging until the pack "
                       f"reaches float ({shown}) -- the voltage alone reads "
                       f"high while charging")
-    floor = service.min_battery_voltage
+    floor = service.min_battery_voltage if floor is None else floor
     if floor is None:
         return target, None
     if not is_finite_number(floor):

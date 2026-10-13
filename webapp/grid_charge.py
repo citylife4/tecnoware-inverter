@@ -268,6 +268,10 @@ class GridChargeController:
         # the charger reaches float, not until the terminal voltage (which
         # the charger itself raises) clears min_battery_voltage.
         self._floor_latch = LowBatteryLatch()
+        # Callable returning the active profile's recharge_below_v; serve.py
+        # wires BatteryWindow.recharge_below_v. None = web.json's
+        # min_battery_voltage alone.
+        self.recharge_floor_source = None
         # (monotonic, inverter_input_w) for every reading in the last
         # INPUT_HISTORY_S. BatteryWindow asks how many were heavy, because
         # the 1.2 kW load shows up here as isolated single readings -- it
@@ -317,6 +321,18 @@ class GridChargeController:
             return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
         except (OSError, ValueError, TypeError, AttributeError):
             return None
+
+    def _daylight_floor(self):
+        """Daylight recharge threshold: the profile's, never below web.json's
+        min_battery_voltage, which stays the hard minimum."""
+        base = self.service.min_battery_voltage
+        try:
+            wanted = self.recharge_floor_source() if self.recharge_floor_source else None
+        except Exception:
+            wanted = None
+        if not is_finite_number(wanted):
+            return base
+        return wanted if not is_finite_number(base) else max(base, wanted)
 
     def _note_battery_maintenance(self) -> None:
         """Track float, and arm the latch for a deep pack or an overdue full
@@ -370,6 +386,7 @@ class GridChargeController:
                     "latch_active": self._floor_latch.active,
                     "last_float_at": self._last_float_at.isoformat(timespec="seconds"),
                     "night_deep_v": NIGHT_DEEP_V,
+                    "recharge_below_v": self._daylight_floor(),
                     "maintenance_after_h": MAINTENANCE_AFTER_S / 3600,
                 },
             }
@@ -789,7 +806,8 @@ class GridChargeController:
 
         raw_target = cfg["charge_pcp"] if desired == "charging" else cfg["idle_pcp"]
         target, override = apply_low_battery_floor(
-            self.service, raw_target, latch=self._floor_latch)
+            self.service, raw_target, latch=self._floor_latch,
+            floor=self._daylight_floor())
         return desired, target, override, known
 
     def tick(self, force: bool = False) -> dict:
