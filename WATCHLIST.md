@@ -63,6 +63,14 @@ unexplained dark charge; 3 needed):
     10-11     2797       300         7         65       away     no: < 400 Wh, and 7 Wh
     10-12     2598       253         0         44       away     no: < 400 Wh
 
+**10-13 morning. Clean: the first night on confirmed arming.** The window
+opened rested at 25.1 V. `floor` latched at 03:07 at 24.2 V after 3 readings,
+**43 Wh**, quiet minimum 24.2 V, no `hardware_override`. **No dark
+charging:** 0 bulk samples, 0 night PCP01, no corrupt frames. The pack drifted
+24.6 -> 24.2 V by 09:00. Sun-up at 08:21 went to `idle` PCP03 with no latch:
+24.2 V is above the 24.0 V threshold. `profile` `away`, all four flags clear.
+`battery_maintenance`: latch inactive, last_float_at 10-12 17:35.
+
 **10-12 evening. Clean apart from one pre-fix corrupt frame.** Solar 253 Wh
 (0 nulls, peak 116 W), house 2598 Wh, export **0 Wh**, battery 44 Wh. The
 refill was from surplus (`charging` from 09:09). Float was reached at 17:35,
