@@ -36,6 +36,23 @@ The user switched back at 15:04. Deployed at the same time (final at 15:17):
 25.3 V. No dark charging, except to finish this latch's charge to float.
 Export on sunny days.
 
+**10-14 morning. The night was skipped as predicted; no regressions.** At
+01:00 the pack was at 25.2 V, inside the 0.3 V margin, so it logged
+`too_low_to_start`. 0 POP02 writes, 0 relay throws, 0 Wh, no
+`hardware_override`. **No dark charging:** 0 bulk samples, 0 night PCP01, no
+corrupt frames. (Cosmetic, as before: the floor counter ran in `L` and set
+`recovering` at 01:44, with no discharge behind it.) The pack drifted
+25.2 -> 24.6 V by 07:00 on standby draw with PCP03 standing. At sunrise
+24.6 V <= `occupied`'s 24.8 V armed the latch in daylight, and it is
+grid-charging to float (28.5 V at 11 A by 09:00). `profile` `occupied`, all
+four flags clear.
+
+**What that means for `occupied`:** with no discharge, the only thing the
+morning recharge replaces is the night's standby drift (~0.6 V). That is a
+small grid top-up, not cycling, and the pack starts each day full, as a
+backup should. But it also has no headroom, so `occupied` now relies
+entirely on grid charge's live absorption, which a full pack limits (10-03).
+
 **10-13 evening. Clean since the 15:17 fix.** House **4712 Wh** (occupied
 again, up from 2.6-2.8 kWh/day), solar 256 Wh (0 nulls, peak 118 W), export
 0 Wh, battery 44 Wh (the night). The occupied recharge worked: the latch armed
