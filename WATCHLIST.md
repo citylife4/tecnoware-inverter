@@ -36,6 +36,28 @@ The user switched back at 15:04. Deployed at the same time (final at 15:17):
 25.3 V. No dark charging, except to finish this latch's charge to float.
 Export on sunny days.
 
+**10-14 evening. Clean. Last scheduled check; the jobs expire tonight.**
+House 7637 Wh, solar 240 Wh (0 nulls, peak 114 W), export 0 Wh, battery 0 Wh
+(the night was skipped). 0 relay throws all day. The morning top-up latch
+(armed 08:25) held through cloud gaps and released at float at 16:14. Then
+PCP03, and sunset PCP03. `battery_maintenance` sane, no corrupt frames, no
+`hardware_override`, no stall, 397 tests green. `profile` `occupied`, all
+four flags clear. Pack 25.2 V at 22:13, so tonight should also skip.
+
+**Where the 10-08..14 work stands.**
+- *Established on hardware:* no dark grid refill on any night since the 10-08
+  fix (seven nights). The sunset PCP03 holds. Surplus refills the pack on
+  `away` days. The occupied recharge and skip-near-floor work. The corrupt
+  frame and deadlock regressions are fixed, with tests.
+- *Not established:* the export test. No day since 10-08 reached 400 Wh of
+  solar (220-349 Wh), so the pass condition was never testable. The one
+  export over 5 Wh (10-11, 7 Wh, `away`) came from a pack full by
+  mid-afternoon.
+- *Open:* `occupied` creates no night headroom (it skips). On a sunny occupied
+  day export may get through once the pack fills. Candidate: lower its floor
+  to 24.8 V. Also the stall-in-a-tick issue (09-24, 10-01, and the slow
+  shutdowns on 10-13). The systemd reports (09:00, 21:22) keep running.
+
 **10-14 morning. The night was skipped as predicted; no regressions.** At
 01:00 the pack was at 25.2 V, inside the 0.3 V margin, so it logged
 `too_low_to_start`. 0 POP02 writes, 0 relay throws, 0 Wh, no
@@ -119,6 +141,7 @@ unexplained dark charge; 3 needed):
     10-11     2797       300         7         65       away     no: < 400 Wh, and 7 Wh
     10-12     2598       253         0         44       away     no: < 400 Wh
     10-13     4712       256         0         44       occupied from 15:04; no: < 400 Wh
+    10-14     7637       240         0          0       occupied; no: < 400 Wh
 
 **10-13 morning. Clean: the first night on confirmed arming.** The window
 opened rested at 25.1 V. `floor` latched at 03:07 at 24.2 V after 3 readings,
