@@ -36,6 +36,16 @@ The user switched back at 15:04. Deployed at the same time (final at 15:17):
 25.3 V. No dark charging, except to finish this latch's charge to float.
 Export on sunny days.
 
+**10-15 evening (the evening job's final run). Clean.** House 6288 Wh,
+solar 231 Wh (0 nulls, peak 109 W), export 0 Wh, battery 0 Wh. 0 relay
+throws. The daylight top-up latch armed at 08:29, alternated with `charging`,
+held through cloud gaps, and reached float at 17:31. Sunset PCP03.
+`battery_maintenance` sane, no corrupt frames, no `hardware_override`, no
+stall (up since 10-13 15:17), 397 tests green. `profile` `occupied`, all
+four flags clear. 3 PCP write failures, all recovered. The pass condition is
+still untested (no day >= 400 Wh since 10-08), and both scheduled jobs have
+now expired.
+
 **10-15 morning (the jobs' final run). Clean, same pattern as 10-14.**
 The window was skipped at 01:00 (`too_low_to_start`, 25.1 V): 0 POP02
 writes, 0 relay throws, no `hardware_override`. **No dark charging:** 0 bulk
@@ -149,6 +159,7 @@ unexplained dark charge; 3 needed):
     10-12     2598       253         0         44       away     no: < 400 Wh
     10-13     4712       256         0         44       occupied from 15:04; no: < 400 Wh
     10-14     7637       240         0          0       occupied; no: < 400 Wh
+    10-15     6288       231         0          0       occupied; no: < 400 Wh
 
 **10-13 morning. Clean: the first night on confirmed arming.** The window
 opened rested at 25.1 V. `floor` latched at 03:07 at 24.2 V after 3 readings,
