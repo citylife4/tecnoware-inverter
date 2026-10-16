@@ -36,6 +36,14 @@ The user switched back at 15:04. Deployed at the same time (final at 15:17):
 25.3 V. No dark charging, except to finish this latch's charge to float.
 Export on sunny days.
 
+**10-16 morning. Clean, same pattern.** The window was skipped at 01:00
+(`too_low_to_start`, 25.1 V): 0 POP02 writes, 0 relay throws, no
+`hardware_override`. **No dark charging:** 0 bulk samples, 0 night PCP01, no
+corrupt frames. Standby drift 25.1 -> 24.7 V by 09:00. No sun yet at 09:07
+(`disabled_no_solar`, PCP03). The daylight top-up will arm once generation
+starts (24.7 <= 24.8). `profile` `occupied`, all four flags clear, latch
+inactive, last_float_at 10-15 17:31.
+
 **10-15 evening (the evening job's final run). Clean.** House 6288 Wh,
 solar 231 Wh (0 nulls, peak 109 W), export 0 Wh, battery 0 Wh. 0 relay
 throws. The daylight top-up latch armed at 08:29, alternated with `charging`,
