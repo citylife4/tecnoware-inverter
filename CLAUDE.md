@@ -285,7 +285,9 @@ disabled its fourth interlock for as long as the mode was `exclusive`.
 Both PCP controllers share `apply_low_battery_floor` in `webapp/safety.py`
 — don't duplicate that logic. Each passes its own `LowBatteryLatch`: once
 armed below `min_battery_voltage`, the override holds until the charger
-reaches float (>= 27.0 V, <= 4 A). It no longer releases on voltage, which
+reaches float (27.0-28.0 V, <= 4 A; **not** the 29 V absorption stage,
+which reads ~4 A too and was mistaken for float until 2026-10-30). It no
+longer releases on voltage, which
 the charger itself raises past the threshold at ~50% state of charge.
 
 **The low-battery floor does nothing for `battery_window`**: it works by
@@ -322,7 +324,7 @@ output as the loads:
    to the floor, recharge, and discharge again: several cycles a night,
    which is the exact wear the controller exists to prevent.
    Outside the night, while charging, the latch releases only once the
-   charger reaches float (>= 27.0 V, <= 4 A), not on `resume_voltage`. On
+   charger reaches float (27.0-28.0 V, <= 4 A), not on `resume_voltage`. On
    2026-09-26 it released on 27.0 V of charging voltage and put a ~50% pack
    back on battery.
    Since 2026-09-23 the floor is **24.5 V**. At 24.0 it was identical to

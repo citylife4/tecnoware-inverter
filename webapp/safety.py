@@ -94,6 +94,14 @@ def is_finite_number(value) -> bool:
 # not spun up yet reads 0 A, and bulk passes 27 V at the full 10 A.
 FLOOR_RELEASE_MIN_V = 27.0
 FLOOR_RELEASE_MAX_A = 4.0
+# ...and BELOW this. Since 2026-09-18 bulk/absorption is 29.0 V (program 26)
+# and float 27.4 V (program 27). Absorption holds 29 V at ~4 A, and the coarse
+# current reading has a 4 A floor, so ">= 27.0 V and <= 4 A" alone took
+# absorption for float. Found 2026-10-30: on 10-14/16/22/26/28/30 it released
+# latches and reset the 48 h maintenance clock mid-charge, and the pack sat
+# ~50-75% charged for two weeks (10-27: "float" at 29.0 V/4 A at 16:16, the
+# pack at 24.5 V by 01:00). Real float is the 27-28 V band.
+FLOAT_MAX_V = 28.0
 # Consecutive observations. Corrupt QPIGS frames happen (gotcha #8) -- the
 # telemetry has "2750.0" volts in it -- and one must not end a charge.
 FLOOR_RELEASE_CONFIRMATIONS = 3
@@ -174,8 +182,9 @@ class LowBatteryLatch:
 
 
 def at_float(service) -> bool:
-    """True when the charger has the pack at float: >= FLOOR_RELEASE_MIN_V
-    and <= FLOOR_RELEASE_MAX_A, and not in battery mode."""
+    """True when the charger has the pack at float: in the
+    FLOOR_RELEASE_MIN_V..FLOAT_MAX_V band at <= FLOOR_RELEASE_MAX_A, and not
+    in battery mode. Absorption (29 V) is not float -- see FLOAT_MAX_V."""
     v = service.battery_voltage()
     current_fn = getattr(service, "battery_charging_current", None)
     amps = current_fn() if current_fn else None
@@ -183,7 +192,8 @@ def at_float(service) -> bool:
     if (mode_fn() if mode_fn else None) == "B":
         return False
     return (is_finite_number(v) and is_finite_number(amps)
-            and amps <= FLOOR_RELEASE_MAX_A and v >= FLOOR_RELEASE_MIN_V)
+            and amps <= FLOOR_RELEASE_MAX_A
+            and FLOOR_RELEASE_MIN_V <= v < FLOAT_MAX_V)
 
 
 def apply_low_battery_floor(service, target: str, latch=None, count: bool = True,

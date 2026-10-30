@@ -57,7 +57,7 @@ from charge_schedule import parse_hhmm, rule_active
 from transport import InverterError
 from webapp import config_error
 from webapp.atomic_write import write_json_atomic
-from webapp.safety import (FLOOR_RELEASE_MAX_A, FLOOR_RELEASE_MIN_V,
+from webapp.safety import (FLOAT_MAX_V, FLOOR_RELEASE_MAX_A, FLOOR_RELEASE_MIN_V,
                            is_finite_number)
 from webapp.trace import append_row
 
@@ -852,7 +852,8 @@ class BatteryWindow:
         if not is_finite_number(amps):
             return False
         if amps > 0:
-            return amps <= FLOOR_RELEASE_MAX_A and v >= FLOOR_RELEASE_MIN_V
+            return (amps <= FLOOR_RELEASE_MAX_A
+                    and FLOOR_RELEASE_MIN_V <= v < FLOAT_MAX_V)
         return v >= self._config["resume_voltage"]
 
     def _heavy_samples_from_history(self, threshold, mono):

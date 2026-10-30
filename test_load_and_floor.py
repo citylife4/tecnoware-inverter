@@ -247,7 +247,7 @@ class TestDaytimeLatchRelease(unittest.TestCase):
     def test_releases_once_the_charger_reaches_float(self):
         self.ticks(29.0, 10)
         self.service.sent.clear()
-        self.ticks(29.1, 4, n=3)
+        self.ticks(27.4, 4, n=3)            # float, not 29 V absorption
         self.assertFalse(self.bw.get_state()["recovering"])
         self.assertEqual(self.service.sent, ["POP02"])
 
@@ -411,6 +411,52 @@ class TestOccupiedRecharge(unittest.TestCase):
     def test_recharge_above_the_floor_is_refused(self):
         with self.assertRaises(ValueError):
             validate_config({"floor_voltage": 24.5, "recharge_below_v": 24.8})
+
+
+class TestAbsorptionIsNotFloat(unittest.TestCase):
+    """2026-10-30: absorption holds 29.0 V at ~4 A (coarse reading), which
+    passed ">= 27.0 V and <= 4 A". Latches released and the maintenance
+    clock reset mid-charge; the pack sat ~50-75% for two weeks."""
+
+    def setUp(self):
+        self.service = FakeService(battery_voltage=29.0, min_battery_voltage=24.0,
+                                   device_mode="L")
+        self.service._charging_current = 4
+
+    def test_absorption_is_not_float(self):
+        from webapp.safety import at_float
+        self.assertFalse(at_float(self.service))
+
+    def test_real_float_is_float(self):
+        from webapp.safety import at_float
+        self.service._battery_voltage = 27.4
+        self.assertTrue(at_float(self.service))
+
+    def test_the_latch_holds_through_absorption(self):
+        latch = LowBatteryLatch()
+        latch.arm()
+        for _ in range(5):
+            latch.observe(self.service)            # 29.0 V, 4 A
+        self.assertTrue(latch.active)
+        self.service._battery_voltage = 27.4
+        for _ in range(3):
+            latch.observe(self.service)
+        self.assertFalse(latch.active)
+
+    def test_absorption_does_not_reset_the_maintenance_clock(self):
+        from test_webapp import FetchStub
+        from datetime import timezone as tz
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        gc = GridChargeController(self.service, os.path.join(tmp.name, "gc.json"),
+                                  fetch_fn=FetchStub(-200))
+        old = datetime.now(tz.utc) - timedelta(hours=30)
+        gc._last_float_at = old
+        gc.tick()                                  # 29.0 V absorption
+        self.assertEqual(gc._last_float_at, old)
+        self.service._battery_voltage = 27.4       # float
+        gc.tick()
+        self.assertGreater(gc._last_float_at, old)
 
 
 class TestHeavyInputReadings(unittest.TestCase):

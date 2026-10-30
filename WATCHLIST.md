@@ -52,8 +52,12 @@ consequences: `LowBatteryLatch` releases before the pack is full, and the
 E.g. 10-27: "float" at 16:16 at 29.0 V/4 A, PCP03 at sunset, the pack at
 25.9 V within minutes and 24.5 V by 01:00. Nights opened at 24.5-25.0 V
 (roughly 50-75%) for two weeks, so most were skipped and the lead-acid pack
-sat partially charged. **Fix proposed, not applied:** require the float band,
-27.0 <= V < 28.0.
+sat partially charged. **Fixed 10-30 23:28:** `at_float` and
+`BatteryWindow._recovered` require the float band, 27.0 <= V < 28.0
+(`FLOAT_MAX_V`). **What to watch:** latch releases and `last_float_at` only
+at ~27.4 V. If no real float happens for 48 h, the maintenance charge
+should fire, at night if need be. The pack should then rest higher before
+01:00 than the 24.5-25.0 V of these two weeks.
 
 ## 2026-10-13 15:04: house occupied again, profile `occupied`
 
@@ -627,7 +631,7 @@ production. What each should look like if it works:
   forgets it.
 - **`grid_charge` low-battery latch** (`safety.LowBatteryLatch`). Below
   `min_battery_voltage` it holds PCP01 until the charger reaches float
-  (>= 27.0 V and <= 4 A, 3 readings in a row). `why` in `/api/grid-charge`
+  (27.0-28.0 V and <= 4 A since 10-30, 3 readings in a row). `why` in `/api/grid-charge`
   reads "holding utility charging until the pack reaches float". The trace CSV
   has no `why` column, so find it there as desired `idle` with target `01`.
   Watch for PCP01 holding past
@@ -738,7 +742,7 @@ of the load starting while on battery, and at most a few throws per episode.
 
 **Deployed 2026-09-26 22:37: the daytime latch releases on float, not on
 charging voltage.** `BatteryWindow._recovered()`: while the charger runs
-(current > 0), the latch re-arms only at >= 27.0 V and <= 4 A, the same
+(current > 0), the latch re-arms only at float, 27.0-28.0 V and <= 4 A, the same
 condition as `LowBatteryLatch`. With 0 A it is `resume_voltage` as before, so
 the 09-15 rested-pack release survives. An unknown current releases nothing.
 Replay tests of the 09-26 morning fail against the old code. **What to look
