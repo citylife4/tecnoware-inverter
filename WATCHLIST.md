@@ -10,9 +10,50 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-10-13 (15:17: occupied again; per-profile recharge, skip-near-floor)
+Last updated: 2026-10-30 (two-week review; absorption-as-float bug found)
 
 ---
+
+## 2026-10-30: two unattended weeks (10-16..10-30), and a float-detection bug
+
+Reviewed 10-30 23:19, after two weeks with no checks running. (Clocks went
+back 10-25: local time now equals UTC.)
+
+    day   house  solar  export  batt  night (01:00 rested V, outcome)
+    10-16  6748   250     0      0    skip 25.1   occupied
+    10-17  6345    95     0      0    skip 25.0
+    10-18  6038   251     8      0    skip 24.6   dark charge 06:52 (24.0 V rule)
+    10-19 14178   256     0      0    skip 25.1   (unusually high consumption)
+    10-20  3011   255     2      0    skip 24.8   house empty from here
+    10-21  2544   227     0     21    ran  24.9   away (floor 24.5) from here
+    10-22  2494   156     8      6    ran  25.0
+    10-23  2527   220     0     36    skip 24.7
+    10-24  2450   223     0     25    skip 24.8
+    10-25  2490   205     0      5    skip 24.7
+    10-26  2494   202     0     18    skip 24.6
+    10-27  2533   172     0     19    skip 24.7
+    10-28  2566   193     1     19    skip 24.5   dark charge 05:46 (24.0 V rule)
+    10-29  2593   202     0      5    skip 24.6
+    10-30  2500   117     0      1    ran  24.9
+
+**Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
+`hardware_override`, all flags clear, sunset PCP03 every day. Both dark
+charges were the designed `NIGHT_DEEP_V` rule (24.0 V x3 before dawn).
+Export 0-8 Wh/day. No day reached 400 Wh of solar (95-256), so the export
+test is still unexercised.
+
+**Bug: absorption is read as float.** `safety.at_float` is ">= 27.0 V and
+<= 4 A". The charger's absorption stage holds **29.0 V** (program 26) at
+~4 A, and the coarse current reading has a 4 A floor, so absorption passes.
+Real float is **27.4 V** (program 27). Absorption misread as float, by day:
+10-14 17 min, 10-16 71, 10-22 29, 10-26 65, 10-28 52, 10-30 54. Two
+consequences: `LowBatteryLatch` releases before the pack is full, and the
+48 h maintenance clock (`last_float_at`) resets without a real full charge.
+E.g. 10-27: "float" at 16:16 at 29.0 V/4 A, PCP03 at sunset, the pack at
+25.9 V within minutes and 24.5 V by 01:00. Nights opened at 24.5-25.0 V
+(roughly 50-75%) for two weeks, so most were skipped and the lead-acid pack
+sat partially charged. **Fix proposed, not applied:** require the float band,
+27.0 <= V < 28.0.
 
 ## 2026-10-13 15:04: house occupied again, profile `occupied`
 
