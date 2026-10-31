@@ -35,6 +35,7 @@ back 10-25: local time now equals UTC.)
     10-28  2566   193     1     19    skip 24.5   dark charge 05:46 (24.0 V rule)
     10-29  2593   202     0      5    skip 24.6
     10-30  2500   117     0      1    ran  24.9
+    10-31  2342   186     4      2    skip 24.8   no real float; clock reset falsely 14:32
 
 **Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
 `hardware_override`, all flags clear, sunset PCP03 every day. Both dark
@@ -58,6 +59,25 @@ sat partially charged. **Fixed 10-30 23:28:** `at_float` and
 at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
+
+**10-31 evening. One misbehaviour: a false float again, this time from a
+single pass-through reading.** `away`. House 2342 Wh, solar 186 Wh (0 nulls,
+peak 100 W), export **4 Wh** (9 samples, worst -64 W), battery 2 Wh.
+Charging: 110 min at 29 V absorption, **0 min of real float**. A cloud cut
+the charge at 14:31 and sunset (PCP03 16:27) cut it at 29.1 V, so it never
+finished. **Yet `last_float_at` moved to 14:32.** As the charger stopped at
+14:31:57, the decaying voltage read **27.0 V at 0 A for one 10 s sample**,
+which `at_float` accepted. The 48 h maintenance charge is now deferred to
+11-02 14:32, though there has been no real float since 10-30. Also seen: the
+charger holding 29.0 V with the current field reading **0 A** (16:20), so
+the reading is coarse at both ends. **Fix proposed, not applied:** `at_float`
+requires current > 0, and `last_float_at` needs 3 consecutive float
+observations, as the latch release already does. The 60 min rest rule
+behaved: the latch released at 17:24 on 25.8 V, an hour after the last
+charging current, and the daytime window then ran 17:43-19:00. Sunset PCP03.
+Throws 6, no `hardware_override`, no `daytime_heavy_load`, no corrupt
+frames, no stall after the 09:43 deploy, 404 tests green. All flags clear.
+Rested voltage at 22:13: 25.1 V (the 3-night >= 25.2 V target not yet met).
 
 **10-31 morning. No regression of the float fix, but a different flaw
 fired.** `away`. At 01:00 the pack was at 24.8 V, so the night was skipped
