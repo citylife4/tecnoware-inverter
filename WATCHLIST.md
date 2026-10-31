@@ -59,6 +59,29 @@ at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
 
+**10-31 morning. No regression of the float fix, but a different flaw
+fired.** `away`. At 01:00 the pack was at 24.8 V, so the night was skipped
+(`too_low_to_start`): 0 Wh, no `hardware_override`, no corrupt frames.
+**No dark charging** (0 bulk samples, 0 night PCP01). Drift 24.9 -> 24.2 V by
+07:00 (the deep rule is <= 24.0, so not armed). Float fix (3): `last_float_at`
+unchanged at 10-30 15:47. This morning's 27.4 V at 6-11 A was correctly not
+counted, and it was never set at 29 V. The maintenance charge is due by
+11-01 15:47 if no real float comes first. release_pending True, because the
+daytime window is on battery; loop_error null, pop_drift_stuck false,
+config_error null.
+
+**Flaw: the 0 A release path is fooled by surface charge.** Charging from
+24.2 V ran 07:42-08:36 (surplus). A cloud gap at 08:36 wrote PCP03 and the
+current fell to 0 A. `_recovered()` then compared the voltage with
+`resume_voltage` (25.3) as if the pack were resting. It read 25.8-25.9 V
+minutes after the charger stopped, the latch released at 08:39, and the
+daytime window entered battery at 08:51 at 25.5 V on a pack ~1 h into a
+charge from ~45%. That's bounded by the 24.5 V floor, but it is an extra
+cycle on a part-charged pack. The 09-15 rested-pack release this path exists
+for had no charger at all for hours. **Fix proposed, not applied:** on the
+0 A path, require ~60 min with no charging current before trusting
+`resume_voltage`.
+
 ## 2026-10-13 15:04: house occupied again, profile `occupied`
 
 The user switched back at 15:04. Deployed at the same time (final at 15:17):
