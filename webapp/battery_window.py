@@ -191,6 +191,15 @@ POP_DRIFT_MAX_WRITES = 5
 # deciding on the rebound itself.
 RESUME_CONFIRMATIONS = 3
 
+# On the no-charger path, resume_voltage only means "rested" once this long has
+# passed without charging current. Live on 2026-10-31: a cloud gap stopped a
+# charge from 24.2 V after an hour, and minutes later the pack read 25.8-25.9 V
+# of surface charge. That passed resume_voltage (25.3), the latch released,
+# and the daytime window put a ~half-charged pack back on battery. The path
+# exists for 2026-09-15, a pack resting all night with no charger, which this
+# still lets through.
+RESUME_REST_S = 3600
+
 FILE_MODE = 0o600
 
 DEFAULT_CONFIG = {
@@ -522,6 +531,9 @@ class BatteryWindow:
         # open into the load before the next reading re-arms it.
         self._heavy_seen = deque()
         self._heavy_until = None
+        # Wall-clock time a tick last saw charging current, for RESUME_REST_S.
+        # None = not seen since start, treated as rested.
+        self._last_charge_seen = None
         self._pop_drift_alert = runtime.get("pop_drift_stuck", False)
         # A requested POP02 remains our responsibility until POP00 is ACKed.
         # QMOD=L and a lost reply cannot discharge that responsibility.
@@ -829,7 +841,7 @@ class BatteryWindow:
             self._save_runtime()
         return None
 
-    def _recovered(self, v) -> bool:
+    def _recovered(self, v, now=None) -> bool:
         """Has the pack recovered enough to re-arm the latch?
 
         `v >= resume_voltage` alone is only meaningful at rest. The charger
@@ -851,9 +863,13 @@ class BatteryWindow:
         amps = fn() if fn else None
         if not is_finite_number(amps):
             return False
+        now = now or datetime.now()
         if amps > 0:
             return (amps <= FLOOR_RELEASE_MAX_A
                     and FLOOR_RELEASE_MIN_V <= v < FLOAT_MAX_V)
+        if (self._last_charge_seen is not None and
+                (now - self._last_charge_seen).total_seconds() < RESUME_REST_S):
+            return False          # surface charge, not rest
         return v >= self._config["resume_voltage"]
 
     def _heavy_samples_from_history(self, threshold, mono):
@@ -1117,6 +1133,12 @@ class BatteryWindow:
 
         v = self._battery_voltage()
         previous_runtime = (self._recovering, self._below_floor)
+        # Every tick, not only while recovering: a charge that ends inside the
+        # nightly window must still count towards RESUME_REST_S at 08:00.
+        fn = getattr(self.service, "battery_charging_current", None)
+        amps = fn() if fn else None
+        if is_finite_number(amps) and amps > 0:
+            self._last_charge_seen = now or datetime.now()
         if isinstance(v, (int, float)):
             when = (now or datetime.now()).time()
             in_night = rule_active(when, parse_hhmm(cfg["from"]),
@@ -1161,7 +1183,7 @@ class BatteryWindow:
                 self._recovering = True
                 self._above_resume = 0
             elif (self._recovering and not in_night
-                    and self._recovered(v)):
+                    and self._recovered(v, now)):
                 # Nightly window closed and the pack is back up: re-arm, once
                 # RESUME_CONFIRMATIONS consecutive readings agree. Keyed to
                 # the nightly window only, so "one discharge per night"

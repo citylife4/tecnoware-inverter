@@ -78,9 +78,10 @@ minutes after the charger stopped, the latch released at 08:39, and the
 daytime window entered battery at 08:51 at 25.5 V on a pack ~1 h into a
 charge from ~45%. That's bounded by the 24.5 V floor, but it is an extra
 cycle on a part-charged pack. The 09-15 rested-pack release this path exists
-for had no charger at all for hours. **Fix proposed, not applied:** on the
-0 A path, require ~60 min with no charging current before trusting
-`resume_voltage`.
+for had no charger at all for hours. **Fixed 10-31 09:45:** the 0 A path
+trusts `resume_voltage` only after `RESUME_REST_S` (60 min) with no charging
+current, tracked on every tick. The 09-15 case (never charged since start)
+still releases.
 
 ## 2026-10-13 15:04: house occupied again, profile `occupied`
 

@@ -459,6 +459,50 @@ class TestAbsorptionIsNotFloat(unittest.TestCase):
         self.assertGreater(gc._last_float_at, old)
 
 
+class TestRestBeforeResume(unittest.TestCase):
+    """2026-10-31 08:36: a cloud gap stopped a charge from 24.2 V after an
+    hour; minutes later the pack read 25.8 V of surface charge, the 0 A path
+    took it for rest and released the latch, and the daytime window put a
+    ~half-charged pack back on battery."""
+
+    MORNING = datetime(2026, 10, 31, 8, 30)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.service = FakeService(battery_voltage=24.4, output_load_w=1)
+        self.bw = BatteryWindow(self.service, os.path.join(self.tmp.name, "bw.json"),
+                                signal_source=lambda: (300.0, True))
+        self.bw.set_config({"enabled": True, "min_switch_interval": 0,
+                            "daytime_enabled": True,
+                            "daytime_min_switch_interval": 0}, now=NIGHT)
+        for _ in range(3):
+            self.bw.tick(now=NIGHT)                # floor latches
+        self.assertTrue(self.bw.get_state()["recovering"])
+        self.service._device_mode = "L"
+
+    def at(self, minutes, v, amps, n=3):
+        self.service._battery_voltage = v
+        self.service._charging_current = amps
+        for _ in range(n):
+            self.bw.tick(now=self.MORNING + timedelta(minutes=minutes))
+
+    def test_surface_charge_after_a_stopped_charge_does_not_release(self):
+        self.at(0, 27.4, 9)                        # charging
+        self.at(3, 25.9, 0)                        # stopped: surface charge
+        self.assertTrue(self.bw.get_state()["recovering"])
+
+    def test_a_rested_pack_releases_after_the_rest_period(self):
+        self.at(0, 27.4, 9)
+        self.at(61, 25.4, 0)
+        self.assertFalse(self.bw.get_state()["recovering"])
+
+    def test_a_pack_never_charged_since_start_still_releases(self):
+        """The 2026-09-15 case: no charger all night, rested above resume."""
+        self.at(0, 25.4, 0)
+        self.assertFalse(self.bw.get_state()["recovering"])
+
+
 class TestHeavyInputReadings(unittest.TestCase):
     def test_counts_heavy_shelly_readings(self):
         tmp = tempfile.TemporaryDirectory()

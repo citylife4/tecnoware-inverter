@@ -326,7 +326,10 @@ output as the loads:
    Outside the night, while charging, the latch releases only once the
    charger reaches float (27.0-28.0 V, <= 4 A), not on `resume_voltage`. On
    2026-09-26 it released on 27.0 V of charging voltage and put a ~50% pack
-   back on battery.
+   back on battery. With no charging current it uses `resume_voltage`, but
+   only after `RESUME_REST_S` (60 min) without charging. On 2026-10-31 a cloud
+   gap stopped a charge, the surface charge read 25.8 V within minutes, and it
+   released on that.
    Since 2026-09-23 the floor is **24.5 V**. At 24.0 it was identical to
    front-panel program 12 (24 V), so the hardware always ended the night
    first. Keep it above program 12, or it is decorative.
