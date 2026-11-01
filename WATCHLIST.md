@@ -60,6 +60,15 @@ at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
 
+**11-01 morning (run late, after the 09:05 deploy). No regression.** `away`.
+At 01:00 the pack was at 24.8 V, so the night was skipped
+(`too_low_to_start`): 0 Wh, no `hardware_override`, no corrupt frames. **No
+dark charging** (0 bulk samples, 0 night PCP01). Drift 24.9 -> 24.2 V by
+07:00 (deep rule <= 24.0, not armed). Surplus charging from 07:36 (27.4 V,
+6 A by 08:30), not counted as float since the current is above 4 A.
+`last_float_at` is 10-30 14:16, the corrected real float; the maintenance
+charge is due today at 14:16. All four flags clear.
+
 **10-31 evening. One misbehaviour: a false float again, this time from a
 single pass-through reading.** `away`. House 2342 Wh, solar 186 Wh (0 nulls,
 peak 100 W), export **4 Wh** (9 samples, worst -64 W), battery 2 Wh.
