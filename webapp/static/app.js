@@ -585,7 +585,9 @@ function wireSchedule() {
    trigger is the auto-energy dashboard's grid-meter reading instead of a
    time window. Config has many fields, so unlike the schedule table
    (which auto-saves every edit) this uses an explicit "Save settings"
-   button -- only the enabled toggle and "Apply now" act immedi/* Campos do formulário de excedente.
+   button -- only the enabled toggle and "Apply now" act immediately. */
+
+/* Campos do formulário de excedente.
 
    O tipo "negnum" existia aqui para o limiar de exportação: quando a
    automação disparava com net_balance negativo, o campo mostrava o valor
@@ -1091,3 +1093,49 @@ document.addEventListener("DOMContentLoaded", async () => {
     else { tick().catch(() => {}); pollTimer = setInterval(() => tick().catch(() => {}), interval); }
   });
 });
+
+
+/* ---------- separadores ----------
+   Os painéis escondidos continuam a ser atualizados pelo resto deste
+   ficheiro; isto só decide qual se vê. O separador escolhido fica no
+   endereço (#automacoes) e, como conveniência, no localStorage -- que pode
+   não existir (janela privada), daí o try/catch. */
+(function wireTabs() {
+  const tabs = Array.from(document.querySelectorAll(".tabs [data-tab]"));
+  const panels = Array.from(document.querySelectorAll(".tab-panel[data-panel]"));
+  if (!tabs.length) return;
+  const names = tabs.map((t) => t.dataset.tab);
+
+  function show(name, remember) {
+    if (!names.includes(name)) name = names[0];
+    tabs.forEach((t) => t.setAttribute("aria-selected", String(t.dataset.tab === name)));
+    panels.forEach((p) => { p.hidden = p.dataset.panel !== name; });
+    if (remember) {
+      try { localStorage.setItem("tab", name); } catch (e) { /* sem armazenamento */ }
+      if (location.hash !== "#" + name) history.replaceState(null, "", "#" + name);
+    }
+  }
+
+  tabs.forEach((t) => t.addEventListener("click", () => show(t.dataset.tab, true)));
+  document.querySelectorAll("[data-goto]").forEach((a) => a.addEventListener("click", (e) => {
+    e.preventDefault();
+    show(a.dataset.goto, true);
+    window.scrollTo({ top: 0 });
+  }));
+  // Setas esquerda/direita entre separadores, como num tablist normal.
+  document.querySelector(".tabs").addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    const i = tabs.indexOf(document.activeElement);
+    if (i < 0) return;
+    const next = tabs[(i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+    next.focus();
+    show(next.dataset.tab, true);
+  });
+  window.addEventListener("hashchange", () => show(location.hash.slice(1), false));
+
+  let initial = location.hash.slice(1);
+  if (!names.includes(initial)) {
+    try { initial = localStorage.getItem("tab") || ""; } catch (e) { initial = ""; }
+  }
+  show(initial, false);
+})();

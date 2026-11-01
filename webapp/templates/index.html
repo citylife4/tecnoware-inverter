@@ -32,6 +32,18 @@
   </div>
 </header>
 
+{# Separadores: o painel diz o essencial e o resto fica um clique abaixo. Os
+   painéis escondidos continuam a ser atualizados pelo app.js -- só deixam
+   de ocupar o ecrã. #}
+<nav class="tabs" role="tablist" aria-label="Secções">
+  <button role="tab" class="tab" data-tab="resumo" aria-selected="true">Resumo</button>
+  <button role="tab" class="tab" data-tab="graficos" aria-selected="false">Gráficos</button>
+  {% if grid_charge_available or battery_window_available %}
+  <button role="tab" class="tab" data-tab="automacoes" aria-selected="false">Automações</button>
+  {% endif %}
+  <button role="tab" class="tab" data-tab="avancado" aria-selected="false">Avançado</button>
+</nav>
+
 <main>
   <p class="error-banner" id="global-error" hidden></p>
 
@@ -40,405 +52,439 @@
     escrita são recusados.</p>
   {% endif %}
 
-  <!-- Valores em tempo real -->
-  <section aria-labelledby="h-live">
-    <h2 id="h-energy">De onde vem a energia</h2>
-    <div class="energy-box" id="energy-box">
-      <div class="energy-main">
-        <span class="energy-label">Saída protegida</span>
-        <span class="energy-source" id="energy-source">&mdash;</span>
-        <span class="energy-load" id="energy-load"></span>
-      </div>
-      <p class="muted small" id="energy-note"></p>
-      <div class="energy-split" id="energy-split"></div>
-      <p class="muted small">A saída protegida tem o frigorífico, a luz, o portão,
-        a bomba e o próprio Raspberry Pi. O inversor só sabe medir essa carga quando
-        está a funcionar da bateria; em bypass o valor vem do contador Shelly à
-        entrada, e por isso inclui o consumo próprio do aparelho. Enquanto o
-        carregador estiver a trabalhar não é possível separar as duas coisas, e
-        aparece &laquo;desconhecida&raquo; em vez de um número inventado.</p>
-    </div>
-  </section>
+  <!-- ===================== Resumo ===================== -->
+  <div class="tab-panel" data-panel="resumo" role="tabpanel">
 
-  <section aria-labelledby="h-live">
-    <h2 id="h-live">Estado atual</h2>
-    <div class="tiles" id="tiles"></div>
-  </section>
-
-  <!-- Gráficos: três séries independentes, cada uma com a sua escala.
-       Propositadamente NÃO um gráfico de eixo duplo -- volts e watts não
-       partilham escala. -->
-  <section aria-labelledby="h-trend">
-    <h2 id="h-trend">Evolução <span class="muted small" id="trend-range"></span></h2>
-    <div class="charts" id="charts">
-      <figure class="chart-card"><figcaption>Tensão da bateria <span class="unit">V</span><b id="lbl-batt"></b></figcaption><div class="chart" id="chart-batt"></div></figure>
-      <figure class="chart-card"><figcaption>Potência da bateria <span class="unit">W</span><b id="lbl-pv"></b></figcaption><div class="chart" id="chart-pv"></div>
-        <p class="muted small">Positivo = a carregar, negativo = a descarregar. A produção
-          solar real está no painel <code>auto-energy</code> &mdash; a entrada PV deste
-          inversor não está ligada.</p></figure>
-      <figure class="chart-card"><figcaption>Carga na saída <span class="unit">W</span><b id="lbl-load"></b></figcaption><div class="chart" id="chart-load"></div>
-        <p class="muted small" id="load-bypass-note" hidden>Em bypass o inversor não
-          mede a saída (devolve 1 W fixo) &mdash; só há leitura real em modo bateria.</p></figure>
-    </div>
-    <details class="table-view">
-      <summary>Ver em tabela</summary>
-      <div class="scroll-x"><table id="history-table"><thead><tr>
-        <th>Hora</th><th>Bateria V</th><th>Carga %</th><th>PV W</th><th>Consumo W</th><th>Rede V</th>
-      </tr></thead><tbody></tbody></table></div>
-    </details>
-  </section>
-
-  {% if allow_writes %}
-  <!-- Controlos -->
-  <section aria-labelledby="h-ctl">
-    <h2 id="h-ctl">Controlos</h2>
-    <div class="control-grid">
-      <div class="control-card">
-        <h3>Prioridade da fonte de carga <code>PCP</code></h3>
-        <p class="muted small">De onde vem a corrente de carregamento.</p>
-        <div class="btnrow" id="pcp-row">
-          {% for value, label in pcp_values.items() %}
-          <button class="opt" data-kind="charger-priority" data-value="{{ value }}">
-            <span class="code">{{ value }}</span>{{ label }}</button>
-          {% endfor %}
+    <section aria-labelledby="h-energy">
+      <h2 id="h-energy">De onde vem a energia</h2>
+      <div class="energy-box" id="energy-box">
+        <div class="energy-main">
+          <span class="energy-label">Saída protegida</span>
+          <span class="energy-source" id="energy-source">&mdash;</span>
+          <span class="energy-load" id="energy-load"></span>
         </div>
-        <p class="muted small" id="note-charger-priority"></p>
-        <p class="warn small"><strong>03 é apenas solar.</strong> Sem sol, a bateria
-          descarrega. O servidor recusa este valor abaixo do limite mínimo de segurança
-          da bateria.</p>
-        <p class="warn small">O <code>PCP</code> só carrega mesmo enquanto o
-          <code>POP</code> estiver em <code>00</code> (rede primeiro) &mdash; medido
-          no aparelho a 2026-08-24: com <code>POP02</code> (SBU) fica a 0 A e a
-          bateria desce. Noutros modos o comando é aceite mas não carrega.</p>
+        <p class="muted small" id="energy-note"></p>
+        <div class="energy-split" id="energy-split"></div>
+        <details class="help">
+          <summary>Sobre esta medição</summary>
+          <p class="muted small">A saída protegida tem o frigorífico, a luz, o portão,
+            a bomba e o próprio Raspberry Pi. O inversor só sabe medir essa carga quando
+            está a funcionar da bateria; em bypass o valor vem do contador Shelly à
+            entrada, e por isso inclui o consumo próprio do aparelho. Enquanto o
+            carregador estiver a trabalhar não é possível separar as duas coisas, e
+            aparece &laquo;desconhecida&raquo; em vez de um número inventado.</p>
+        </details>
       </div>
+    </section>
 
-      <div class="control-card">
-        <h3>Prioridade da fonte de saída <code>POP</code></h3>
-        <p class="muted small">Que fonte alimenta os consumos. É esta que comuta o relé
-          (o "clique" audível). <strong>Só em <code>00</code> é que a bateria
-          carrega</strong> &mdash; em <code>02</code> (SBU) alimenta os consumos mas
-          nunca recarrega.</p>
-        <div class="btnrow" id="pop-row">
-          {% for value, label in pop_values.items() %}
-          <button class="opt" data-kind="output-priority" data-value="{{ value }}">
-            <span class="code">{{ value }}</span>{{ label }}</button>
-          {% endfor %}
-        </div>
-        <p class="muted small" id="note-output-priority"></p>
-      </div>
+    <section aria-labelledby="h-live">
+      <h2 id="h-live">Estado atual</h2>
+      <div class="tiles" id="tiles"></div>
+    </section>
 
+    {% if battery_window_available or grid_charge_available %}
+    <section aria-labelledby="h-now">
+      <h2 id="h-now">Casa e automações</h2>
       <div class="control-card">
-        <h3>Ações rápidas</h3>
-        <div class="btnrow">
-          <button class="opt" data-cmd="BZON">Ligar sinal sonoro</button>
-          <button class="opt" data-cmd="BZOFF">Desligar sinal sonoro</button>
-          <button class="opt danger" data-cmd="SOFF" data-confirm="1">DESLIGAR saída</button>
-          <button class="opt danger" data-cmd="SON" data-confirm="1">LIGAR saída</button>
+        {% if battery_window_available %}
+        <h3>Perfil da casa</h3>
+        <div class="btnrow" id="bw-profiles">
+          <button class="opt" data-profile="occupied">Casa ocupada</button>
+          <button class="opt" data-profile="away">Casa vazia</button>
+        </div>
+        <p class="muted small">
+          <strong>Casa ocupada</strong>: a bateria fica cheia, como reserva, e só
+          descarrega à noite se tiver margem; recarrega da rede abaixo de 24,8&nbsp;V.
+          <strong>Casa vazia</strong>: descarga mais funda (até 24,5&nbsp;V) e janela
+          diurna ligada, porque sem consumo o excedente solar é maior.
+          <span id="bw-profile-custom" hidden>&mdash; As definições atuais não
+          correspondem a nenhum perfil (<em>personalizado</em>).</span></p>
+
+        <h3>Bateria</h3>
+        <p class="small" id="bw-current"></p>
+        <p class="warn small" id="bw-mismatch" hidden></p>
+        <p class="warn small" id="bw-latched" hidden></p>
+        {% endif %}
+
+        {% if grid_charge_available %}
+        <h3>Carregamento por excedente</h3>
+        <p class="small" id="gc-current"></p>
+        <p class="warn small" id="gc-pop-warning" hidden></p>
+        {% endif %}
+        <p class="muted small">Definições em <a href="#automacoes" data-goto="automacoes">Automações</a>.</p>
+      </div>
+    </section>
+    {% endif %}
+  </div>
+
+  <!-- ===================== Gráficos ===================== -->
+  <div class="tab-panel" data-panel="graficos" role="tabpanel" hidden>
+    <!-- Três séries independentes, cada uma com a sua escala. Propositadamente
+         NÃO um gráfico de eixo duplo -- volts e watts não partilham escala. -->
+    <section aria-labelledby="h-trend">
+      <h2 id="h-trend">Evolução <span class="muted small" id="trend-range"></span></h2>
+      <div class="charts" id="charts">
+        <figure class="chart-card"><figcaption>Tensão da bateria <span class="unit">V</span><b id="lbl-batt"></b></figcaption><div class="chart" id="chart-batt"></div></figure>
+        <figure class="chart-card"><figcaption>Potência da bateria <span class="unit">W</span><b id="lbl-pv"></b></figcaption><div class="chart" id="chart-pv"></div>
+          <p class="muted small">Positivo = a carregar, negativo = a descarregar. A produção
+            solar real está no painel <code>auto-energy</code> &mdash; a entrada PV deste
+            inversor não está ligada.</p></figure>
+        <figure class="chart-card"><figcaption>Carga na saída <span class="unit">W</span><b id="lbl-load"></b></figcaption><div class="chart" id="chart-load"></div>
+          <p class="muted small" id="load-bypass-note" hidden>Em bypass o inversor não
+            mede a saída (devolve 1 W fixo) &mdash; só há leitura real em modo bateria.</p></figure>
+      </div>
+      <details class="table-view">
+        <summary>Ver em tabela</summary>
+        <div class="scroll-x"><table id="history-table"><thead><tr>
+          <th>Hora</th><th>Bateria V</th><th>Carga %</th><th>PV W</th><th>Consumo W</th><th>Rede V</th>
+        </tr></thead><tbody></tbody></table></div>
+      </details>
+    </section>
+  </div>
+
+  <!-- ===================== Automações ===================== -->
+  {% if grid_charge_available or battery_window_available %}
+  <div class="tab-panel" data-panel="automacoes" role="tabpanel" hidden>
+
+    {% if battery_window_available %}
+    <section aria-labelledby="h-batwin">
+      <h2 id="h-batwin">Janela de bateria</h2>
+      <div class="control-card">
+        <div class="sched-toolbar">
+          <label class="chk"><input type="checkbox" id="bw-enabled"> Ativada</label>
+          <span class="badge" id="bw-status">&mdash;</span>
+        </div>
+        <details class="help">
+          <summary>Como funciona</summary>
+          <p class="muted small">Passa as cargas para a bateria durante uma janela horária,
+            em vez de a deixar em flutuação permanente. A razão principal <strong>não é
+            poupar</strong> &mdash; é criar espaço: uma bateria cheia não absorve nada, por
+            isso sem esta descarga o carregamento por excedente fica sem para onde
+            mandar o excedente do dia seguinte. Controla o <code>POP</code>, não o
+            <code>PCP</code>.</p>
+          <p class="muted small">O piso limita a profundidade da descarga. Um banco de
+            chumbo-ácido levado a 50% dura algumas centenas de ciclos; a 20&ndash;30% dura
+            milhares. Abaixo de <strong><span id="bw-abs-floor">&mdash;</span>&nbsp;V</strong>
+            o servidor recusa a configuração.</p>
+          <p class="muted small"><strong>Uma descarga por janela.</strong> Depois de tocar
+            no piso, só volta à bateria na janela seguinte &mdash; libertar apenas por
+            tensão daria descarga, recarga e nova descarga várias vezes por noite, que é
+            precisamente o desgaste que isto existe para evitar.</p>
+          <p class="warn small">Em modo bateria a proteção habitual de bateria fraca
+            <strong>não funciona</strong>: essa escreve <code>PCP</code>, que não tem
+            efeito nenhum com <code>POP=02</code>. Enquanto a janela está aberta, o piso
+            é a única coisa a proteger o pack &mdash; e o Raspberry Pi que
+            corre este servidor está na mesma saída.</p>
+          <p class="muted small">Cede ao carregamento por excedente: o carregador só
+            funciona com <code>POP=00</code>, por isso absorver excedente e alimentar as
+            cargas pela bateria não podem acontecer ao mesmo tempo.</p>
+        </details>
+
+        <h3>Janela noturna</h3>
+        <div class="control-grid">
+          <label class="field">Início da janela
+            <input type="time" id="bw-from" required></label>
+          <label class="field">Fim da janela
+            <input type="time" id="bw-to" required></label>
+          <label class="field">Voltar à rede abaixo de (V)
+            <input type="number" id="bw-floor" min="24" step="0.1" required></label>
+          <label class="field">Só repetir acima de (V)
+            <input type="number" id="bw-resume" min="24" step="0.1" required></label>
+        </div>
+
+        <h3>Janela diurna (condicional)</h3>
+        <label class="chk"><input type="checkbox" id="bw-daytime-enabled">
+          Usar a bateria também de dia, quando for seguro</label>
+        <div class="control-grid">
+          <label class="field">Das
+            <input type="time" id="bw-daytime-from"></label>
+          <label class="field">Às
+            <input type="time" id="bw-daytime-to"></label>
+          <label class="field">Entrar acima de (W)
+            <input type="number" id="bw-daytime-enter" step="1"></label>
+          <label class="field">Sair abaixo de (W)
+            <input type="number" id="bw-daytime-exit" step="1"></label>
+        </div>
+        <details class="help">
+          <summary>Porque é condicional</summary>
+          <p class="muted small">De dia, passar as cargas para a bateria
+            <strong>aumenta</strong> a exportação: o inversor deixa de puxar da
+            rede, e o contador desce na mesma medida. Por isso esta janela só
+            abre quando o <em>saldo sem o inversor</em> está acima do valor de
+            entrada &mdash; esse saldo é exactamente o que o contador passa a
+            marcar em modo bateria, portanto positivo garante que descarregar não
+            provoca exportação. Dois valores em vez de um porque a mediana diurna
+            anda perto de zero e um só oscilaria.</p>
+        </details>
+
+        <h3>Horário da bomba</h3>
+        <div class="control-grid">
+          <label class="field">Bomba começa às
+            <input type="time" id="bw-pump-from"></label>
+          <label class="field">Bomba acaba às
+            <input type="time" id="bw-pump-to"></label>
+        </div>
+        <p class="warn small" id="bw-hard-forbidden"></p>
+        <details class="help">
+          <summary>Sobre a bomba</summary>
+          <p class="muted small">Durante estas horas as cargas ficam na rede,
+            aconteça o que acontecer. A bomba arranca com ~1,2&ndash;1,4&nbsp;kW e
+            faria disparar o inversor se estivesse em bateria &mdash; e isso
+            derrubava também o frigorífico, a luz e o portão.
+            <strong>Se mudares o temporizador da bomba, muda aqui também</strong>:
+            um bloqueio nas horas erradas parece proteção e não protege nada.
+            Deixa os dois campos vazios só se a bomba já não estiver ligada à saída
+            protegida. Quando a bomba é ligada à mão, a janela diurna fecha-se
+            sozinha ao detetar a carga.</p>
+        </details>
+
+        <details class="gc-advanced">
+          <summary>Definições avançadas</summary>
+          <div class="control-grid">
+            <label class="field">Verificar a cada (s)
+              <input type="number" id="bw-poll-interval" min="1" step="1" required></label>
+            <label class="field">Mín. de segundos entre comutações
+              <input type="number" id="bw-min-switch" min="0" step="1" required></label>
+            <label class="field">Leituras seguidas abaixo do piso
+              <input type="number" id="bw-floor-confirmations" min="1" step="1" required></label>
+          </div>
+          <p class="muted small">Uma única leitura abaixo do piso não fecha a janela.
+            O pack cai ~0,4&nbsp;V enquanto o compressor do frigorífico trabalha,
+            e esta ligação série devolve tramas corrompidas de vez em quando &mdash;
+            qualquer uma das duas terminaria a descarga por causa de um valor que
+            nunca foi real. Cada comutação do <code>POP</code> atira um relé físico,
+            por isso o intervalo mínimo é bem mais largo que o do <code>PCP</code>.
+            Voltar à rede por segurança ignora-o sempre.</p>
+        </details>
+
+        <div class="btnrow sched-actions">
+          <button id="bw-save">Guardar definições</button>
+          <button class="ghost" id="bw-apply-now">Aplicar agora</button>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
+    {% endif %}
+
+    {% if grid_charge_available %}
+    <section aria-labelledby="h-gridcharge">
+      <h2 id="h-gridcharge">Carregamento por excedente</h2>
+      <div class="control-card">
+        <div class="sched-toolbar">
+          <label class="chk"><input type="checkbox" id="gc-enabled"> Ativado</label>
+          <span class="badge" id="gc-status">&mdash;</span>
+        </div>
+        <details class="help">
+          <summary>Como funciona</summary>
+          <p class="muted small">Só carrega enquanto a casa estiver a <strong>exportar</strong>
+            excedente solar para a rede (medido pelo contador do painel
+            <code>auto-energy</code>), em vez de assumir que uma dada hora do dia significa
+            que há sol &mdash; a entrada PV deste inversor não está ligada.
+            {% if scheduler_available %}Mutuamente exclusivo com o agendamento
+            (em Avançado).{% endif %}</p>
+          <p class="muted small"><strong>O sinal conta.</strong> Positivo = a casa ainda
+            está a comprar à rede; negativo = já está a injetar. Um valor de arranque
+            <strong>positivo</strong> (ex.: <code>30</code>) liga o carregador enquanto
+            ainda se compram 30&nbsp;W, ou seja <em>antes</em> de haver exportação &mdash;
+            que é o que interessa quando injetar não é permitido.</p>
+          <p class="muted small">O saldo aqui é <code>rede &minus; entrada do inversor</code>,
+            não a leitura crua do contador: o consumo do próprio carregador é assim
+            retirado da conta. Entre os dois valores o estado anterior mantém-se
+            (histerese), para não ligar e desligar com as variações normais da casa.</p>
+          <p class="muted small">Em <strong>exclusivo</strong> controla o PCP sozinho e o
+            agendamento tem de estar desativado; em <strong>sobreposição</strong> só atua
+            ao exportar e deixa o resto ao agendamento.</p>
+          <p class="warn small">Com a bateria baixa, o carregamento da rede é forçado
+            até a bateria ficar cheia, independentemente do estado da rede. Se o painel
+            <code>auto-energy</code> não estiver acessível, ou a leitura for antiga,
+            assume <strong>não estar a exportar</strong> e para de carregar.</p>
+        </details>
+
+        <div class="control-grid">
+          <label class="field">Modo
+            <select id="gc-mode">
+              <option value="override">Sobreposição — só atua ao exportar, resto fica com o agendamento</option>
+              <option value="exclusive">Exclusivo — controla o PCP sozinho (não pode ter agendamento ativo)</option>
+            </select></label>
+          <label class="field">Começar a carregar quando o saldo descer abaixo de (W)
+            <input type="number" id="gc-export-threshold" step="1" required></label>
+          <label class="field">Parar de carregar quando o saldo subir acima de (W)
+            <input type="number" id="gc-import-threshold" step="1" required></label>
+        </div>
+
+        <details class="gc-advanced">
+          <summary>Definições avançadas</summary>
+          <div class="control-grid">
+            <label class="field">URL da fonte de dados
+              <input type="text" id="gc-source-url" spellcheck="false" required></label>
+            <label class="field">Verificar a cada (s)
+              <input type="number" id="gc-poll-interval" min="5" step="1" required></label>
+            <label class="field">Mín. de segundos entre comutações
+              <input type="number" id="gc-min-switch" min="0" step="1" required></label>
+            <label class="field">Considerar desatualizado após (s)
+              <input type="number" id="gc-stale-after" min="0" step="1" required></label>
+            <label class="field">PCP ao exportar (começar)
+              <select id="gc-charge-pcp">
+                {% for value, label in pcp_values.items() %}
+                <option value="{{ value }}">{{ value }} &mdash; {{ label }}</option>
+                {% endfor %}
+              </select></label>
+            <label class="field">PCP caso contrário (parar)
+              <select id="gc-idle-pcp">
+                {% for value, label in pcp_values.items() %}
+                <option value="{{ value }}">{{ value }} &mdash; {{ label }}</option>
+                {% endfor %}
+              </select></label>
+          </div>
+        </details>
+
+        <div class="btnrow sched-actions">
+          <button id="gc-save">Guardar definições</button>
+          <button class="ghost" id="gc-apply-now">Aplicar agora</button>
+        </div>
+      </div>
+    </section>
+    {% endif %}
+  </div>
   {% endif %}
 
-  {% if scheduler_available %}
-  <!-- Agendamento -->
-  <section aria-labelledby="h-sched">
-    <h2 id="h-sched">Agendamento automático</h2>
-    <p class="muted small">Aplica a prioridade da fonte de carga (<code>PCP</code>) por
-      hora do dia, verificado a cada <span id="sched-poll">&mdash;</span>s dentro deste
-      servidor &mdash; sem precisar de um cron à parte, até porque mais nada consegue
-      usar a porta série ao mesmo tempo.</p>
-    <div class="control-card">
-      <div class="sched-toolbar">
-        <label class="chk"><input type="checkbox" id="sched-enabled"> Ativado</label>
-        <span class="badge" id="sched-status">&mdash;</span>
-      </div>
-      <p class="small" id="sched-current"></p>
+  <!-- ===================== Avançado ===================== -->
+  <div class="tab-panel" data-panel="avancado" role="tabpanel" hidden>
+    <p class="muted small">Controlo manual e diagnóstico. Com as automações ligadas,
+      uma escrita manual de <code>PCP</code> ou <code>POP</code> é substituída na
+      verificação seguinte.</p>
 
-      <div class="scroll-x">
-        <table id="sched-table"><thead><tr>
-          <th>Das</th><th>Até</th><th>PCP</th><th>Motivo</th><th></th>
-        </tr></thead><tbody></tbody></table>
-      </div>
+    {% if allow_writes %}
+    <section aria-labelledby="h-ctl">
+      <h2 id="h-ctl">Controlo manual</h2>
+      <div class="control-grid">
+        <div class="control-card">
+          <h3>Prioridade da fonte de carga <code>PCP</code></h3>
+          <p class="muted small">De onde vem a corrente de carregamento.</p>
+          <div class="btnrow" id="pcp-row">
+            {% for value, label in pcp_values.items() %}
+            <button class="opt" data-kind="charger-priority" data-value="{{ value }}">
+              <span class="code">{{ value }}</span>{{ label }}</button>
+            {% endfor %}
+          </div>
+          <p class="muted small" id="note-charger-priority"></p>
+          <details class="help">
+            <summary>Cuidados</summary>
+            <p class="warn small"><strong>03 é apenas solar.</strong> Sem sol, a bateria
+              descarrega. O servidor recusa este valor abaixo do limite mínimo de segurança
+              da bateria.</p>
+            <p class="warn small">O <code>PCP</code> só carrega mesmo enquanto o
+              <code>POP</code> estiver em <code>00</code> (rede primeiro) &mdash; com
+              <code>POP02</code> (SBU) fica a 0 A e a bateria desce. Noutros modos o
+              comando é aceite mas não carrega.</p>
+          </details>
+        </div>
 
-      <form class="console sched-add" id="sched-add-form" autocomplete="off">
-        <input type="time" id="sched-from" required>
-        <span class="muted small">&rarr;</span>
-        <input type="time" id="sched-to" required>
-        <select id="sched-pcp">
-          {% for value, label in pcp_values.items() %}
-          <option value="{{ value }}">{{ value }} &mdash; {{ label }}</option>
-          {% endfor %}
-        </select>
-        <input type="text" id="sched-why" placeholder="motivo (opcional)">
-        <button type="submit">Adicionar regra</button>
+        <div class="control-card">
+          <h3>Prioridade da fonte de saída <code>POP</code></h3>
+          <p class="muted small">Que fonte alimenta os consumos. É esta que comuta o relé
+            (o "clique" audível). <strong>Só em <code>00</code> é que a bateria
+            carrega.</strong></p>
+          <div class="btnrow" id="pop-row">
+            {% for value, label in pop_values.items() %}
+            <button class="opt" data-kind="output-priority" data-value="{{ value }}">
+              <span class="code">{{ value }}</span>{{ label }}</button>
+            {% endfor %}
+          </div>
+          <p class="muted small" id="note-output-priority"></p>
+        </div>
+
+        <div class="control-card">
+          <h3>Ações rápidas</h3>
+          <div class="btnrow">
+            <button class="opt" data-cmd="BZON">Ligar sinal sonoro</button>
+            <button class="opt" data-cmd="BZOFF">Desligar sinal sonoro</button>
+            <button class="opt danger" data-cmd="SOFF" data-confirm="1">DESLIGAR saída</button>
+            <button class="opt danger" data-cmd="SON" data-confirm="1">LIGAR saída</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    {% endif %}
+
+    {% if scheduler_available %}
+    <details class="section-fold">
+      <summary><h2 id="h-sched">Agendamento por horário</h2>
+        <span class="badge" id="sched-status">&mdash;</span></summary>
+      <section aria-labelledby="h-sched">
+        <p class="muted small">Aplica o <code>PCP</code> por hora do dia, verificado a cada
+          <span id="sched-poll">&mdash;</span>s. Não é usado nesta instalação: o
+          carregamento por excedente controla o <code>PCP</code> sozinho.</p>
+        <div class="control-card">
+          <div class="sched-toolbar">
+            <label class="chk"><input type="checkbox" id="sched-enabled"> Ativado</label>
+          </div>
+          <p class="small" id="sched-current"></p>
+
+          <div class="scroll-x">
+            <table id="sched-table"><thead><tr>
+              <th>Das</th><th>Até</th><th>PCP</th><th>Motivo</th><th></th>
+            </tr></thead><tbody></tbody></table>
+          </div>
+
+          <form class="console sched-add" id="sched-add-form" autocomplete="off">
+            <input type="time" id="sched-from" required>
+            <span class="muted small">&rarr;</span>
+            <input type="time" id="sched-to" required>
+            <select id="sched-pcp">
+              {% for value, label in pcp_values.items() %}
+              <option value="{{ value }}">{{ value }} &mdash; {{ label }}</option>
+              {% endfor %}
+            </select>
+            <input type="text" id="sched-why" placeholder="motivo (opcional)">
+            <button type="submit">Adicionar regra</button>
+          </form>
+
+          <div class="btnrow sched-actions">
+            <button class="ghost" id="sched-apply-now">Aplicar agora</button>
+          </div>
+          <p class="muted small">Uma regra <code>03</code> é reduzida para <code>01</code>
+            se a bateria estiver abaixo do limite de segurança. O valor "atual" reflete
+            o que este servidor aplicou, não uma leitura do aparelho.</p>
+          {% if grid_charge_available %}
+          <p class="muted small" id="sched-conflict-note">Mutuamente exclusivo com o
+            carregamento por excedente &mdash; só um pode estar ativado de cada vez.</p>
+          {% endif %}
+        </div>
+      </section>
+    </details>
+    {% endif %}
+
+    <section aria-labelledby="h-console">
+      <h2 id="h-console">Consola de comandos</h2>
+      <form class="console" id="console-form" autocomplete="off">
+        <input id="console-input" name="command" placeholder="QPIGS, QMOD, PCP01 &hellip;"
+               spellcheck="false" required>
+        <label class="chk"><input type="checkbox" id="console-confirm"> confirmar</label>
+        <button type="submit">Enviar</button>
       </form>
+      <p class="muted small">As consultas são executadas de imediato. Os comandos de
+        escrita passam por verificação de segurança; os perigosos exigem
+        <em>confirmar</em>. <a href="/api/commands">Lista completa de comandos &rarr;</a></p>
+      <pre id="console-out" class="console-out" aria-live="polite"></pre>
+    </section>
 
-      <div class="btnrow sched-actions">
-        <button class="ghost" id="sched-apply-now">Aplicar agora</button>
-      </div>
-      <p class="warn small">Uma regra <code>03</code> é automaticamente reduzida para
-        <code>01</code> se a bateria estiver abaixo do limite de segurança na altura em
-        que seria aplicada &mdash; a mesma proteção de uma escrita manual.</p>
-      <p class="muted small">O inversor não consegue devolver a prioridade que tem
-        configurada, por isso o valor "atual" abaixo reflete o que este servidor
-        aplicou, não uma leitura do aparelho.</p>
-      {% if grid_charge_available %}
-      <p class="muted small" id="sched-conflict-note">Mutuamente exclusivo com o
-        carregamento por excedente abaixo &mdash; só um pode estar ativado de cada vez.</p>
-      {% endif %}
-    </div>
-  </section>
-  {% endif %}
-
-  {% if grid_charge_available %}
-  <!-- Carregamento por excedente -->
-  <section aria-labelledby="h-gridcharge">
-    <h2 id="h-gridcharge">Carregamento por excedente</h2>
-    <p class="muted small">Só carrega enquanto a casa estiver a <strong>exportar</strong>
-      excedente solar para a rede (medido pelo contador do painel
-      <code>auto-energy</code>), em vez de assumir que uma dada hora do dia significa que
-      há sol &mdash; a entrada PV deste inversor lê 0 V, por isso não tem outra forma de
-      saber. {% if scheduler_available %}Mutuamente exclusivo com o agendamento
-      acima.{% endif %}</p>
-    <div class="control-card">
-      <div class="sched-toolbar">
-        <label class="chk"><input type="checkbox" id="gc-enabled"> Ativado</label>
-        <span class="badge" id="gc-status">&mdash;</span>
-      </div>
-      <p class="warn small" id="gc-pop-warning" hidden></p>
-      <p class="small" id="gc-current"></p>
-
-      <h3>Definições principais</h3>
-      <div class="control-grid">
-        <label class="field">Modo
-          <select id="gc-mode">
-            <option value="override">Sobreposição — só atua ao exportar, resto fica com o agendamento</option>
-            <option value="exclusive">Exclusivo — controla o PCP sozinho (não pode ter agendamento ativo)</option>
-          </select></label>
-        <label class="field">Começar a carregar quando o saldo descer abaixo de (W)
-          <input type="number" id="gc-export-threshold" step="1" required></label>
-        <label class="field">Parar de carregar quando o saldo subir acima de (W)
-          <input type="number" id="gc-import-threshold" step="1" required></label>
-      </div>
-      <p class="muted small"><strong>O sinal conta.</strong> Positivo = a casa ainda
-        está a comprar à rede; negativo = já está a injetar. Um valor de arranque
-        <strong>positivo</strong> (ex.: <code>30</code>) liga o carregador enquanto
-        ainda se compram 30&nbsp;W, ou seja <em>antes</em> de haver exportação &mdash;
-        que é o que interessa quando injetar não é permitido. Um valor negativo só
-        atua depois de a exportação já estar a acontecer.</p>
-      <p class="muted small">O saldo aqui é <code>rede &minus; entrada do inversor</code>,
-        não a leitura crua do contador: o consumo do próprio carregador é assim
-        retirado da conta, senão ligá-lo mexia no número que o mandou ligar.</p>
-      <p class="muted small">Entre estes dois valores o estado anterior mantém-se
-        (histerese) &mdash; é isso que evita ligar e desligar constantemente com as
-        variações normais de consumo da casa.</p>
-      <p class="muted small">Em <strong>sobreposição</strong>, sempre que houver
-        exportação isto força o carregamento para consumir o excedente; sem
-        exportação não escreve nada e a decisão volta ao agendamento. É o modo a
-        usar quando não é permitido injetar na rede. Em <strong>exclusivo</strong>
-        controla o PCP sozinho e o agendamento tem de estar desativado.</p>
-
-      <div class="btnrow sched-actions">
-        <button id="gc-save">Guardar definições</button>
-        <button class="ghost" id="gc-apply-now">Aplicar agora</button>
-      </div>
-      <p class="warn small">O PCP de "parar" é automaticamente elevado para
-        <code>01</code> (permitir carregar da rede) se a bateria estiver abaixo do limite
-        de segurança &mdash; independentemente do estado da rede.</p>
-      <p class="muted small">Se o painel <code>auto-energy</code> não estiver acessível,
-        ou a última leitura for demasiado antiga, assume <strong>não estar a
-        exportar</strong> e para de carregar, em vez de adivinhar.</p>
-
-      <details class="gc-advanced">
-        <summary>Definições avançadas</summary>
-        <div class="control-grid">
-          <label class="field">URL da fonte de dados
-            <input type="text" id="gc-source-url" spellcheck="false" required></label>
-          <label class="field">Verificar a cada (s)
-            <input type="number" id="gc-poll-interval" min="5" step="1" required></label>
-          <label class="field">Mín. de segundos entre comutações
-            <input type="number" id="gc-min-switch" min="0" step="1" required></label>
-          <label class="field">Considerar desatualizado após (s)
-            <input type="number" id="gc-stale-after" min="0" step="1" required></label>
-          <label class="field">PCP ao exportar (começar)
-            <select id="gc-charge-pcp">
-              {% for value, label in pcp_values.items() %}
-              <option value="{{ value }}">{{ value }} &mdash; {{ label }}</option>
-              {% endfor %}
-            </select></label>
-          <label class="field">PCP caso contrário (parar)
-            <select id="gc-idle-pcp">
-              {% for value, label in pcp_values.items() %}
-              <option value="{{ value }}">{{ value }} &mdash; {{ label }}</option>
-              {% endfor %}
-            </select></label>
-        </div>
-      </details>
-    </div>
-  </section>
-  {% endif %}
-
-  {% if battery_window_available %}
-  <!-- Janela noturna de bateria -->
-  <section aria-labelledby="h-batwin">
-    <h2 id="h-batwin">Janela noturna de bateria</h2>
-    <p class="muted small">Passa as cargas para a bateria durante uma janela horária,
-      em vez de a deixar em flutuação permanente. A razão principal <strong>não é
-      poupar</strong> &mdash; é criar espaço: uma bateria cheia não absorve nada, por
-      isso sem esta descarga o carregamento por excedente acima fica sem para onde
-      mandar o excedente do dia seguinte. Controla o <code>POP</code>, não o
-      <code>PCP</code>.</p>
-    <div class="control-card">
-      <div class="sched-toolbar">
-        <label class="chk"><input type="checkbox" id="bw-enabled"> Ativado</label>
-        <span class="badge" id="bw-status">&mdash;</span>
-      </div>
-      <p class="small" id="bw-current"></p>
-
-      <h3>Perfil</h3>
-      <div class="btnrow" id="bw-profiles">
-        <button class="opt" data-profile="occupied">Casa ocupada</button>
-        <button class="opt" data-profile="away">Casa vazia</button>
-      </div>
-      <p class="muted small">
-        <strong>Casa ocupada</strong>: descarga curta à noite (até 25,0&nbsp;V,
-        ~45&nbsp;Wh), só o espaço necessário para absorver o excedente; sem
-        janela diurna. Menos perdas e menos desgaste da bateria.
-        <strong>Casa vazia</strong>: descarga funda (até 24,5&nbsp;V) e janela
-        diurna ligada, porque sem consumo o excedente é maior.
-        <span id="bw-profile-custom" hidden>&mdash; As definições atuais não
-        correspondem a nenhum perfil (<em>personalizado</em>).</span></p>
-      <p class="warn small" id="bw-mismatch" hidden></p>
-      <p class="warn small" id="bw-latched" hidden></p>
-
-      <h3>Definições principais</h3>
-      <div class="control-grid">
-        <label class="field">Início da janela
-          <input type="time" id="bw-from" required></label>
-        <label class="field">Fim da janela
-          <input type="time" id="bw-to" required></label>
-        <label class="field">Voltar à rede abaixo de (V)
-          <input type="number" id="bw-floor" min="24" step="0.1" required></label>
-        <label class="field">Só repetir acima de (V)
-          <input type="number" id="bw-resume" min="24" step="0.1" required></label>
-      </div>
-      <p class="muted small">O piso limita a profundidade da descarga. Um banco de
-        chumbo-ácido levado a 50% dura algumas centenas de ciclos; a 20&ndash;30% dura
-        milhares. Abaixo de <strong><span id="bw-abs-floor">&mdash;</span>&nbsp;V</strong>
-        o servidor recusa a configuração.</p>
-      <p class="muted small"><strong>Uma descarga por janela.</strong> Depois de tocar
-        no piso, só volta à bateria na janela seguinte &mdash; libertar apenas por
-        tensão daria descarga, recarga e nova descarga várias vezes por noite, que é
-        precisamente o desgaste que isto existe para evitar.</p>
-
-      <div class="btnrow sched-actions">
-        <button id="bw-save">Guardar definições</button>
-        <button class="ghost" id="bw-apply-now">Aplicar agora</button>
-      </div>
-
-      <h3>Janela diurna (condicional)</h3>
-      <label class="chk"><input type="checkbox" id="bw-daytime-enabled">
-        Usar a bateria também de dia, quando for seguro</label>
-      <div class="control-grid">
-        <label class="field">Das
-          <input type="time" id="bw-daytime-from"></label>
-        <label class="field">Às
-          <input type="time" id="bw-daytime-to"></label>
-        <label class="field">Entrar acima de (W)
-          <input type="number" id="bw-daytime-enter" step="1"></label>
-        <label class="field">Sair abaixo de (W)
-          <input type="number" id="bw-daytime-exit" step="1"></label>
-      </div>
-      <p class="muted small">De dia, passar as cargas para a bateria
-        <strong>aumenta</strong> a exportação: o inversor deixa de puxar da
-        rede, e o contador desce na mesma medida. Por isso esta janela só
-        abre quando o <em>saldo sem o inversor</em> está acima do valor de
-        entrada &mdash; esse saldo é exactamente o que o contador passa a
-        marcar em modo bateria, portanto positivo garante que descarregar não
-        provoca exportação. Nessas alturas descarregar poupa compra à rede e
-        abre espaço para absorver mais tarde. Dois valores em vez de um
-        porque a mediana diurna anda perto de zero e um só oscilaria.</p>
-
-      <h3>Horário da bomba</h3>
-      <div class="control-grid">
-        <label class="field">Bomba começa às
-          <input type="time" id="bw-pump-from"></label>
-        <label class="field">Bomba acaba às
-          <input type="time" id="bw-pump-to"></label>
-      </div>
-      <p class="muted small">Durante estas horas as cargas ficam na rede,
-        aconteça o que acontecer. A bomba arranca com ~1,2&ndash;1,4&nbsp;kW e
-        faria disparar o inversor se estivesse em bateria &mdash; e isso
-        derrubava também o frigorífico, a luz e o portão.
-        <strong>Se mudares o temporizador da bomba, muda aqui também</strong>:
-        um bloqueio nas horas erradas parece proteção e não protege nada.
-        Deixa os dois campos vazios só se a bomba já não estiver ligada à saída
-        protegida.</p>
-      <p class="warn small" id="bw-hard-forbidden"></p>
-      <p class="warn small">Em modo bateria a proteção habitual de bateria fraca
-        <strong>não funciona</strong>: essa escreve <code>PCP</code>, que não tem
-        efeito nenhum com <code>POP=02</code>. Enquanto a janela está aberta, o piso
-        aqui em cima é a única coisa a proteger o pack &mdash; e o Raspberry Pi que
-        corre este servidor está na mesma saída.</p>
-      <p class="muted small">Cede ao carregamento por excedente: o carregador só
-        funciona com <code>POP=00</code>, por isso absorver excedente e alimentar as
-        cargas pela bateria não podem acontecer ao mesmo tempo.</p>
-
-      <details class="gc-advanced">
-        <summary>Definições avançadas</summary>
-        <div class="control-grid">
-          <label class="field">Verificar a cada (s)
-            <input type="number" id="bw-poll-interval" min="1" step="1" required></label>
-          <label class="field">Mín. de segundos entre comutações
-            <input type="number" id="bw-min-switch" min="0" step="1" required></label>
-          <label class="field">Leituras seguidas abaixo do piso
-            <input type="number" id="bw-floor-confirmations" min="1" step="1" required></label>
-        </div>
-        <p class="muted small">Uma única leitura abaixo do piso não fecha a janela.
-          O pack cai ~0,4&nbsp;V enquanto o compressor do frigorífico trabalha
-          (medido a apenas 46&nbsp;W), e esta ligação série devolve tramas
-          corrompidas de vez em quando &mdash; qualquer uma das duas terminaria a
-          descarga por causa de um valor que nunca foi real.</p>
-        <p class="muted small">Cada comutação do <code>POP</code> atira um relé físico
-          &mdash; ouve-se. Por isso o intervalo mínimo aqui é bem mais largo que o do
-          <code>PCP</code>. Voltar à rede por segurança ignora-o sempre.</p>
-      </details>
-    </div>
-  </section>
-  {% endif %}
-
-  <!-- Consola de comandos -->
-  <section aria-labelledby="h-console">
-    <h2 id="h-console">Consola de comandos</h2>
-    <form class="console" id="console-form" autocomplete="off">
-      <input id="console-input" name="command" placeholder="QPIGS, QMOD, PCP01 &hellip;"
-             spellcheck="false" required>
-      <label class="chk"><input type="checkbox" id="console-confirm"> confirmar</label>
-      <button type="submit">Enviar</button>
-    </form>
-    <p class="muted small">As consultas são executadas de imediato. Os comandos de
-      escrita passam por verificação de segurança; os perigosos exigem
-      <em>confirmar</em>. <a href="/api/commands">Lista completa de comandos &rarr;</a></p>
-    <pre id="console-out" class="console-out" aria-live="polite"></pre>
-  </section>
-
-  <!-- Valores nominais -->
-  <section aria-labelledby="h-rate">
-    <h2 id="h-rate">Configuração <code>QPIRI</code></h2>
-    <p class="muted small">Valores nominais fixos. Estes <strong>nunca</strong> refletem
-      uma alteração de definições &mdash; confirme as escritas pelo estado atual.</p>
-    <details><summary>Mostrar configuração nominal</summary>
-      <div class="scroll-x"><table id="ratings-table"><tbody></tbody></table></div>
+    <details class="section-fold">
+      <summary><h2 id="h-audit">Registo de escritas</h2></summary>
+      <section aria-labelledby="h-audit">
+        <div class="scroll-x"><table id="audit-table"><thead><tr>
+          <th>Hora</th><th>Origem</th><th>Comando</th><th>Resposta</th></tr></thead><tbody></tbody></table></div>
+      </section>
     </details>
-  </section>
 
-  <!-- Registo de escritas -->
-  <section aria-labelledby="h-audit">
-    <h2 id="h-audit">Registo de escritas</h2>
-    <div class="scroll-x"><table id="audit-table"><thead><tr>
-      <th>Hora</th><th>Origem</th><th>Comando</th><th>Resposta</th></tr></thead><tbody></tbody></table></div>
-  </section>
+    <details class="section-fold">
+      <summary><h2 id="h-rate">Configuração <code>QPIRI</code></h2></summary>
+      <section aria-labelledby="h-rate">
+        <p class="muted small">Valores nominais fixos. Estes <strong>nunca</strong> refletem
+          uma alteração de definições &mdash; confirme as escritas pelo estado atual.</p>
+        <div class="scroll-x"><table id="ratings-table"><tbody></tbody></table></div>
+      </section>
+    </details>
+  </div>
 </main>
 
 <script src="{{ url_for('static', filename='app.js') }}"></script>
