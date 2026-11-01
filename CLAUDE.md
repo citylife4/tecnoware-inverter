@@ -285,8 +285,10 @@ disabled its fourth interlock for as long as the mode was `exclusive`.
 Both PCP controllers share `apply_low_battery_floor` in `webapp/safety.py`
 — don't duplicate that logic. Each passes its own `LowBatteryLatch`: once
 armed below `min_battery_voltage`, the override holds until the charger
-reaches float (27.0-28.0 V, <= 4 A; **not** the 29 V absorption stage,
-which reads ~4 A too and was mistaken for float until 2026-10-30). It no
+reaches float (27.0-28.0 V at 0 < I <= 4 A, 3 readings in a row; **not** the
+29 V absorption stage, which reads ~4 A too and was mistaken for float until
+2026-10-30, nor the one-sample pass-through at 0 A as a charge stops, which
+reset the maintenance clock on 10-31). It no
 longer releases on voltage, which
 the charger itself raises past the threshold at ~50% state of charge.
 

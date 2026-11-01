@@ -191,8 +191,12 @@ def at_float(service) -> bool:
     mode_fn = getattr(service, "mode", None)
     if (mode_fn() if mode_fn else None) == "B":
         return False
+    # amps > 0: the charger must be holding the pack there. On 2026-10-31 at
+    # 14:31:57 a charge stopped mid-absorption, and the decaying voltage read
+    # 27.0 V at 0 A for one sample. That passed, and reset the maintenance
+    # clock with no real float since 10-30.
     return (is_finite_number(v) and is_finite_number(amps)
-            and amps <= FLOOR_RELEASE_MAX_A
+            and 0 < amps <= FLOOR_RELEASE_MAX_A
             and FLOOR_RELEASE_MIN_V <= v < FLOAT_MAX_V)
 
 

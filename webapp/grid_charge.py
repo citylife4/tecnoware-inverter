@@ -53,7 +53,8 @@ from transport import InverterError
 from webapp import config_error
 from webapp.atomic_write import write_json_atomic
 from webapp.trace import append_row
-from webapp.safety import (PCP_VALUES, LowBatteryLatch, apply_low_battery_floor,
+from webapp.safety import (FLOOR_RELEASE_CONFIRMATIONS, PCP_VALUES,
+                           LowBatteryLatch, apply_low_battery_floor,
                            at_float, is_finite_number)
 
 # Como é que este controlador se relaciona com o agendamento horário:
@@ -287,6 +288,9 @@ class GridChargeController:
         # maintenance charge is then at most MAINTENANCE_AFTER_S away.
         self._last_float_at = self._load_last_float() or datetime.now(timezone.utc)
         self._last_float_saved = self._last_float_at
+        # Consecutive at_float() ticks; the clock moves only on
+        # FLOOR_RELEASE_CONFIRMATIONS, like the latch release.
+        self._float_ticks = 0
 
     # ---- persistence ------------------------------------------------------
 
@@ -338,7 +342,8 @@ class GridChargeController:
         """Track float, and arm the latch for a deep pack or an overdue full
         charge. See NIGHT_DEEP_V."""
         now = datetime.now(timezone.utc)
-        if at_float(self.service):
+        self._float_ticks = self._float_ticks + 1 if at_float(self.service) else 0
+        if self._float_ticks >= FLOOR_RELEASE_CONFIRMATIONS:
             self._last_float_at = now
             # Hourly is plenty for a 48 h clock, and spares the SD card.
             if (now - self._last_float_saved).total_seconds() >= 3600:

@@ -455,8 +455,33 @@ class TestAbsorptionIsNotFloat(unittest.TestCase):
         gc.tick()                                  # 29.0 V absorption
         self.assertEqual(gc._last_float_at, old)
         self.service._battery_voltage = 27.4       # float
-        gc.tick()
+        for _ in range(3):                         # confirmed (2026-11-01)
+            gc.tick()
         self.assertGreater(gc._last_float_at, old)
+
+    def test_a_pass_through_reading_is_not_float(self):
+        """2026-10-31 14:31:57: charge stopped, one sample at 27.0 V / 0 A."""
+        from webapp.safety import at_float
+        self.service._battery_voltage = 27.0
+        self.service._charging_current = 0
+        self.assertFalse(at_float(self.service))
+
+    def test_one_float_sample_does_not_move_the_clock(self):
+        from test_webapp import FetchStub
+        from datetime import timezone as tz
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        gc = GridChargeController(self.service, os.path.join(tmp.name, "gc.json"),
+                                  fetch_fn=FetchStub(-200))
+        old = datetime.now(tz.utc) - timedelta(hours=30)
+        gc._last_float_at = old
+        self.service._battery_voltage = 27.4
+        gc.tick()
+        self.service._battery_voltage = 29.0       # back to absorption
+        gc.tick()
+        self.service._battery_voltage = 27.4
+        gc.tick()
+        self.assertEqual(gc._last_float_at, old)
 
 
 class TestRestBeforeResume(unittest.TestCase):

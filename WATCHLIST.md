@@ -70,9 +70,12 @@ finished. **Yet `last_float_at` moved to 14:32.** As the charger stopped at
 which `at_float` accepted. The 48 h maintenance charge is now deferred to
 11-02 14:32, though there has been no real float since 10-30. Also seen: the
 charger holding 29.0 V with the current field reading **0 A** (16:20), so
-the reading is coarse at both ends. **Fix proposed, not applied:** `at_float`
-requires current > 0, and `last_float_at` needs 3 consecutive float
-observations, as the latch release already does. The 60 min rest rule
+the reading is coarse at both ends. **Fixed 11-01 09:05:** `at_float`
+requires 0 < I <= 4 A, and `last_float_at` moves only after 3 consecutive
+float ticks. The persisted clock was corrected by hand to the last real float
+in telemetry, **10-30 14:16** (3 consecutive samples at 27-28 V, I > 0), so
+the 48 h maintenance charge is due **11-01 14:16** and should run to a real
+float. That is the first real test of the maintenance rule. The 60 min rest rule
 behaved: the latch released at 17:24 on 25.8 V, an hour after the last
 charging current, and the daytime window then ran 17:43-19:00. Sunset PCP03.
 Throws 6, no `hardware_override`, no `daytime_heavy_load`, no corrupt
