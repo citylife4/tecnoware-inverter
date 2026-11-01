@@ -36,6 +36,7 @@ back 10-25: local time now equals UTC.)
     10-29  2593   202     0      5    skip 24.6
     10-30  2500   117     0      1    ran  24.9
     10-31  2342   186     4      2    skip 24.8   no real float; clock reset falsely 14:32
+    11-01 11365   188     0     20    skip 24.8   occupied again; maintenance charge 14:16 -> float 22:17
 
 **Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
 `hardware_override`, all flags clear, sunset PCP03 every day. Both dark
@@ -59,6 +60,24 @@ sat partially charged. **Fixed 10-30 23:28:** `at_float` and
 at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
+
+**11-01 evening. The maintenance charge worked, but my 09:05 fix had broken
+float detection; corrected at 22:15.** `occupied` (the user switched back;
+house **11365 Wh**). Solar 188 Wh (0 nulls, peak 104 W), export 0, battery
+20 Wh. The 48 h rule armed at 14:16 as designed and held PCP01 through
+sunset (`night charge -- ... overdue for a full charge`). 131 min at 29 V
+absorption ending 16:23, then the charger dropped to a real float at 27.3-27.6
+V. **But the latch did not release.** At float this unit's current field
+reads **0 A most of the time** (1613 samples at 0 A against 132 at 4 A and 59
+at 5 A, alternating), and the 09:05 rule demanded I > 0 on 3 consecutive
+ticks. The latch would have held PCP01 indefinitely and refilled tonight's
+discharge from the grid in the dark. **Corrected 22:15:** the float band is
+27.0-28.0 V at <= 4 A **including 0 A**, and duration (3 consecutive ticks)
+is what excludes the 10-31 one-sample pass-through. `BatteryWindow._recovered`
+checks the band first, too. Within 90 s of restart: `last_float_at` 22:17:49
+(the first real float since 10-30), latch released, PCP03 queued behind the
+dwell. Throws 4, no `hardware_override`, no corrupt frames. Restarts 16:25
+(dashboard tabs) and 22:15 (this fix). 407 tests green. All flags clear.
 
 **11-01 morning (run late, after the 09:05 deploy). No regression.** `away`.
 At 01:00 the pack was at 24.8 V, so the night was skipped

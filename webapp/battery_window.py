@@ -864,9 +864,13 @@ class BatteryWindow:
         if not is_finite_number(amps):
             return False
         now = now or datetime.now()
+        # Float first, at 0 A too: the current field reads 0 A most of the time
+        # at a genuine float. RESUME_CONFIRMATIONS consecutive ticks keep a
+        # one-sample pass-through out.
+        if amps <= FLOOR_RELEASE_MAX_A and FLOOR_RELEASE_MIN_V <= v < FLOAT_MAX_V:
+            return True
         if amps > 0:
-            return (amps <= FLOOR_RELEASE_MAX_A
-                    and FLOOR_RELEASE_MIN_V <= v < FLOAT_MAX_V)
+            return False          # bulk or absorption
         if (self._last_charge_seen is not None and
                 (now - self._last_charge_seen).total_seconds() < RESUME_REST_S):
             return False          # surface charge, not rest

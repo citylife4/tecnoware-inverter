@@ -191,12 +191,16 @@ def at_float(service) -> bool:
     mode_fn = getattr(service, "mode", None)
     if (mode_fn() if mode_fn else None) == "B":
         return False
-    # amps > 0: the charger must be holding the pack there. On 2026-10-31 at
-    # 14:31:57 a charge stopped mid-absorption, and the decaying voltage read
-    # 27.0 V at 0 A for one sample. That passed, and reset the maintenance
-    # clock with no real float since 10-30.
+    # 0 A is allowed: at a genuine float this charger's current field reads
+    # 0 A most of the time (2026-11-01 evening: 1613 samples at 0 A, 132 at
+    # 4 A, 59 at 5 A, alternating). Requiring > 0 for a day made a real float
+    # undetectable. What separates a float from the 2026-10-31 14:31:57
+    # pass-through (27.0 V / 0 A for one 10 s sample while a stopped charge
+    # decayed) is duration, so every caller requires consecutive ticks:
+    # FLOOR_RELEASE_CONFIRMATIONS for the latch and the maintenance clock,
+    # RESUME_CONFIRMATIONS in BatteryWindow.
     return (is_finite_number(v) and is_finite_number(amps)
-            and 0 < amps <= FLOOR_RELEASE_MAX_A
+            and 0 <= amps <= FLOOR_RELEASE_MAX_A
             and FLOOR_RELEASE_MIN_V <= v < FLOAT_MAX_V)
 
 

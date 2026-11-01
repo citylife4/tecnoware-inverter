@@ -459,12 +459,41 @@ class TestAbsorptionIsNotFloat(unittest.TestCase):
             gc.tick()
         self.assertGreater(gc._last_float_at, old)
 
-    def test_a_pass_through_reading_is_not_float(self):
-        """2026-10-31 14:31:57: charge stopped, one sample at 27.0 V / 0 A."""
-        from webapp.safety import at_float
-        self.service._battery_voltage = 27.0
+    def test_a_pass_through_tick_does_not_move_the_clock(self):
+        """2026-10-31 14:31:57: charge stopped, one sample at 27.0 V / 0 A,
+        then the voltage kept falling."""
+        from test_webapp import FetchStub
+        from datetime import timezone as tz
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        gc = GridChargeController(self.service, os.path.join(tmp.name, "gc.json"),
+                                  fetch_fn=FetchStub(-200))
+        old = datetime.now(tz.utc) - timedelta(hours=30)
+        gc._last_float_at = old
         self.service._charging_current = 0
-        self.assertFalse(at_float(self.service))
+        for v in (27.0, 26.6, 26.3):
+            self.service._battery_voltage = v
+            gc.tick()
+        self.assertEqual(gc._last_float_at, old)
+
+    def test_a_real_float_reading_mostly_zero_amps_is_float(self):
+        """2026-11-01: at float the current field reads 0 A most of the time,
+        4-5 A now and then. The latch and the clock must still see it."""
+        from test_webapp import FetchStub
+        from datetime import timezone as tz
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        gc = GridChargeController(self.service, os.path.join(tmp.name, "gc.json"),
+                                  fetch_fn=FetchStub(-200))
+        old = datetime.now(tz.utc) - timedelta(hours=30)
+        gc._last_float_at = old
+        gc._floor_latch.arm()
+        for v, a in ((27.6, 0), (27.4, 4), (27.6, 0), (27.4, 0)):
+            self.service._battery_voltage = v
+            self.service._charging_current = a
+            gc.tick()
+        self.assertGreater(gc._last_float_at, old)
+        self.assertFalse(gc._floor_latch.active)
 
     def test_one_float_sample_does_not_move_the_clock(self):
         from test_webapp import FetchStub
