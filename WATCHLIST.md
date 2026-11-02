@@ -61,6 +61,18 @@ at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
 
+**11-02 morning. Clean; float detection behaving.** `occupied`. Rested at
+**25.6 V** before 01:00 after last night's real float (22:17), so night 1 of 3
+>= 25.2 V. The window ran from 25.5 V at 01:00, `floor` after 3 readings at
+01:47 at 25.0 V, quiet minimum 25.0 V. No `hardware_override`, no corrupt
+frames. daily_report credits only 1 Wh for ~47 min on battery, which looks
+low; not investigated. **No dark charging:** 0 bulk samples before sunrise.
+The 35 PCP01 ticks under `disabled_no_solar` were 08:34-08:52, a cloud gap
+after sunrise. The latch had armed at 07:43 in daylight (24.7 <= occupied's
+24.8 V), held PCP01 through the gap, and released at a **real float**:
+`last_float_at` 08:52 at 27.4 V, then PCP03. Drift after the floor 25.2 ->
+24.8 V by 07:00. All four flags clear.
+
 **11-01 evening. The maintenance charge worked, but my 09:05 fix had broken
 float detection; corrected at 22:15.** `occupied` (the user switched back;
 house **11365 Wh**). Solar 188 Wh (0 nulls, peak 104 W), export 0, battery
