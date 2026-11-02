@@ -37,6 +37,7 @@ back 10-25: local time now equals UTC.)
     10-30  2500   117     0      1    ran  24.9
     10-31  2342   186     4      2    skip 24.8   no real float; clock reset falsely 14:32
     11-01 11365   188     0     20    skip 24.8   occupied again; maintenance charge 14:16 -> float 22:17
+    11-02 12659   167     0      1    ran  25.5   false float at 4 A; rested 24.7 V by 22:13
 
 **Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
 `hardware_override`, all flags clear, sunset PCP03 every day. Both dark
@@ -60,6 +61,24 @@ sat partially charged. **Fixed 10-30 23:28:** `at_float` and
 at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
+
+**11-02 evening. Misbehaviour: a partial charge was read as float, and that
+includes the 08:52 "real float" reported this morning, which was wrong.**
+`occupied`. House 12659 Wh, solar 167 Wh (0 nulls, peak 93 W), export 0,
+battery 1 Wh (per daily_report). Today the charger never went to 29 V. It
+held **27.4 V while the pack still took 4-8 A**, tapering 7 -> 6 -> 5 -> 4
+(08:40-08:52 and 15:39-16:25), which is charging at float voltage. A *full*
+pack at float reads **0 A almost always** (11-01 evening: 1613 zero readings
+against 191 at 4-5 A). The coarse field has nothing between 0 and 4 A, so
+"<= 4 A for 3 ticks" accepted the 4 A readings of a pack still charging. The
+latch released at 08:52 and `last_float_at` reset at 16:25. The evening drift
+shows the pack was not full: 25.9 -> 24.7 V by 22:13. So the
+3-nights-at->=-25.2 V count restarts. **Fix proposed, not applied:** float =
+27.0-28.0 V with the current reading **0 A** on 3 consecutive ticks, which
+matches a full pack and rejects partial charging and the 10-31 pass-through.
+Otherwise: sunset PCP03 (17:49), throws 2, no `hardware_override`, no
+corrupt frames, no stall (up since 11-01 22:15), 407 tests green, all four
+flags clear.
 
 **11-02 morning. Clean; float detection behaving.** `occupied`. Rested at
 **25.6 V** before 01:00 after last night's real float (22:17), so night 1 of 3
