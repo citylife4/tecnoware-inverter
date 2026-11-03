@@ -62,6 +62,18 @@ at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
 
+**11-03 morning. No new regression, but last night's flaw recurred twice and
+cost a dark charge.** `occupied`. Rested at 24.6 V before 01:00 (not full,
+per 11-02), so the night was skipped (`too_low_to_start` at 24.5 V): 0 Wh,
+no `hardware_override`, no corrupt frames. The pack drifted to **24.0 V by
+04:17**. Three consecutive resting readings at 24.0 V (04:44-04:45) armed the
+deep-pack rule, and PCP01 was written at 04:45 (98 bulk samples): **a dark
+charge, but the designed one**. It then released at **06:21 at 27.4 V / 4-5 A**,
+the same partial-charge-read-as-float flaw. The pack was at 25.3 V by 07:00.
+Surplus charging from 07:39, and `last_float_at` was falsely set again at
+08:33 (resting 25.4 V at 09:00). The 0 A float fix proposed on 11-02 is still
+unapplied. All four flags clear.
+
 **11-02 evening. Misbehaviour: a partial charge was read as float, and that
 includes the 08:52 "real float" reported this morning, which was wrong.**
 `occupied`. House 12659 Wh, solar 167 Wh (0 nulls, peak 93 W), export 0,
