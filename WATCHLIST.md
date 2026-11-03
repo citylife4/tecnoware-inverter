@@ -38,6 +38,7 @@ back 10-25: local time now equals UTC.)
     10-31  2342   186     4      2    skip 24.8   no real float; clock reset falsely 14:32
     11-01 11365   188     0     20    skip 24.8   occupied again; maintenance charge 14:16 -> float 22:17
     11-02 12659   167     0      1    ran  25.5   false float at 4 A; rested 24.7 V by 22:13
+    11-03 14241   189     0      0    skip 24.5   deep-rule dark charge; false floats; 24.2 V by 22:13
 
 **Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
 `hardware_override`, all flags clear, sunset PCP03 every day. Both dark
@@ -61,6 +62,17 @@ sat partially charged. **Fixed 10-30 23:28:** `at_float` and
 at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
+
+**11-03 evening. The false-float flaw keeps the pack undercharged; fix still
+unapplied.** `occupied`. House 14241 Wh, solar 189 Wh (0 nulls, peak 100 W),
+export 0, battery 0 Wh. Charging only in surplus spells, all at 27.4 V and
+>= 4 A. **Zero samples at 27-28 V and 0 A all day**, so no real float.
+`last_float_at` was nevertheless set at 14:54 (4 A, false). The pack fell
+24.9 V (16:31) -> **24.2 V (22:13)**, ~0.12 V/h, so it will likely reach the
+24.0 V deep rule before dawn. That means another designed dark charge, which
+will stop short at a false float again. Sunset PCP03, throws 0, no
+`hardware_override`, no corrupt frames, no stall (up since 11-01 22:15), 407
+tests green, all four flags clear. 1 PCP write failure, recovered.
 
 **11-03 morning. No new regression, but last night's flaw recurred twice and
 cost a dark charge.** `occupied`. Rested at 24.6 V before 01:00 (not full,
