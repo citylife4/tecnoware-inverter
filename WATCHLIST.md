@@ -97,9 +97,13 @@ against 191 at 4-5 A). The coarse field has nothing between 0 and 4 A, so
 "<= 4 A for 3 ticks" accepted the 4 A readings of a pack still charging. The
 latch released at 08:52 and `last_float_at` reset at 16:25. The evening drift
 shows the pack was not full: 25.9 -> 24.7 V by 22:13. So the
-3-nights-at->=-25.2 V count restarts. **Fix proposed, not applied:** float =
-27.0-28.0 V with the current reading **0 A** on 3 consecutive ticks, which
-matches a full pack and rejects partial charging and the 10-31 pass-through.
+3-nights-at->=-25.2 V count restarts. **Fixed 11-04 00:41:** float =
+27.0-28.0 V with the current reading **0 A** on 3 consecutive ticks
+(`FLOOR_RELEASE_MAX_A` 0), which matches a full pack and rejects partial
+charging and the 10-31 pass-through. The false `last_float_at` of 11-03 23:54
+was left as is: correcting it would have fired the 48 h charge inside the
+01:00 window. The daylight latch (occupied 24.8 V) should do the real full
+charge in the morning.
 Otherwise: sunset PCP03 (17:49), throws 2, no `hardware_override`, no
 corrupt frames, no stall (up since 11-01 22:15), 407 tests green, all four
 flags clear.
