@@ -63,6 +63,18 @@ at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
 
+**11-04 morning. No regression; first night with the 0 A float rule (00:41).**
+`occupied`. Rested at 25.2 V at 00:45, so the 01:00 window was skipped
+(`too_low_to_start` at 25.1 V): 0 Wh, no `hardware_override`, no corrupt
+frames. The pack drifted fast (25.2 -> 24.2 V by 05:00, ~0.2 V/h), having
+only been part-charged by the 4 A false float at 23:54. It reached 24.0 V,
+and three resting readings at 24.0 V (05:56) armed the deep-pack rule:
+**the designed dark charge** at 10 A from 05:56. Under the new rule the
+latch held through bulk and the 4-5 A taper, through `charging` spells and a
+cloud gap, and **released only at a real float: 27.4 V at 0 A** (08:56-09:03).
+`last_float_at` was set at 09:03, and the pack is genuinely full for the first
+time since 11-01. All four flags clear.
+
 **11-03 evening. The false-float flaw keeps the pack undercharged; fix still
 unapplied.** `occupied`. House 14241 Wh, solar 189 Wh (0 nulls, peak 100 W),
 export 0, battery 0 Wh. Charging only in surplus spells, all at 27.4 V and
