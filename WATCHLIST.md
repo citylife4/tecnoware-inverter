@@ -39,6 +39,7 @@ back 10-25: local time now equals UTC.)
     11-01 11365   188     0     20    skip 24.8   occupied again; maintenance charge 14:16 -> float 22:17
     11-02 12659   167     0      1    ran  25.5   false float at 4 A; rested 24.7 V by 22:13
     11-03 14241   189     0      0    skip 24.5   deep-rule dark charge; false floats; 24.2 V by 22:13
+    11-04 13918   180     0      0    skip 25.1   real floats 09:03 + 16:29; still 24.6 V by 22:13
 
 **Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
 `hardware_override`, all flags clear, sunset PCP03 every day. Both dark
@@ -62,6 +63,29 @@ sat partially charged. **Fixed 10-30 23:28:** `at_float` and
 at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
+
+**11-04 evening. The float rule works, but the night drain is real and comes
+from PCP03 itself.** `occupied`. House 13918 Wh, solar 180 Wh (0 nulls, peak
+101 W), export 0, battery 0 Wh, 0 relay throws, 1 corrupt frame (ignored).
+Two **real** floats (27.4 V at 0 A, 46 min): 09:03, and 16:29 after the
+latch re-armed at 13:46 on 24.8 V. Sunset PCP03. No `hardware_override`, no
+stall (up since 00:39), 408 tests green, all four flags clear.
+
+**But the pack does not hold charge with the charger off.** After a genuine
+float at 16:29 it read 25.8 V at 16:35 and **24.6 V by 22:13**, ~0.2 V/h,
+roughly half the pack (~150-180 Wh) in under 6 h. Meanwhile the Shelly showed
+the inverter drawing 24-64 W from the grid (fridge plus standby), so the loads
+were **not** on battery. That is ~25-30 W drawn from the pack while in `L`
+with PCP03, consistent with the inverter running its own electronics from the
+battery when not charging. On 11-01 with PCP01 standing, the pack held
+27.3-27.8 V all evening. So the 10-08 rule (PCP03 at sunset) makes every
+night a slow ~50% discharge plus a grid refill: daily deep cycling and round
+trip loss, the opposite of the intent. It also makes the ">= 25.2 V before
+01:00 on 3 nights" target unreachable under PCP03. **Needs a decision.**
+Proposed: a per-profile night PCP. `occupied` gets PCP01 (float: the pack
+stays full as backup, standby comes straight from the grid; there is no
+export to absorb). `away` keeps PCP03 only if the headroom is worth the
+drain.
 
 **11-04 morning. No regression; first night with the 0 A float rule (00:41).**
 `occupied`. Rested at 25.2 V at 00:45, so the 01:00 window was skipped
