@@ -1073,6 +1073,34 @@ WATCHLIST.md; recorded here so the before-state is not lost:
 357 tests. The new debounce tests were checked to fail against the old
 code.
 
+**2026-11-04 — the panels are shaded from mid-morning to early afternoon.**
+Daily solar against what the weather station's `solar_rad` predicts (the
+2026-09-03 fit, `ac_solar_w ~= 0.1925 * solar_rad - 6.4`):
+
+    early Sep (09-03..20)   actual/predicted ~1.0   (750-1000 Wh/day)
+    late Sep (09-22..28)    ~0.8                    (340-640 Wh/day)
+    since mid-Oct           0.35-0.55               (170-260 Wh/day, predicted 380-550)
+
+Hour by hour (UTC; average W actual/predicted):
+
+    09-15  10:119/84  11:113/111  12: 84/122  13:128/121  14: 49/119  15:117/108
+    10-28  10:  1/69  11:  1/89   12:  1/80   13:  9/80   14: 73/56   15: 72/27
+    11-03  10:  1/59  11:  5/84   12:  3/73   13: 11/69   14: 70/50   15: 70/20
+
+Since October the panels give almost nothing from ~09:00 to ~13:00 while the
+sensor sees good sun, then full (above-predicted) output 14:00-16:00. Panels,
+Shelly and wiring work. Something to the south-east or south (a tree, roof
+edge or chimney) shades them while the autumn sun is low. In mid-September
+the shadow was already showing at 12:00-14:00. Expect it to get worse until
+the winter solstice, and to recede in spring. Worth a look on site: if it is
+a tree, trimming would roughly double autumn/winter output.
+
+Why there has been no export despite that: occupied, the house draws
+11-16 kWh/day (11-01..03), far above 100-120 W of solar at any moment.
+Empty (10-20..31, ~2.5 kWh/day, daytime minimum ~50 W), the afternoon peak
+does exceed the house load, and the 0-8 Wh/day of export is what grid charge
+did not absorb.
+
 **2026-10-13 — a deadlock, and why controllers may not call each other under
 lock.** Adding a per-profile recharge threshold had `grid_charge` ask
 `BatteryWindow` for it from inside grid_charge's locked tick, through a method
