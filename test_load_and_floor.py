@@ -172,8 +172,8 @@ class TestLowBatteryLatch(unittest.TestCase):
     def test_releases_once_the_charger_reaches_float(self):
         self.arm()
         for _ in range(FLOOR_RELEASE_CONFIRMATIONS - 1):
-            self.assertEqual(self.step(27.4, 4), "01")
-        self.assertEqual(self.step(27.4, 4), "03")
+            self.assertEqual(self.step(27.4, 0), "01")
+        self.assertEqual(self.step(27.4, 0), "03")
         self.assertFalse(self.latch.active)
 
     def test_charger_not_yet_running_is_not_float(self):
@@ -183,10 +183,10 @@ class TestLowBatteryLatch(unittest.TestCase):
 
     def test_one_corrupt_frame_does_not_release(self):
         self.arm()
-        self.step(27.4, 4)
-        self.step(27.4, 4)
+        self.step(27.4, 0)
+        self.step(27.4, 0)
         self.step(27.4, 10)          # still bulk: count restarts
-        self.assertEqual(self.step(27.4, 4), "01")
+        self.assertEqual(self.step(27.4, 0), "01")
 
     def test_without_a_latch_behaviour_is_unchanged(self):
         self.service._battery_voltage = 27.0
@@ -247,7 +247,7 @@ class TestDaytimeLatchRelease(unittest.TestCase):
     def test_releases_once_the_charger_reaches_float(self):
         self.ticks(29.0, 10)
         self.service.sent.clear()
-        self.ticks(27.4, 4, n=3)            # float, not 29 V absorption
+        self.ticks(27.4, 0, n=3)            # float: 0 A, not 29 V absorption
         self.assertFalse(self.bw.get_state()["recovering"])
         self.assertEqual(self.service.sent, ["POP02"])
 
@@ -430,7 +430,17 @@ class TestAbsorptionIsNotFloat(unittest.TestCase):
     def test_real_float_is_float(self):
         from webapp.safety import at_float
         self.service._battery_voltage = 27.4
+        self.service._charging_current = 0
         self.assertTrue(at_float(self.service))
+
+    def test_float_voltage_while_still_charging_is_not_float(self):
+        """2026-11-02/03: 27.4 V at a steady 4-8 A is a pack still charging
+        at the float voltage, not a full one."""
+        from webapp.safety import at_float
+        for amps in (4, 5, 7):
+            self.service._battery_voltage = 27.4
+            self.service._charging_current = amps
+            self.assertFalse(at_float(self.service))
 
     def test_the_latch_holds_through_absorption(self):
         latch = LowBatteryLatch()
@@ -438,7 +448,11 @@ class TestAbsorptionIsNotFloat(unittest.TestCase):
         for _ in range(5):
             latch.observe(self.service)            # 29.0 V, 4 A
         self.assertTrue(latch.active)
-        self.service._battery_voltage = 27.4
+        self.service._battery_voltage = 27.4       # still charging at float V
+        for _ in range(3):
+            latch.observe(self.service)
+        self.assertTrue(latch.active)
+        self.service._charging_current = 0         # full
         for _ in range(3):
             latch.observe(self.service)
         self.assertFalse(latch.active)
@@ -454,8 +468,12 @@ class TestAbsorptionIsNotFloat(unittest.TestCase):
         gc._last_float_at = old
         gc.tick()                                  # 29.0 V absorption
         self.assertEqual(gc._last_float_at, old)
-        self.service._battery_voltage = 27.4       # float
-        for _ in range(3):                         # confirmed (2026-11-01)
+        self.service._battery_voltage = 27.4       # still charging, 4 A
+        for _ in range(3):
+            gc.tick()
+        self.assertEqual(gc._last_float_at, old)
+        self.service._charging_current = 0         # float: full pack
+        for _ in range(3):                         # confirmed
             gc.tick()
         self.assertGreater(gc._last_float_at, old)
 
@@ -488,7 +506,7 @@ class TestAbsorptionIsNotFloat(unittest.TestCase):
         old = datetime.now(tz.utc) - timedelta(hours=30)
         gc._last_float_at = old
         gc._floor_latch.arm()
-        for v, a in ((27.6, 0), (27.4, 4), (27.6, 0), (27.4, 0)):
+        for v, a in ((27.6, 0), (27.4, 4), (27.6, 0), (27.4, 0), (27.6, 0)):
             self.service._battery_voltage = v
             self.service._charging_current = a
             gc.tick()
@@ -692,8 +710,8 @@ class TestNightCharging(unittest.TestCase):
         for _ in range(3):
             self.gc.tick()
         self.assertEqual(self.service.sent, ["PCP01"])
-        self.service._battery_voltage = 27.4       # float
-        self.service._charging_current = 4
+        self.service._battery_voltage = 27.4       # float: full pack, 0 A
+        self.service._charging_current = 0
         for _ in range(3):
             self.gc.tick()
         self.assertEqual(self.service.sent, ["PCP01", "PCP03"])

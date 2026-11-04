@@ -93,7 +93,15 @@ def is_finite_number(value) -> bool:
 # because either alone is also true at the wrong moment: a charger that has
 # not spun up yet reads 0 A, and bulk passes 27 V at the full 10 A.
 FLOOR_RELEASE_MIN_V = 27.0
-FLOOR_RELEASE_MAX_A = 4.0
+# A full pack at float reads 0 A. This charger's current field has nothing
+# between 0 and 4 A: on 2026-11-01 a genuine float read 0 A in 1613 samples
+# and 4-5 A in 191, while on 11-02/03 a pack still charging at the 27.4 V float
+# voltage read a steady 4-8 A, tapering. "<= 4 A" took that for full, released
+# the latch and reset the maintenance clock every day, and the pack never
+# finished charging (24.2 V by 22:13 on 11-03). So: 0 A, held for the
+# callers' consecutive ticks; the occasional 4-5 A blip of a real float only
+# restarts the count.
+FLOOR_RELEASE_MAX_A = 0.0
 # ...and BELOW this. Since 2026-09-18 bulk/absorption is 29.0 V (program 26)
 # and float 27.4 V (program 27). Absorption holds 29 V at ~4 A, and the coarse
 # current reading has a 4 A floor, so ">= 27.0 V and <= 4 A" alone took
