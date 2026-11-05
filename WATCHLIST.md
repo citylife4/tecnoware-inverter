@@ -64,6 +64,18 @@ at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
 
+**11-05 morning. No regression; the night-drain pattern again.** `occupied`.
+The PCP03 drain left the pack at 24.5 V before 01:00, so the window was
+skipped (`too_low_to_start` at 24.4 V): 0 Wh, no `hardware_override`. It
+drifted to 24.0 V, and three resting readings at 24.0 V (05:32) armed the
+deep-pack rule: **the designed dark charge** from 05:32. One corrupt frame
+(06:39, 7.4 V) was correctly ignored. The latch held through `charging` and
+released at 08:20 on three consecutive 0 A ticks at 27.4 V (`last_float_at`
+08:20). **Borderline:** the taper was still mostly reading 4 A, with only
+~21 samples at 0 A from 08:08, so this may be just before truly full (25.2 V
+resting at 09:00). Watch whether this becomes a pattern. The night-PCP
+decision from 11-04 is still pending. All four flags clear.
+
 **11-04 evening. The float rule works, but the night drain is real and comes
 from PCP03 itself.** `occupied`. House 13918 Wh, solar 180 Wh (0 nulls, peak
 101 W), export 0, battery 0 Wh, 0 relay throws, 1 corrupt frame (ignored).
