@@ -40,6 +40,7 @@ back 10-25: local time now equals UTC.)
     11-02 12659   167     0      1    ran  25.5   false float at 4 A; rested 24.7 V by 22:13
     11-03 14241   189     0      0    skip 24.5   deep-rule dark charge; false floats; 24.2 V by 22:13
     11-04 13918   180     0      0    skip 25.1   real floats 09:03 + 16:29; still 24.6 V by 22:13
+    11-05  4264   170     0      0    skip 24.4   real floats 08:20 + 16:31; 24.6 V by 22:13 again
 
 **Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
 `hardware_override`, all flags clear, sunset PCP03 every day. Both dark
@@ -63,6 +64,17 @@ sat partially charged. **Fixed 10-30 23:28:** `at_float` and
 at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
+
+**11-05 evening. Clean apart from the known drain.** `occupied`, but house
+consumption fell to **4264 Wh** (from 11-16 kWh): perhaps nobody home today.
+Solar 170 Wh (0 nulls, peak 96 W), export 0, battery 0 Wh, 0 relay throws.
+Charging from surplus 13:41-16:31, ending on a **real float** (46 min at
+27.4 V / 0 A over the day, `last_float_at` 16:31), and no 29 V stage. Sunset
+PCP03. Then the PCP03 drain again: 25.4 V (17:00) -> 25.0 (19:00) -> 24.7
+(21:00) -> **24.6 V (22:13)**. Expect another skipped window and a deep-rule
+dark charge before dawn. 1 corrupt frame (ignored), no `hardware_override`,
+no stall (up since 11-04 00:39), 408 tests green, all four flags clear. The
+night-PCP decision is still pending.
 
 **11-05 morning. No regression; the night-drain pattern again.** `occupied`.
 The PCP03 drain left the pack at 24.5 V before 01:00, so the window was
