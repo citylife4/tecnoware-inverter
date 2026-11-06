@@ -41,6 +41,7 @@ back 10-25: local time now equals UTC.)
     11-03 14241   189     0      0    skip 24.5   deep-rule dark charge; false floats; 24.2 V by 22:13
     11-04 13918   180     0      0    skip 25.1   real floats 09:03 + 16:29; still 24.6 V by 22:13
     11-05  4264   170     0      0    skip 24.4   real floats 08:20 + 16:31; 24.6 V by 22:13 again
+    11-06  2326    71     0      0    skip 24.3   stall 14:21-14:27; real float to 15:40; 24.7 V by 22:10
 
 **Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
 `hardware_override`, all flags clear, sunset PCP03 every day. Both dark
@@ -64,6 +65,20 @@ sat partially charged. **Fixed 10-30 23:28:** `at_float` and
 at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
+
+**11-06 evening. One stall; otherwise the known pattern.** `occupied`,
+though consumption fell to **2326 Wh**, so the house is probably empty again.
+Solar only 71 Wh (peak 34 W, a dark day), export 0, battery 0 Wh, 0 relay
+throws, no corrupt frames, no `hardware_override`. Grid charge held PCP01
+(`charging`) 10:01-15:40, a long real float (204 min at 27-28 V / 0 A over
+the day, `last_float_at` 15:40), then sunset PCP03. The drain again: 25.2 V
+(17:00) -> **24.7 V (22:10)**. **Stall:** no telemetry 14:21:26-14:27:40
+(374 s), API unreachable. `usb_watchdog` caught it at 14:26:02, and the
+restart hit "shutdown hand-back blocked by active tick" again, so systemd
+SIGKILLed it at 14:27:33. Loads on grid throughout (POP00), harmless. That
+is the fourth with this signature (09-24, 10-01, 10-13 slow stops, 11-06):
+a battery-window tick wedged in a serial call. 408 tests green. All four
+flags clear.
 
 **11-06 morning. No regression; drain plus dark charge again.** `occupied`.
 24.5 V before 01:00, so the window was skipped (`too_low_to_start` at
