@@ -66,6 +66,17 @@ at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
 
+**11-07 morning. No regression; same drain plus dark-charge pattern.**
+`occupied`. 24.5 V at 01:00, so the window was skipped
+(`too_low_to_start`): 0 Wh, no `hardware_override`. Three resting readings
+at 24.0 V (05:15-05:16) armed the deep-pack rule: **the designed dark
+charge** 05:16-08:03 (117 bulk samples). It released at a real float
+(`last_float_at` 08:03). Two corrupt frames (06:49, 07:30, 4.0 V) were
+ignored. Pack 25.4 V at 09:00 and falling. All four flags clear. This is the
+last run of the scheduled checks (created 10-30, now expired). Pending
+decisions: night PCP for `occupied`, the stall, and whether the house is
+empty again (2.3 kWh on 11-06).
+
 **11-06 evening. One stall; otherwise the known pattern.** `occupied`,
 though consumption fell to **2326 Wh**, so the house is probably empty again.
 Solar only 71 Wh (peak 34 W, a dark day), export 0, battery 0 Wh, 0 relay
