@@ -42,6 +42,7 @@ back 10-25: local time now equals UTC.)
     11-04 13918   180     0      0    skip 25.1   real floats 09:03 + 16:29; still 24.6 V by 22:13
     11-05  4264   170     0      0    skip 24.4   real floats 08:20 + 16:31; 24.6 V by 22:13 again
     11-06  2326    71     0      0    skip 24.3   stall 14:21-14:27; real float to 15:40; 24.7 V by 22:10
+    11-07  2281    55     0      0    skip 24.5   real float to 15:31; 24.9 V by 22:10
 
 **Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
 `hardware_override`, all flags clear, sunset PCP03 every day. Both dark
@@ -65,6 +66,18 @@ sat partially charged. **Fixed 10-30 23:28:** `at_float` and
 at ~27.4 V. If no real float happens for 48 h, the maintenance charge
 should fire, at night if need be. The pack should then rest higher before
 01:00 than the 24.5-25.0 V of these two weeks.
+
+**11-07 evening. Clean.** `occupied` while the house looks empty (2281 Wh,
+the second day around 2.3 kWh). Solar only **55 Wh, peak 15 W** (dark, plus
+the shading). Export 0, battery 0 Wh, 0 relay throws, 2 corrupt frames
+(ignored), no `hardware_override`, no stall (up since 11-06 14:27), 408
+tests green, all four flags clear. Grid charge was in `charging` on and off
+09:25-15:31, though the sun gave almost nothing. With the house empty, the
+"house minus inverter" signal sits under the 30 W start threshold, so it
+reads as near-export and keeps PCP01. By design (it pre-empts export), but in
+effect a grid float all day. Real float (173 min at 0 A, `last_float_at`
+15:31), sunset PCP03. Slower drain tonight: 25.2 V (17:00) -> 24.9 V
+(22:10). The scheduled checks have expired; this was the last run.
 
 **11-07 morning. No regression; same drain plus dark-charge pattern.**
 `occupied`. 24.5 V at 01:00, so the window was skipped
