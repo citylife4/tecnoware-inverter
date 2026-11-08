@@ -32,6 +32,21 @@ Last updated: 2026-11-08 (hold_float for occupied; bounded serial writes; profil
 What to watch: no stalls; under `away`, the night window and its drain;
 export on any sunny day.
 
+**11-08 evening. Nothing broke, but `away` is cycling the pack twice a day.**
+`away`. **The solar Shelly was offline 03:50-15:20** (70 of 134 buckets
+null), so solar Wh is unknown and house Wh (895) is partial. Grid charge kept
+working on `net_balance`. Export 0, battery 10 Wh (a short daytime
+discharge), throws 4, no `hardware_override`, no corrupt frames. The morning
+deep-rule charge reached a real float at 10:19 (`last_float_at`). Then the
+drain: 24.6 V (17:00) -> 24.1 V (21:40). Three resting readings at 24.0 V
+armed the deep-pack rule again: **a second dark charge at 21:59**, still
+running at 22:13 (28.0 V, 10 A). With this little sun, `away` is a
+drain-and-refill cycle twice a day, with no headroom left for the night
+window and almost no surplus to absorb. Also: house power 339 W at 22:14,
+well above an empty house (~50-100 W), so someone may be home again, and
+`occupied` (hold float) would then fit. **No stall:** no gap, no restart
+since 02:00, no stack dump. 416 tests green, all four flags clear.
+
 **11-08 morning. No regression; the expected `away` pattern.** `away`. At
 01:00 the pack was at 24.6 V (inside the 24.5 + 0.3 V margin), so the window
 was skipped (`too_low_to_start`): 0 Wh, no `hardware_override`, no corrupt
@@ -72,6 +87,7 @@ back 10-25: local time now equals UTC.)
     11-05  4264   170     0      0    skip 24.4   real floats 08:20 + 16:31; 24.6 V by 22:13 again
     11-06  2326    71     0      0    skip 24.3   stall 14:21-14:27; real float to 15:40; 24.7 V by 22:10
     11-07  2281    55     0      0    skip 24.5   real float to 15:31; 24.9 V by 22:10
+    11-08  (895)  (n/a)    0     10    skip 24.6   solar Shelly offline 03:50-15:20; 2 deep-rule charges
 
 **Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
 `hardware_override`, all flags clear, sunset PCP03 every day. Both dark
