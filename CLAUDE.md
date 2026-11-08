@@ -151,7 +151,11 @@ already burned a full day.
 6. **Set commands need the CRC appended; queries don't.** A bare `PDa`
    gets no reply at all; `PDa` + 2-byte CRC gets `(ACK`. See `protocol.py`.
 7. **Set commands are slow** — several seconds longer than queries.
-   `transport.py` uses `SET_TIMEOUT_S = 10`.
+   `transport.py` uses `SET_TIMEOUT_S = 10`. The *write* side is bounded too
+   (`WRITE_TIMEOUT_S`, since 2026-11-08): `ser.flush()` is an unbounded
+   `tcdrain()`, and a wedged adapter there would hold the serial and
+   controller locks forever, which is the likely cause of the recorded stalls.
+   Don't reintroduce `flush()`.
 8. **The serial link returns truncated/corrupt `QPIGS` frames**
    occasionally, and the USB adapter throws a transient `Resource busy`
    right after another process closes it. Both are handled with retries —
@@ -377,9 +381,14 @@ night's discharge on a value that was never the pack's real state.
 ### Profiles: "occupied" and "away"
 
 Added 2026-09-29. `PROFILES` in `webapp/battery_window.py`, switched from the
-dashboard or `PUT /api/battery-window/profile`. `occupied` (floor 25.0 V,
-daytime off) sizes the discharge to the ~37 Wh/day this house would export.
-`away` (24.5 V, daytime on) is for an empty house with a larger surplus. The
+dashboard or `PUT /api/battery-window/profile`. **Since 2026-11-08 `occupied`
+holds the pack full**: no planned discharge (window disabled) and
+`hold_float` keeps grid_charge on PCP01 day and night. The reason: with the
+charger off (PCP03), the pack loses ~25-30 W in `L` mode, apparently the
+inverter's own standby, going from float to ~50% in under 6 h. An occupied
+house (11-16 kWh/day against ~100 W of sun) never has surplus to absorb.
+`away` (24.5 V, daytime on, charger off at night) is for an empty house,
+where headroom for surplus is the point. The
 active profile is derived from the live config, so a hand edit shows as
 `custom`. Since 2026-10-13 each profile also sets `recharge_below_v`, the
 daylight grid-recharge threshold that grid_charge reads through

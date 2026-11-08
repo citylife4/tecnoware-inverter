@@ -19,6 +19,7 @@ observed on this hardware and is documented in CLAUDE.md:
 
 from __future__ import annotations
 
+import faulthandler
 import json
 import math
 import os
@@ -650,6 +651,9 @@ class InverterService:
                     "[service] no successful read in %.0fs (limit %.0fs) -- "
                     "exiting so systemd restarts us\n"
                     % (stalled, STALL_EXIT_S))
+                # Every thread's stack to the journal first: four stalls so
+                # far left no trace of WHERE the serial call was stuck.
+                faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
                 sys.stderr.flush()
                 os._exit(1)
 

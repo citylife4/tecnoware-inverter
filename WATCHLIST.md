@@ -10,9 +10,27 @@ what they replaced. This file is the opposite: it holds only what is true
 *now*, and old values are deleted rather than struck through. If something
 here matters historically, it belongs in NOTES.md.
 
-Last updated: 2026-10-30 (two-week review; absorption-as-float bug found)
+Last updated: 2026-11-08 (hold_float for occupied; bounded serial writes; profile away)
 
 ---
+
+## 2026-11-08 02:05: three changes deployed, profile `away`
+
+- **`occupied` now holds the pack full** (`hold_float`): window disabled,
+  PCP01 day and night. It fixes the nightly PCP03 drain (~25-30 W in `L`)
+  and the grid refill before dawn, for an occupied house that never exports.
+  `away` is unchanged (charger off at night for headroom), so **the drain
+  continues under `away`**: expect a skipped or short window and a deep-rule
+  dark charge on some nights. That is the known cost of headroom.
+- **Serial writes bounded** (`WRITE_TIMEOUT_S` 2 s; `flush()`/`tcdrain`
+  replaced by a bounded drain). This is the likely cause of the four stalls
+  (09-24, 10-01, 10-13, 11-06), but **unproven**. The stall detector now dumps
+  every thread's stack to the journal before exiting, so if a stall recurs,
+  `journalctl -u inverter-web` will show where it was stuck.
+- **Profile switched to `away`**: the house used ~2.3 kWh/day on 11-06/07.
+
+What to watch: no stalls; under `away`, the night window and its drain;
+export on any sunny day.
 
 ## 2026-10-30: two unattended weeks (10-16..10-30), and a float-detection bug
 

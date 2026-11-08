@@ -362,7 +362,7 @@ class TestOccupiedRecharge(unittest.TestCase):
 
     def test_no_entry_near_the_floor(self):
         self.service._device_mode = None
-        self.bw.apply_profile("occupied", now=NIGHT)
+        self.bw.set_config({"enabled": True, "floor_voltage": 25.0, "min_switch_interval": 0}, now=NIGHT)
         r = self.bw.tick(now=NIGHT)
         self.assertEqual(r["reason"], "too_low_to_start")
         self.assertNotIn("POP02", self.service.sent)
@@ -370,13 +370,13 @@ class TestOccupiedRecharge(unittest.TestCase):
     def test_entry_well_above_the_floor(self):
         self.service._device_mode = None
         self.service._battery_voltage = 25.6
-        self.bw.apply_profile("occupied", now=NIGHT)
+        self.bw.set_config({"enabled": True, "floor_voltage": 25.0, "min_switch_interval": 0}, now=NIGHT)
         self.assertIn("POP02", self.service.sent)
 
     def test_a_discharge_in_progress_still_runs_to_the_floor(self):
         self.service._device_mode = None
         self.service._battery_voltage = 25.6
-        self.bw.apply_profile("occupied", now=NIGHT)
+        self.bw.set_config({"enabled": True, "floor_voltage": 25.0, "min_switch_interval": 0}, now=NIGHT)
         self.service._battery_voltage = 25.1        # inside the margin now
         r = self.bw.tick(now=NIGHT)
         self.assertEqual(r["reason"], "window")
@@ -575,6 +575,60 @@ class TestRestBeforeResume(unittest.TestCase):
         self.assertFalse(self.bw.get_state()["recovering"])
 
 
+class TestHoldFloat(unittest.TestCase):
+    """2026-11-04: with the charger off the pack lost ~25-30 W in `L` mode
+    and was refilled from the grid before dawn every night. `occupied` now
+    keeps the charger on day and night."""
+
+    def setUp(self):
+        from test_webapp import FetchStub
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.service = FakeService(battery_voltage=27.4, min_battery_voltage=24.0,
+                                   device_mode="L")
+        self.bw = BatteryWindow(self.service, os.path.join(self.tmp.name, "bw.json"))
+        self.stub = FetchStub(200)                 # daylight, importing: idle
+        self.gc = GridChargeController(self.service, os.path.join(self.tmp.name, "gc.json"),
+                                       fetch_fn=self.stub)
+        self.gc.hold_float_source = self.bw.hold_float
+
+    def run_gc(self, n=3):
+        self.gc.set_config({"enabled": True, "min_switch_interval": 0})
+        for _ in range(n):
+            self.gc.tick()
+
+    def night(self):
+        from webapp.grid_charge import GENERATING_CONFIRMATIONS
+        self.stub.net_balance = 90
+        self.stub.ac_solar_w = 0.0
+        for _ in range(GENERATING_CONFIRMATIONS + 1):
+            self.gc.tick()
+
+    def test_occupied_keeps_pcp01_by_day(self):
+        self.bw.apply_profile("occupied", now=NOON)
+        self.run_gc()
+        self.assertEqual(self.service.sent[-1], "PCP01")
+
+    def test_occupied_keeps_pcp01_at_night(self):
+        self.bw.apply_profile("occupied", now=NOON)
+        self.run_gc()
+        self.night()
+        self.assertEqual(self.service.sent[-1], "PCP01")
+        self.assertNotIn("PCP03", self.service.sent)
+
+    def test_away_still_closes_the_night_with_pcp03(self):
+        self.bw.apply_profile("away", now=NOON)
+        self.run_gc()
+        self.night()
+        self.assertEqual(self.service.sent[-1], "PCP03")
+
+    def test_occupied_plans_no_discharge(self):
+        self.service._device_mode = None
+        self.bw.apply_profile("occupied", now=NIGHT)
+        self.bw.tick(now=NIGHT)
+        self.assertNotIn("POP02", self.service.sent)
+
+
 class TestHeavyInputReadings(unittest.TestCase):
     def test_counts_heavy_shelly_readings(self):
         tmp = tempfile.TemporaryDirectory()
@@ -609,13 +663,14 @@ class TestProfiles(unittest.TestCase):
                                data=self.json.dumps({"profile": name}),
                                content_type="application/json", headers=self.auth)
 
-    def test_occupied_is_shallow_and_has_no_daytime_window(self):
+    def test_occupied_holds_the_pack_full(self):
+        """Since 2026-11-08: no planned discharge, charger held on."""
         body = self.put("occupied").get_json()
         self.assertTrue(body["ok"])
         self.assertEqual(body["profile"], "occupied")
-        self.assertEqual(body["config"]["floor_voltage"], 25.0)
+        self.assertFalse(body["config"]["enabled"])
         self.assertFalse(body["config"]["daytime_enabled"])
-        self.assertTrue(body["config"]["enabled"])
+        self.assertTrue(body["config"]["hold_float"])
 
     def test_away_is_deep_with_the_daytime_window(self):
         body = self.put("away").get_json()

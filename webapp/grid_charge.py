@@ -273,6 +273,10 @@ class GridChargeController:
         # wires BatteryWindow.recharge_below_v. None = web.json's
         # min_battery_voltage alone.
         self.recharge_floor_source = None
+        # Callable returning the profile's hold_float; serve.py wires
+        # BatteryWindow.hold_float. True = PCP01 whenever this controller
+        # would otherwise idle or close the night.
+        self.hold_float_source = None
         # (monotonic, inverter_input_w) for every reading in the last
         # INPUT_HISTORY_S. BatteryWindow asks how many were heavy, because
         # the 1.2 kW load shows up here as isolated single readings -- it
@@ -325,6 +329,12 @@ class GridChargeController:
             return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
         except (OSError, ValueError, TypeError, AttributeError):
             return None
+
+    def _hold_float(self) -> bool:
+        try:
+            return bool(self.hold_float_source()) if self.hold_float_source else False
+        except Exception:
+            return False
 
     def _daylight_floor(self):
         """Daylight recharge threshold: the profile's, never below web.json's
@@ -778,6 +788,8 @@ class GridChargeController:
                     return "disabled_no_solar", "01", (
                         "OVERRIDE: night charge -- pack deep or overdue for a "
                         "full charge; holding utility charging until float"), known
+                if self._hold_float():
+                    return "disabled_no_solar", cfg["charge_pcp"], None, known
                 if not is_finite_number(self.service.battery_voltage()):
                     return "disabled_no_solar", None, None, known
                 return "disabled_no_solar", cfg["idle_pcp"], None, known
@@ -809,7 +821,10 @@ class GridChargeController:
                 held = self._desired if self._desired in ("charging", "idle") else None
                 desired = held or "idle"
 
-        raw_target = cfg["charge_pcp"] if desired == "charging" else cfg["idle_pcp"]
+        if desired == "charging" or self._hold_float():
+            raw_target = cfg["charge_pcp"]
+        else:
+            raw_target = cfg["idle_pcp"]
         target, override = apply_low_battery_floor(
             self.service, raw_target, latch=self._floor_latch,
             floor=self._daylight_floor())

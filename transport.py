@@ -29,6 +29,16 @@ STOPBITS = serial.STOPBITS_ONE
 PARITY = serial.PARITY_NONE
 READ_TIMEOUT_S = 3.0
 
+# The write side was unbounded until 2026-11-08: no write timeout, and
+# ser.flush() is tcdrain(), which pyserial never times out. If the PL2303
+# wedges mid-write, flush blocks forever while the caller holds the service's
+# serial lock and, through a controller tick, that controller's lock. That
+# matches every recorded stall (09-24, 10-01, 11-06): telemetry stops, the API
+# hangs on the controller lock, and shutdown logs "hand-back blocked by
+# active tick". A command line is at most ~20 bytes at 2400 baud (~0.1 s), so
+# a 2 s bound is generous.
+WRITE_TIMEOUT_S = 2.0
+
 # Set commands behave differently from queries on this hardware, confirmed
 # by testing against a real unit:
 #   * they are IGNORED unless the 2-byte CRC is appended (a bare "PDa"
@@ -76,6 +86,7 @@ class InverterConnection:
             stopbits=STOPBITS,
             parity=PARITY,
             timeout=timeout,
+            write_timeout=WRITE_TIMEOUT_S,
         )
         # give the adapter a moment after opening, mirroring real-world
         # USB-serial enumeration delay
@@ -108,8 +119,18 @@ class InverterConnection:
         payload = command.encode("ascii")
         if append_crc:
             payload += crc_bytes(command)
-        self.ser.write(payload + b"\x0d")
-        self.ser.flush()
+        try:
+            self.ser.write(payload + b"\x0d")
+        except serial.SerialTimeoutException as e:
+            raise InverterError(f"write of {command!r} to the adapter timed out") from e
+        # A bounded drain instead of flush(): see WRITE_TIMEOUT_S.
+        # out_waiting is a non-blocking ioctl (TIOCOUTQ).
+        drain_deadline = time.monotonic() + WRITE_TIMEOUT_S
+        while self.ser.out_waiting:
+            if time.monotonic() >= drain_deadline:
+                raise InverterError(
+                    f"adapter did not drain {command!r} within {WRITE_TIMEOUT_S:.0f}s")
+            time.sleep(0.01)
 
         chars: list[str] = []
         deadline = time.monotonic() + (wait if wait is not None else self.ser.timeout)

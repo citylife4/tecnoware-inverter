@@ -307,6 +307,15 @@ DEFAULT_CONFIG = {
     # one has little, and at 24.0 the pack hovered at ~45% for a day
     # (2026-10-13). Never below web.json's min_battery_voltage.
     "recharge_below_v": 24.0,
+    # Keep the charger on (PCP01) day and night: the pack floats full as a
+    # backup and the inverter's own standby comes from the grid. Read by
+    # grid_charge through hold_float_source. Part of the profile because
+    # it only makes sense when the battery has no headroom job: measured
+    # 2026-11-04, with the charger off (PCP03) the pack lost ~25-30 W in `L`
+    # mode -- from a real float to ~50% in under 6 h -- and was refilled from
+    # the grid before dawn every night, while an occupied house (11-16
+    # kWh/day against ~100 W of sun) never has surplus to absorb.
+    "hold_float": False,
     # The pump's hours. Defaults to DEFAULT_PUMP_WINDOW; a config written
     # before this key existed inherits it rather than losing the block.
     "pump_window": [dict(w) for w in DEFAULT_PUMP_WINDOW],
@@ -334,10 +343,13 @@ VALID_KEYS = set(DEFAULT_CONFIG)
 # The active profile is derived from the live config, not stored, so a manual
 # edit shows as "custom" instead of a label that no longer matches.
 PROFILES = {
-    "occupied": {"enabled": True, "floor_voltage": 25.0, "daytime_enabled": False,
-                 "recharge_below_v": 24.8},
+    # occupied: since 2026-11-08 the battery is a full backup -- no planned
+    # discharge, charger held on. Its nights had been skipped or refilled at
+    # once anyway, and the charger-off nights drained it (see hold_float).
+    "occupied": {"enabled": False, "floor_voltage": 25.0, "daytime_enabled": False,
+                 "recharge_below_v": 24.8, "hold_float": True},
     "away": {"enabled": True, "floor_voltage": 24.5, "daytime_enabled": True,
-             "recharge_below_v": 24.0},
+             "recharge_below_v": 24.0, "hold_float": False},
 }
 CUSTOM_PROFILE = "custom"
 
@@ -454,6 +466,8 @@ def validate_config(cfg: dict) -> dict:
         raise ValueError("daytime_heavy_load_w must be positive")
     if out["daytime_heavy_load_holdoff"] < 0:
         raise ValueError("daytime_heavy_load_holdoff must not be negative")
+    if not isinstance(out["hold_float"], bool):
+        raise ValueError("hold_float must be a boolean")
     try:
         out["recharge_below_v"] = float(out["recharge_below_v"])
     except (TypeError, ValueError, OverflowError):
@@ -920,6 +934,11 @@ class BatteryWindow:
         return GRID_POP, "too_low_to_start", (
             f"bateria {v:.2f}V já perto do piso ({limit:.2f}V) — não vale a "
             f"pena passar para a bateria")
+
+    def hold_float(self) -> bool:
+        """Whether the active profile keeps the charger on. Lock-free, for
+        the same reason as recharge_below_v() below."""
+        return bool(self._config["hold_float"])
 
     def recharge_below_v(self) -> float:
         """The active profile's daylight recharge threshold, for
