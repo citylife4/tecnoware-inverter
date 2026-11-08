@@ -32,6 +32,17 @@ Last updated: 2026-11-08 (hold_float for occupied; bounded serial writes; profil
 What to watch: no stalls; under `away`, the night window and its drain;
 export on any sunny day.
 
+**11-08 morning. No regression; the expected `away` pattern.** `away`. At
+01:00 the pack was at 24.6 V (inside the 24.5 + 0.3 V margin), so the window
+was skipped (`too_low_to_start`): 0 Wh, no `hardware_override`, no corrupt
+frames. The PCP03 drain took it 24.5 -> 24.2 V by 07:00. Three resting
+readings at 24.0 V (07:12-07:13) armed the deep-pack rule: **the designed
+dark charge** from 07:13, still holding PCP01 at 09:07 (27.4 V, tapering 6
+-> 4 A, not yet float). **No stall:** no telemetry gap and no restart since
+the 02:00 deploy, no stack dump in the journal. All four flags clear. Note:
+under `away` with this little sun, the night window has nothing to give
+(the drain already takes the pack under its start margin).
+
 ## 2026-10-30: two unattended weeks (10-16..10-30), and a float-detection bug
 
 Reviewed 10-30 23:19, after two weeks with no checks running. (Clocks went
