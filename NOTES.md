@@ -1073,6 +1073,19 @@ WATCHLIST.md; recorded here so the before-state is not lost:
 357 tests. The new debounce tests were checked to fail against the old
 code.
 
+**2026-11-08 — solar circuit likely tripped overnight, reset by hand at 15:33.**
+The solar Shelly (192.168.188.25) reported nothing from 03:50 to 15:20. At
+**03:47:19** the house's net import dropped ~58 W in one step (126 -> 68 W)
+with mains steady at 237 V, so one circuit went dead, not the house. At
+**15:33:17-15:33:54** the inverter saw a whole-house mains loss (grid 0 V,
+loads carried on battery), and the Shelly's uptime places its boot at
+~15:33. The likely story: a breaker or RCD on the circuit feeding the solar
+meter (and ~58 W of other load) tripped on a damp night, and someone reset
+it at 15:33, briefly cutting the main switch. The panels would then have fed
+nothing for those ~12 h. auto-energy logs solar-read failures only at debug
+level, so its logs do not show this. **Not confirmed on site.** If it was an
+RCD on the solar circuit, check the outdoor connections for moisture.
+
 **2026-11-04 — the panels are shaded from mid-morning to early afternoon.**
 Daily solar against what the weather station's `solar_rad` predicts (the
 2026-09-03 fit, `ac_solar_w ~= 0.1925 * solar_rad - 6.4`):
