@@ -32,6 +32,24 @@ Last updated: 2026-11-08 (hold_float for occupied; bounded serial writes; profil
 What to watch: no stalls; under `away`, the night window and its drain;
 export on any sunny day.
 
+**11-09 evening. One misbehaviour: PCP churn on a dim morning.** `away`.
+House 2119 Wh (still looks empty), solar 73 Wh (0 nulls, peak 21 W), export
+0 (but 42 export readings invalid, so partial), battery 27 Wh (daytime
+window), throws 6, 1 corrupt frame (ignored), no `hardware_override`. Real
+float 132 min, the latch released at float, `last_float_at` 14:58, sunset
+PCP03. Drain 25.2 V (17:00) -> 24.6 V (22:00). **No stall** (up since
+11-08 02:00, no stack dump), 416 tests green, all four flags clear.
+
+**PCP churn 08:56-10:17: ~12 writes, PCP01/PCP03 alternating every ~5 min**
+(the dwell). Cause: with the sun at 3-21 W, "generating" kept crossing
+SOLAR_ON/OFF. Each dip took grid charge to `disabled_no_solar`, which since
+10-08 writes the night target **PCP03**; each rise went back to `charging`
+(PCP01), because the house signal of ~17 W is under the 30 W start
+threshold. Harmless to the relay (PCP moves none), but the charger started
+and stopped every few minutes. **Fix proposed, not applied:** write the
+night PCP03 only after sustained no-generation (e.g. 30 min) or only in the
+evening, not on every dim moment.
+
 **11-09 morning. No regression.** `away`. The 21:59 deep-rule charge ran
 through absorption (29.0-29.1 V for ~2 h) and released at a **real float**
 at 01:03 (27.4-27.5 V at 0 A on 3 ticks; `last_float_at` 01:03). That is the
@@ -100,6 +118,7 @@ back 10-25: local time now equals UTC.)
     11-06  2326    71     0      0    skip 24.3   stall 14:21-14:27; real float to 15:40; 24.7 V by 22:10
     11-07  2281    55     0      0    skip 24.5   real float to 15:31; 24.9 V by 22:10
     11-08  (895)  (n/a)    0     10    skip 24.6   solar Shelly offline 03:50-15:20; 2 deep-rule charges
+    11-09  2119    73     0     27    no   (latch) real float 01:03 + to 14:58; PCP churn 08:56-10:17
 
 **Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
 `hardware_override`, all flags clear, sunset PCP03 every day. Both dark
