@@ -32,6 +32,18 @@ Last updated: 2026-11-08 (hold_float for occupied; bounded serial writes; profil
 What to watch: no stalls; under `away`, the night window and its drain;
 export on any sunny day.
 
+**11-09 morning. No regression.** `away`. The 21:59 deep-rule charge ran
+through absorption (29.0-29.1 V for ~2 h) and released at a **real float**
+at 01:03 (27.4-27.5 V at 0 A on 3 ticks; `last_float_at` 01:03). That is the
+first night charge to finish absorption properly under the corrected rules.
+The 01:00 window **did not open** (`recovering`). By design: the daytime
+window had discharged 15:08-17:59 to the floor, and the "one discharge per
+night" latch only releases outside the night window once the pack has
+recovered, which it did only after 01:00. No dark bulk charging after 01:03.
+Drain 27.5 V (01:03) -> 25.4 (03:00) -> 24.8 V (09:00). No
+`hardware_override`, no corrupt frames, **no stall** (no gap, no restart
+since 11-08 02:00, no stack dump). All four flags clear.
+
 **11-08 evening. Nothing broke, but `away` is cycling the pack twice a day.**
 `away`. **The solar Shelly was offline 03:50-15:20** (70 of 134 buckets
 null), so solar Wh is unknown and house Wh (895) is partial. Grid charge kept
