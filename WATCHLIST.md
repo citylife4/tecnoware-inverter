@@ -32,6 +32,23 @@ Last updated: 2026-11-08 (hold_float for occupied; bounded serial writes; profil
 What to watch: no stalls; under `away`, the night window and its drain;
 export on any sunny day.
 
+**11-10 evening. The PCP churn is worse: 35 writes today.** `away`. House
+2374 Wh, solar 62 Wh (0 nulls, peak 29 W), export 0 (**138 export readings
+invalid**, so partial), battery 16 Wh (daytime window), throws 10, no
+`hardware_override`, no corrupt frames. Real float 97 min, `last_float_at`
+15:34, sunset PCP03. Drain 25.2 V (17:00) -> 24.7 V (22:00). **No stall**
+(up since 11-08 02:00), 416 tests green, all four flags clear. **35 PCP
+writes, 5 failed** (recovered):
+- 06:41-09:08: PCP03 rewritten every 5-10 min **while already PCP03**. A
+  flicker of "generating" across SOLAR_ON/OFF leaves `disabled_no_solar`, and
+  leaving the night clears `_last_applied_pcp` (the 10-08 rule), so the next
+  `idle` tick writes PCP03 again.
+- 11:16-16:05: PCP01/PCP03 alternating as clouds took solar below the
+  generating threshold, the same mechanism as 11-09.
+That's harmless to the relay, but needless traffic on the serial link the
+stalls were tied to. The fix proposed on 11-09 (only treat sustained
+no-generation, ~30 min, as night) would remove both.
+
 **11-10 morning. No regression; the `away` drain pattern.** `away`. 24.3 V
 at 01:00, so the window was skipped (`too_low_to_start`): 0 Wh, no
 `hardware_override`, no corrupt frames. Three resting readings at 24.0 V
@@ -127,6 +144,7 @@ back 10-25: local time now equals UTC.)
     11-07  2281    55     0      0    skip 24.5   real float to 15:31; 24.9 V by 22:10
     11-08  (895)  (n/a)    0     10    skip 24.6   solar Shelly offline 03:50-15:20; 2 deep-rule charges
     11-09  2119    73     0     27    no   (latch) real float 01:03 + to 14:58; PCP churn 08:56-10:17
+    11-10  2374    62     0     16    skip 24.3   35 PCP writes (churn); 138 export readings invalid
 
 **Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
 `hardware_override`, all flags clear, sunset PCP03 every day. Both dark
