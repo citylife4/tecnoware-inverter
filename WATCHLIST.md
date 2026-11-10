@@ -32,6 +32,14 @@ Last updated: 2026-11-08 (hold_float for occupied; bounded serial writes; profil
 What to watch: no stalls; under `away`, the night window and its drain;
 export on any sunny day.
 
+**11-10 morning. No regression; the `away` drain pattern.** `away`. 24.3 V
+at 01:00, so the window was skipped (`too_low_to_start`): 0 Wh, no
+`hardware_override`, no corrupt frames. Three resting readings at 24.0 V
+(03:29-03:30) armed the deep-pack rule: **the designed dark charge** from
+03:30, through absorption (29.1 V at 05:00), released at a real float at
+06:01 (`last_float_at`). Then 25.8 V (07:00) -> 25.3 V (09:00). **No stall**
+(up since 11-08 02:00, two days, no stack dump). All four flags clear.
+
 **11-09 evening. One misbehaviour: PCP churn on a dim morning.** `away`.
 House 2119 Wh (still looks empty), solar 73 Wh (0 nulls, peak 21 W), export
 0 (but 42 export readings invalid, so partial), battery 27 Wh (daytime
