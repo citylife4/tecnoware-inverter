@@ -32,6 +32,20 @@ Last updated: 2026-11-08 (hold_float for occupied; bounded serial writes; profil
 What to watch: no stalls; under `away`, the night window and its drain;
 export on any sunny day.
 
+**11-12 morning (with 11-11 evening, whose run gathered data but wrote no
+entry).** `away` both days. **11-11:** house 2142 Wh, solar only **19 Wh
+(peak 8 W)**, export 0, battery 5 Wh, throws 6, only 4 PCP writes (the sun
+never crossed the generating threshold, so no churn), no corrupt frames, no
+`hardware_override`. Real float only at the morning charge (07:10). Drain
+25.0 V (12:00) -> 24.6 (17:00) -> 24.1 V (22:00). **Night 11-11/12:** the
+deep-pack rule armed on three resting readings at 24.0 V at **22:56**, a dark
+charge through absorption (29.0-29.1 V) to a real float at 01:23
+(`last_float_at`). Because the pack was still recovering, the 01:00 window
+stayed `recovering` (by design). No dark charge before sunrise after that.
+Drain 25.5 V (03:00) -> 24.8 V (09:00). **No stall** (four days since the
+11-08 deploy, no stack dump). All four flags clear. 1 PCP write failure,
+recovered.
+
 **11-11 morning. No regression; the same `away` pattern.** `away`. 24.5 V
 at 01:00, so the window was skipped (`too_low_to_start`): 0 Wh, no
 `hardware_override`, no corrupt frames. Three resting readings at 24.0 V
@@ -154,6 +168,7 @@ back 10-25: local time now equals UTC.)
     11-08  (895)  (n/a)    0     10    skip 24.6   solar Shelly offline 03:50-15:20; 2 deep-rule charges
     11-09  2119    73     0     27    no   (latch) real float 01:03 + to 14:58; PCP churn 08:56-10:17
     11-10  2374    62     0     16    skip 24.3   35 PCP writes (churn); 138 export readings invalid
+    11-11  2142    19     0      5    skip 24.5   solar 19 Wh (peak 8 W); only 4 PCP writes; 24.1 V by 22:00
 
 **Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
 `hardware_override`, all flags clear, sunset PCP03 every day. Both dark
