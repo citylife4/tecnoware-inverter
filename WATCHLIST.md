@@ -32,6 +32,16 @@ Last updated: 2026-11-08 (hold_float for occupied; bounded serial writes; profil
 What to watch: no stalls; under `away`, the night window and its drain;
 export on any sunny day.
 
+**11-12 evening. Clean apart from the known churn.** `away`, house 2247 Wh
+(still empty). Solar 78 Wh (0 nulls, peak 30 W), export 0, battery 14 Wh
+(daytime window), throws 8, no `hardware_override`, no corrupt frames.
+Real float 100 min (`last_float_at` 16:05), sunset PCP03, no evening deep
+charge yet. Drain 25.3 V (17:00) -> 24.8 V (22:00). **17 PCP writes, 6
+failed, plus 1 POP write failure**, all recovered. That is the churn again,
+and the write-failure rate is creeping up with it. **No stall:** four and a
+half days since the 11-08 deploy, no stack dump. 416 tests green, all four
+flags clear.
+
 **11-12 morning (with 11-11 evening, whose run gathered data but wrote no
 entry).** `away` both days. **11-11:** house 2142 Wh, solar only **19 Wh
 (peak 8 W)**, export 0, battery 5 Wh, throws 6, only 4 PCP writes (the sun
@@ -169,6 +179,7 @@ back 10-25: local time now equals UTC.)
     11-09  2119    73     0     27    no   (latch) real float 01:03 + to 14:58; PCP churn 08:56-10:17
     11-10  2374    62     0     16    skip 24.3   35 PCP writes (churn); 138 export readings invalid
     11-11  2142    19     0      5    skip 24.5   solar 19 Wh (peak 8 W); only 4 PCP writes; 24.1 V by 22:00
+    11-12  2247    78     0     14    (latch) 29.1  17 PCP writes, 6 failed; real float to 16:05; 24.8 V by 22:00
 
 **Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
 `hardware_override`, all flags clear, sunset PCP03 every day. Both dark
