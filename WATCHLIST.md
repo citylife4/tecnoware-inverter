@@ -32,6 +32,19 @@ Last updated: 2026-11-08 (hold_float for occupied; bounded serial writes; profil
 What to watch: no stalls; under `away`, the night window and its drain;
 export on any sunny day.
 
+**11-13 evening. Brighter day: 4 Wh export, and the churn at its worst (45
+PCP writes).** `away`, house 2352 Wh (empty). Solar 177 Wh (0 nulls, peak
+97 W), the best in two weeks. Export **4 Wh** (21 samples, worst -44 W,
+14:43-15:30; 65 readings invalid, so partial), within the 5 Wh limit. All
+with PCP01 set but the pack near full: it floated from 10:20 (152 min of real
+float that day) and rested at 25.9 V / 0 A at 14:30. No headroom left, so a
+full battery absorbs nothing (the known limit). Battery 2 Wh, throws 4, 1
+corrupt frame, no `hardware_override`, sunset PCP03, `last_float_at` 16:16.
+Drain 25.4 V (17:00) -> 25.0 V (22:00). **45 PCP writes** (up to 10 in an
+hour, some after dark) and 1 POP write failure: the generating-threshold
+churn, now on most days. **No stall:** ~5.8 days since the 11-08 deploy.
+416 tests green, all four flags clear.
+
 **11-13 morning. No regression.** `away`. At 01:00 the pack was at 24.6 V
 (inside the margin), so the window was skipped (`too_low_to_start`): 0 Wh, no
 `hardware_override`, no corrupt frames. No evening deep charge this time, and
@@ -190,6 +203,7 @@ back 10-25: local time now equals UTC.)
     11-10  2374    62     0     16    skip 24.3   35 PCP writes (churn); 138 export readings invalid
     11-11  2142    19     0      5    skip 24.5   solar 19 Wh (peak 8 W); only 4 PCP writes; 24.1 V by 22:00
     11-12  2247    78     0     14    (latch) 29.1  17 PCP writes, 6 failed; real float to 16:05; 24.8 V by 22:00
+    11-13  2352   177     4      2    skip 24.6   45 PCP writes; export 14:43-15:30 on a near-full pack
 
 **Healthy:** no service restart since 10-13 15:17 (17 days, no stalls), no
 `hardware_override`, all flags clear, sunset PCP03 every day. Both dark
