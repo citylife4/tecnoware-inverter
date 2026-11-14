@@ -32,6 +32,14 @@ Last updated: 2026-11-08 (hold_float for occupied; bounded serial writes; profil
 What to watch: no stalls; under `away`, the night window and its drain;
 export on any sunny day.
 
+**11-14 morning. No regression.** `away`. 24.7 V at 01:00, so the window was
+skipped (`too_low_to_start`): 0 Wh, no `hardware_override`, no corrupt
+frames, **no dark bulk charging before sunrise**. Drain 24.8 V (00:00) ->
+24.1 V (08:00). The deep-pack rule armed at ~08:20, just after dawn (still
+disabled_no_solar), and is holding PCP01 (27.4 V, 7 A at 09:00, not yet
+float). **No stall:** six days since the 11-08 deploy, no stack dump. All
+four flags clear.
+
 **11-13 evening. Brighter day: 4 Wh export, and the churn at its worst (45
 PCP writes).** `away`, house 2352 Wh (empty). Solar 177 Wh (0 nulls, peak
 97 W), the best in two weeks. Export **4 Wh** (21 samples, worst -44 W,
